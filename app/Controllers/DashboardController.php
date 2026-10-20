@@ -1401,7 +1401,7 @@ JS;
                 if ($isNext) {
                     // الجملة المركّبة (عنوان - شرح) مش في قاموس الترجمة فكانت بتظهر عربي في الواجهة الإنجليزي
                     $hint = current_lang() === 'ar' ? $step['hint'] : ($hintsEn[$step['icon']] ?? '');
-                    $nextHint = '<div class="onboarding-next">👉 <b>الخطوة الجاية:</b> <span>' . htmlspecialchars($step['label'], ENT_QUOTES, 'UTF-8') . '</span>' . ($hint !== '' ? ' — <span>' . htmlspecialchars($hint, ENT_QUOTES, 'UTF-8') . '</span>' : '') . '</div>';
+                    $nextHint = '<div class="onboarding-next">👉 <b>' . (['ar' => 'الخطوة الجاية', 'fr' => 'Étape suivante', 'de' => 'Nächster Schritt'][current_lang()] ?? 'Next step') . ':</b> <span>' . htmlspecialchars($step['label'], ENT_QUOTES, 'UTF-8') . '</span>' . ($hint !== '' ? ' — <span>' . htmlspecialchars($hint, ENT_QUOTES, 'UTF-8') . '</span>' : '') . '</div>';
                 }
                 $doneClass = $step['done'] ? ' onboarding-done' : ($isNext ? ' onboarding-next-step' : '');
                 $checkIcon = $step['done'] ? '✔' : $step['icon'];

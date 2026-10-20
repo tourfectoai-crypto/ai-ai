@@ -210,6 +210,12 @@ HTML;
         } catch (Exception $e) {
             $faqs = [];
         }
+        // الـ migration اتشغّل أكتر من مرة فكل سؤال اتسجل كذا نسخة؛ السؤال المكرر بيضر السيو (FAQPage Schema متكرر)
+        $unique = [];
+        foreach ($faqs as $faq) {
+            $unique[mb_strtolower(trim((string) $faq[0]))] ??= $faq;
+        }
+        $faqs = array_values($unique);
 
         if (empty($faqs)) {
             $faqs = [

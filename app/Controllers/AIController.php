@@ -1008,7 +1008,21 @@ HTML;
                 <ul style="margin:0;padding-inline-start:20px;line-height:2;">${r.competitor_urls.map(u => `<li>${esc(u)}</li>`).join('')}</ul></div>`;
         }
 
-        html += section(L.seoKeywords, '🔑', r.seo_keywords);
+        const full = (res.data.full_data && typeof res.data.full_data === 'object') ? res.data.full_data : {};
+        const parts = full.score_breakdown && typeof full.score_breakdown === 'object' ? full.score_breakdown : null;
+        if (parts) {
+            const rows = [['technical_onpage', L.partTechnical, 30], ['content_depth', L.partContent, 25], ['aeo', L.partAeo, 20], ['geo', L.partGeo, 15], ['trust', L.partTrust, 10]]
+                .map(([k, label, max]) => `<tr><td>${label}</td><td style="text-align:end;font-weight:700;">${esc(parts[k] ?? '-')} / ${max}</td></tr>`).join('');
+            html += `<div class="p-card" style="margin-top:14px;"><div class="p-card-head"><h3>🧮 ${L.scoreBreakdown}</h3></div><table class="p-table"><tbody>${rows}</tbody></table></div>`;
+        }
+        const metrics = Array.isArray(full.keyword_metrics) ? full.keyword_metrics : [];
+        if (metrics.some(m => m.volume !== null || m.difficulty !== null || m.cpc !== null)) {
+            const cell = v => v === null || v === undefined ? `<span class="p-cell-muted">${L.noData}</span>` : esc(v);
+            const rows = metrics.map(m => `<tr><td>${esc(m.keyword)}</td><td>${cell(m.volume)}</td><td>${cell(m.difficulty)}</td><td>${m.cpc === null || m.cpc === undefined ? cell(null) : '$' + esc(m.cpc)}</td></tr>`).join('');
+            html += `<div class="p-card" style="margin-top:14px;"><div class="p-card-head"><h3>🔑 ${L.seoKeywords}</h3></div><div style="overflow:auto;"><table class="p-table"><thead><tr><th>${L.keyword}</th><th>${L.keywordVolume}</th><th>${L.keywordDifficulty}</th><th>${L.keywordCpc}</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+        } else {
+            html += section(L.seoKeywords, '🔑', r.seo_keywords);
+        }
         html += section(L.seoTitleSuggestions, '📝', r.seo_title_suggestions);
         html += section(L.seoMetaSuggestions, '🏷️', r.seo_meta_suggestions);
         html += section(L.contentGaps, '🕳️', r.seo_content_gaps);
@@ -1016,13 +1030,23 @@ HTML;
         html += section(L.aeoTrustSignals, '🛡️', r.aeo_trust_signals);
         if (r.aeo_positioning_strategy) html += section(L.positioningStrategy, '🎯', [r.aeo_positioning_strategy]);
         html += section(L.geoQuestions, '📍', r.geo_questions_generated);
-        html += section(L.geoImprovements, '🗺️', r.geo_improvement_suggestions);
+        html += section(L.geoImprovements, '🤖', r.geo_improvement_suggestions);
+        const geoFull = full.geo && typeof full.geo === 'object' ? full.geo : {};
+        html += section(L.localSeo, '📍', Array.isArray(geoFull.map_integration) ? geoFull.map_integration : []);
+        const faq = geoFull.faq_schema;
+        if (faq && typeof faq === 'object' && Array.isArray(faq.mainEntity) && faq.mainEntity.length) {
+            const code = '<script type="application/ld+json">\n' + JSON.stringify(faq, null, 2) + '\n</' + 'script>';
+            html += `<div class="p-card" style="margin-top:14px;"><div class="p-card-head"><h3>🧩 ${L.faqSchema}</h3><button type="button" class="p-btn outline xs" id="copyFaqSchema">${L.copy}</button></div>
+                <p class="p-cell-muted" style="margin:0 0 8px;">${L.faqSchemaHint}</p><pre id="faqSchemaCode" dir="ltr" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;margin:0;">${esc(code)}</pre></div>`;
+        }
 
         if (r.status === 'failed' && r.error_message) {
             html += `<div class="alert alert-danger" style="margin-top:14px;">${esc(r.error_message)}</div>`;
         }
 
         box.innerHTML = html;
+        const copyBtn = document.getElementById('copyFaqSchema');
+        if (copyBtn) copyBtn.onclick = () => navigator.clipboard.writeText(document.getElementById('faqSchemaCode').textContent).then(() => { copyBtn.textContent = L.copied; });
     }
     load();
 })();
@@ -1043,6 +1067,22 @@ JS;
             'positioningStrategy' => $this->tr('ai.report.positioning_strategy'),
             'geoQuestions' => $this->tr('ai.report.geo_questions'),
             'geoImprovements' => $this->tr('ai.report.geo_improvements'),
+            'scoreBreakdown' => $this->tr('ai.report.score_breakdown'),
+            'partTechnical' => $this->tr('ai.report.part_technical'),
+            'partContent' => $this->tr('ai.report.part_content'),
+            'partAeo' => $this->tr('ai.report.part_aeo'),
+            'partGeo' => $this->tr('ai.report.part_geo'),
+            'partTrust' => $this->tr('ai.report.part_trust'),
+            'keyword' => $this->tr('ai.report.keyword'),
+            'keywordVolume' => $this->tr('ai.report.keyword_volume'),
+            'keywordDifficulty' => $this->tr('ai.report.keyword_difficulty'),
+            'keywordCpc' => $this->tr('ai.report.keyword_cpc'),
+            'noData' => $this->tr('ai.report.no_data'),
+            'localSeo' => $this->tr('ai.report.local_seo'),
+            'faqSchema' => $this->tr('ai.report.faq_schema'),
+            'faqSchemaHint' => $this->tr('ai.report.faq_schema_hint'),
+            'copy' => $this->tr('ai.report.copy'),
+            'copied' => $this->tr('ai.report.copied'),
         ];
         $script = str_replace(
             ['__REPORT_ID__', '__LABELS_JSON__'],

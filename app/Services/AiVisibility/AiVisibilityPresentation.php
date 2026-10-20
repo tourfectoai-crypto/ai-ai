@@ -19,9 +19,9 @@ final class AiVisibilityPresentation
     }
     public static function customer(array $data): array
     {
-        foreach(['metrics','trend','answers','questions','tasks','markets'] as $key)$data[$key]=self::rows($data[$key]??[]);
+        foreach(['metrics','trend','answers','questions','question_sets','tasks','markets'] as $key)$data[$key]=self::rows($data[$key]??[]);
         $data['providers']=self::objectArray($data['providers']??[]);
-        $out=array_intersect_key($data,array_flip(['state','markets','questions','metrics','trend','aliases','profile_urls','position_basis']));
+        $out=array_intersect_key($data,array_flip(['state','markets','question_sets','questions','metrics','trend','aliases','profile_urls','identity_version','position_basis']));
         $projectMetric=static fn($m)=>array_intersect_key($m,array_flip(['provider','market_id','questions','mentions','citations','citation_questions','share_of_voice','citation_rate','competitors']));
         $out['metrics']=array_map($projectMetric,$data['metrics']??[]);
         $out['trend']=array_map(static fn($w)=>['week'=>$w['week']??'','providers'=>array_map($projectMetric,self::rows($w['providers']??[]))],$data['trend']??[]);

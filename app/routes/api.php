@@ -1792,13 +1792,11 @@ $router->get('/api/admin/seo-data/markets','SeoDataController','adminMarkets',['
 $router->post('/api/admin/seo-data/markets','SeoDataController','adminAddMarket',['AuthMiddleware','AdminMiddleware']);
 
 // Approved, tenant-scoped GEO measurements.
+$router->get('/api/ai-visibility/overview','AiVisibilityController','data',['AuthMiddleware']);
 $router->get('/api/ai-visibility/data','AiVisibilityController','data',['AuthMiddleware']);
 $router->post('/api/ai-visibility/generate','AiVisibilityController','generate',['AuthMiddleware']);
-$router->post('/api/ai-visibility/save','AiVisibilityController','save',['AuthMiddleware']);
-$router->post('/api/ai-visibility/entities','AiVisibilityController','entities',['AuthMiddleware']);
-$router->post('/api/ai-visibility/enqueue','AiVisibilityController','enqueue',['AuthMiddleware']);
-$router->post('/api/ai-visibility/tasks','AiVisibilityController','tasks',['AuthMiddleware']);
-$router->post('/api/ai-visibility/approve-task','AiVisibilityController','approveTask',['AuthMiddleware']);
+$router->post('/api/ai-visibility/questions','AiVisibilityController','questions',['AuthMiddleware']);
+$router->post('/api/ai-visibility/identity','AiVisibilityController','identity',['AuthMiddleware']);
 $router->post('/api/ai-visibility/llms','AiVisibilityController','llms',['AuthMiddleware']);
 
 foreach (['sites','data','report'] as $op) $router->get('/api/local-seo/'.$op,'LocalSeoController',$op,['AuthMiddleware']);

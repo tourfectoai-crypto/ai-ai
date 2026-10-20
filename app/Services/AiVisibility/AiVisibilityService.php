@@ -92,6 +92,46 @@ class AiVisibilityService
             'answers'=>$this->q('SELECT id,provider,question,mentioned_brand,brand_position,cited_domain,cited_urls,competitors_mentioned,answer_excerpt,model,cost,cost_basis,checked_at FROM seo_ai_answers WHERE website_id=? AND user_id=? AND market_id=? ORDER BY checked_at DESC,id DESC LIMIT 270',[$wid,$uid,$market['id']])->fetchAll(PDO::FETCH_ASSOC),
             'tasks'=>$this->q('SELECT * FROM seo_ai_tasks WHERE website_id=? AND user_id=? AND market_id=? ORDER BY id DESC LIMIT 50',[$wid,$uid,$market['id']])->fetchAll(PDO::FETCH_ASSOC)];
     }
+    /** Customer page payload: every market of the site, so switching markets needs no reload. */
+    public function customerOverview(int $uid,int $wid): array
+    {
+        $site=$this->site($uid,$wid);$markets=(new SeoMarketService($this->db))->markets($wid,$uid);$status=[];$any=false;
+        foreach($this->providers() as $provider){$on=$provider->configured();$status[$provider->name()]=['configured'=>$on];$any=$any||$on;}
+        $out=['state'=>'not_measured','markets'=>[],'question_sets'=>[],'questions'=>[],'metrics'=>[],'trend'=>[],'answers'=>[],'providers'=>$status];$weeks=[];
+        foreach($markets as $m){
+            $mid=(int)$m['id'];$out['markets'][]=['id'=>$mid,'label'=>(string)$m['label']];
+            $set=$this->set($uid,$wid,$mid);$approved=$set&&$set['approved_at']?1:0;
+            $out['question_sets'][]=['market_id'=>$mid,'version'=>$set?(int)$set['version']:0,'approved'=>$approved];
+            foreach($set['questions']??[] as $i=>$q)$out['questions'][]=['id'=>$i+1,'market_id'=>$mid,'question'=>$q,'approved'=>$approved];
+            if(!$any)continue;
+            $summary=$this->metrics($uid,$wid,$mid);if($summary['state']==='measured_sample')$out['state']='measured_sample';
+            foreach($summary['providers'] as $name=>$p){
+                if($p['state']==='measured_sample')$out['metrics'][]=['provider'=>$name,'market_id'=>$mid,'questions'=>$p['questions'],'citation_questions'=>$p['citation_questions'],'share_of_voice'=>$p['share_of_voice'],'citation_rate'=>$p['citation_rate']];
+                foreach($p['trend'] as $w)if($w['questions']>0)$weeks[$w['week']][]=['provider'=>$name,'market_id'=>$mid,'questions'=>$w['questions'],'share_of_voice'=>$w['share_of_voice'],'citation_rate'=>$w['citation_rate']];
+            }
+        }
+        krsort($weeks);foreach($weeks as $week=>$rows)$out['trend'][]=['week'=>$week,'providers'=>$rows];
+        $out['answers']=$this->q('SELECT market_id,provider,question,mentioned_brand,brand_position,cited_domain,cited_urls,competitors_mentioned,answer_excerpt,checked_at FROM seo_ai_answers WHERE website_id=? AND user_id=? ORDER BY checked_at DESC,id DESC LIMIT 270',[$wid,$uid])->fetchAll(PDO::FETCH_ASSOC);
+        $out['tasks']=$this->q('SELECT * FROM seo_ai_tasks WHERE website_id=? AND user_id=? ORDER BY id DESC LIMIT 50',[$wid,$uid])->fetchAll(PDO::FETCH_ASSOC);
+        $entity=$this->q('SELECT version,aliases_json,profiles_json FROM seo_ai_entities WHERE website_id=? AND user_id=?',[$wid,$uid])->fetch(PDO::FETCH_ASSOC);
+        $facts=$this->q('SELECT facts_json FROM business_hub_profiles WHERE website_id=? AND user_id=?',[$wid,$uid])->fetchColumn();$facts=$facts?(json_decode($facts,true)?:[]):[];
+        // The page treats the first alias as the brand name and shows the rest as editable aliases.
+        $out['aliases']=array_merge([(string)($facts['business_name']??$site['name']??'')],$entity?(json_decode($entity['aliases_json'],true)?:[]):[]);
+        $out['profile_urls']=$entity?(json_decode($entity['profiles_json'],true)?:[]):[];$out['identity_version']=$entity?(int)$entity['version']:0;
+        return $out;
+    }
+    /** Generated questions are stored as an unapproved draft so the customer can review them. */
+    public function generateDraft(int $uid,int $wid,int $mid): array
+    {
+        $g=$this->generate($uid,$wid,$mid);$set=$this->set($uid,$wid,(int)$g['market']['id']);
+        return $this->save($uid,$wid,(int)$g['market']['id'],$g['questions'],$set?(int)$set['version']:0,false);
+    }
+    public function identity(int $uid,int $wid,array $aliases,array $profiles,int $version): array
+    {
+        $aliases=array_values(array_filter(array_map(static fn($a)=>is_string($a)?trim($a):$a,$aliases),static fn($a)=>$a!==''));
+        $address=(string)($this->q('SELECT address FROM seo_ai_entities WHERE website_id=? AND user_id=?',[$wid,$uid])->fetchColumn()?:'');
+        return $this->entities($uid,$wid,$aliases,array_values(array_filter($profiles,static fn($u)=>trim((string)$u)!=='')),$address,$version,true);
+    }
     public function run(int $uid,int $wid,int $mid,int $maxChecks=2): array
     {
         $active=array_values(array_filter($this->providers(),fn($p)=>$p->configured()));

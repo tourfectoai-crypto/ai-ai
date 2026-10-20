@@ -1,0 +1,31 @@
+# Tourfecto
+
+> Tourfecto is an all-in-one, AI-powered platform for tour operators, travel agencies and hotels. It combines a booking website with online payments, an AI chat assistant for the website and WhatsApp, review and reputation management, SEO/AEO/GEO search-visibility tools, content and ads marketing, competitor monitoring, and a CRM — in English, Arabic, French and German.
+
+Plans start from $59/month with a 3-day free trial. Prices can be shown in USD, EUR, GBP, EGP, SAR, AED, KWD and QAR.
+
+## Product
+
+- [Home](https://tourfecto.pro/): Overview of the platform and how it works
+- [Pricing](https://tourfecto.pro/pricing): Plans, monthly/yearly billing and what each plan includes
+- [Start free](https://tourfecto.pro/register): Create an account and add your website
+
+## Main features
+
+- Bookings, availability and payments: one place for every booking, availability that updates itself, and online payment collection
+- Booking website builder: a site with your tours and prices that takes bookings and payments, no developer needed
+- AI chat for website and WhatsApp: 24/7 replies in the guest's language, trained on your tours and prices, able to book inside the chat
+- Reviews and reputation: AI-drafted replies to Google, TripAdvisor and Booking.com reviews, approved by the business owner
+- Search visibility (SEO / AEO / GEO): website analysis against up to 3 competitors, keyword research, content gaps, structured-data and meta improvements, WordPress publishing after approval, and Google Search Console / GA4 outcome measurement
+- Content and marketing: articles, social posts, email campaigns, Meta and Google ads
+- Competitor monitoring: alerts when competitors change prices or offers
+- CRM and revenue: leads, deals and revenue reporting
+- Agencies and teams: manage multiple companies and sites, team permissions, white label
+
+## Help
+
+- [Help center](https://tourfecto.pro/help): Guides for every feature
+- [FAQ](https://tourfecto.pro/help/faq): Common questions about plans, trial, data security and cancellation
+- [Contact](https://tourfecto.pro/help/contact): Reach the Tourfecto team
+- [Documentation](https://tourfecto.pro/docs): User guide
+- [API documentation](https://tourfecto.pro/docs/api): API endpoints for custom integrations

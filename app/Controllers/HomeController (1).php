@@ -127,6 +127,26 @@ XML;
         $footerBrandHtml = site_brand_html(false);
         $faviconHtml = site_favicon_html();
 
+        // canonical + hreflang لكل لغة + Schema: من غيرهم جوجل بيعتبر ?lang=xx صفحات مكررة،
+        // ومحركات الذكاء الاصطناعي مش بتفهم الشركة كـ "كيان" واضح
+        $base = 'https://tourfecto.pro';
+        $seoHead = '<link rel="canonical" href="' . $base . '/?lang=' . htmlspecialchars($lang, ENT_QUOTES, 'UTF-8') . '">' . "\n";
+        foreach (['en', 'ar', 'fr', 'de'] as $code) {
+            $seoHead .= '    <link rel="alternate" hreflang="' . $code . '" href="' . $base . '/?lang=' . $code . '">' . "\n";
+        }
+        $seoHead .= '    <link rel="alternate" hreflang="x-default" href="' . $base . '/">' . "\n";
+        $seoHead .= '    <meta property="og:url" content="' . $base . '/?lang=' . htmlspecialchars($lang, ENT_QUOTES, 'UTF-8') . '">' . "\n";
+        $description = html_entity_decode(strip_tags($this->tr('app.meta_description')), ENT_QUOTES, 'UTF-8');
+        $schema = [
+            '@context' => 'https://schema.org',
+            '@graph' => [
+                ['@type' => 'Organization', '@id' => $base . '/#organization', 'name' => 'Tourfecto', 'url' => $base . '/', 'logo' => $base . '/assets/icons/icon-512.png'],
+                ['@type' => 'WebSite', '@id' => $base . '/#website', 'name' => 'Tourfecto', 'url' => $base . '/', 'inLanguage' => ['en', 'ar', 'fr', 'de'], 'publisher' => ['@id' => $base . '/#organization']],
+                ['@type' => 'SoftwareApplication', 'name' => 'Tourfecto', 'url' => $base . '/', 'applicationCategory' => 'BusinessApplication', 'operatingSystem' => 'Web', 'description' => $description, 'publisher' => ['@id' => $base . '/#organization']],
+            ],
+        ];
+        $seoHead .= '    <script type="application/ld+json">' . json_encode($schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) . '</script>';
+
         return <<<HTML
 <!DOCTYPE html>
 <html lang="{$lang}" dir="{$dir}">
@@ -144,6 +164,7 @@ XML;
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="{$siteNameSafe} | {$this->tr('app.tagline')}">
     <meta name="twitter:description" content="{$this->tr('app.meta_description')}">
+    {$seoHead}
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">

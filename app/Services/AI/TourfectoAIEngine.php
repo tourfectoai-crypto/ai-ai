@@ -138,6 +138,14 @@ class TourfectoAIEngine
                     $facts .= PageFacts::toPrompt(PageFacts::extract($cu, 8), 'منافس ' . ($i + 1));
                 }
             }
+            // 5.b كلمات بحث حقيقية بأحجام بحث من DataForSEO (لو متاحة) بدل ما الذكاء الاصطناعي يخمّن
+            $researched = $this->researchedKeywords($websiteId);
+            if ($researched) {
+                $facts .= "\n## كلمات بحث حقيقية للسوق (DataForSEO): اختار seo.keywords منها لو مناسبة للموقع\n";
+                foreach ($researched as $row) {
+                    $facts .= '- ' . $row['keyword'] . ' | volume: ' . ($row['volume'] ?? '?') . ($row['difficulty'] !== null ? ' | difficulty: ' . round((float) $row['difficulty']) : '') . "\n";
+                }
+            }
             $prompt = $this->promptBuilder->buildAnalysisPrompt(
                 $targetUrl,
                 $competitorUrls,
@@ -163,6 +171,32 @@ class TourfectoAIEngine
                 $competitorUrls,
                 $language
             );
+
+            // 7.b رد فاضي أو مش مفهوم مايتحفظش كتقرير "مكتمل" بدرجة 0 ومايتخصمش رصيد
+            require_once __DIR__ . '/SeoReportNormalizer.php';
+            if (empty($reportData) || ($reportData['parsed'] ?? true) === false || !self::reportHasContent(SeoReportNormalizer::normalize($reportData))) {
+                Logger::warning('AI Analysis returned no usable report', ['user_id' => $userId, 'website_id' => $websiteId]);
+                return [
+                    'success' => false,
+                    'error' => 'التحليل مارجعش نتيجة كاملة المرة دي، ومااتخصمش أي رصيد. جرّب تاني بعد دقيقة.',
+                    'code' => 502
+                ];
+            }
+
+            // 7.b2 أرقام حقيقية جنب كل كلمة مفتاحية (حجم البحث، الصعوبة، تكلفة النقرة) لو موجودة
+            $reportData['keyword_metrics'] = $this->keywordMetrics($researched, (array) ($reportData['seo']['keywords'] ?? []));
+
+            // 7.c الدرجة الكلية = مجموع الدرجات الجزئية بحدودها، عشان تبقى مفهومة ومتسقة
+            if (is_array($reportData['score_breakdown'] ?? null)) {
+                $total = 0; $complete = true;
+                foreach (['technical_onpage' => 30, 'content_depth' => 25, 'aeo' => 20, 'geo' => 15, 'trust' => 10] as $part => $max) {
+                    $value = $reportData['score_breakdown'][$part] ?? null;
+                    if (!is_numeric($value)) { $complete = false; break; }
+                    $reportData['score_breakdown'][$part] = max(0, min($max, (int) round((float) $value)));
+                    $total += $reportData['score_breakdown'][$part];
+                }
+                if ($complete) $reportData['score'] = $total; else unset($reportData['score_breakdown']);
+            }
 
             // 8. حفظ التقرير في قاعدة البيانات
             $reportId = $this->saveReport(
@@ -507,6 +541,50 @@ class TourfectoAIEngine
             ]);
             throw $e;
         }
+    }
+
+    /** أحدث كلمات DataForSEO للموقع (آخر 60 يوم)، ولو الجدول مش موجود بنرجّع فاضي. */
+    private function researchedKeywords(int $websiteId): array
+    {
+        try {
+            return $this->db->query("SELECT keyword, volume, difficulty, cpc FROM seo_keyword_research WHERE website_id = ? AND source = 'dataforseo' AND fetched_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 60 DAY) ORDER BY volume DESC LIMIT 25", [$websiteId]) ?: [];
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /** بنربط كل كلمة في التقرير بأرقامها الحقيقية؛ الكلمة اللي مالهاش بيانات بتفضل من غير أرقام (مش صفر). */
+    private function keywordMetrics(array $researched, array $keywords): array
+    {
+        $byKey = [];
+        foreach ($researched as $row) {
+            $byKey[mb_strtolower(trim((string) $row['keyword']))] = $row;
+        }
+        $out = [];
+        foreach ($keywords as $keyword) {
+            if (!is_string($keyword) || trim($keyword) === '') continue;
+            $row = $byKey[mb_strtolower(trim($keyword))] ?? null;
+            $out[] = [
+                'keyword' => trim($keyword),
+                'volume' => $row && $row['volume'] !== null ? (int) $row['volume'] : null,
+                'difficulty' => $row && $row['difficulty'] !== null ? (int) round((float) $row['difficulty']) : null,
+                'cpc' => $row && $row['cpc'] !== null ? round((float) $row['cpc'], 2) : null,
+            ];
+        }
+        return $out;
+    }
+
+    /** تقرير مفيد لازم يكون فيه على الأقل قسمين من أقسام SEO/AEO/GEO الأساسية. */
+    private static function reportHasContent(array $report): bool
+    {
+        $filled = 0;
+        foreach ([['seo', 'keywords'], ['seo', 'title_suggestions'], ['seo', 'meta_suggestions'], ['seo', 'content_gaps'], ['aeo', 'direct_answers'], ['aeo', 'trust_signals'], ['geo', 'questions_generated'], ['geo', 'improvement_suggestions']] as [$section, $key]) {
+            $value = $report[$section][$key] ?? null;
+            if ((is_array($value) && array_filter($value)) || (is_string($value) && trim($value) !== '')) {
+                $filled++;
+            }
+        }
+        return $filled >= 2;
     }
 
     /**

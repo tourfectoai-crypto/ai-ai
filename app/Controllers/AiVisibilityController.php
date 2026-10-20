@@ -6,12 +6,13 @@ final class AiVisibilityController extends Controller
         if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
         if(($_SERVER['REQUEST_METHOD']??'GET')==='POST'&&($err=$this->verifyCsrf()))return $err;
         try{$uid=(int)$this->user['id'];$wid=(int)$this->get('website_id');$svc=new AiVisibilityService($this->db);$action=$params['action']??'overview';
+            $mid=(int)$this->get('market_id');
             $result=match($action){
-                'generate'=>$svc->generate($uid,$wid,(int)$this->get('market_id')),
-                'question'=>$svc->saveQuestion($uid,$wid,(int)$this->get('id'),trim((string)$this->get('question')),$this->get('approved')===true),
-                'identity'=>$svc->identity($uid,$wid,(array)$this->get('aliases',[]),(array)$this->get('profile_urls',[])),
-                default=>$svc->overview($uid,$wid)
-            };return $this->success(AiVisibilityPresentation::customer($result));
+                'generate'=>$svc->generateDraft($uid,$wid,$mid),
+                'questions'=>$svc->save($uid,$wid,$mid,array_values(array_filter(array_map(static fn($q)=>is_string($q)?trim($q):$q,(array)$this->get('questions',[])),static fn($q)=>$q!=='')),(int)$this->get('version'),$this->get('approved')===true),
+                'identity'=>$svc->identity($uid,$wid,(array)$this->get('aliases',[]),(array)$this->get('profile_urls',[]),(int)$this->get('identity_version')),
+                default=>null
+            };return $this->success(AiVisibilityPresentation::customer($svc->customerOverview($uid,$wid)));
         }catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
         catch(Throwable $e){
             Logger::error('AI Visibility operation unavailable',[
@@ -23,12 +24,15 @@ final class AiVisibilityController extends Controller
         }
     }
     public function generate(array $params=[]): array {return $this->data(['action'=>'generate']);}
-    public function question(array $params=[]): array {return $this->data(['action'=>'question']);}
+    public function questions(array $params=[]): array {return $this->data(['action'=>'questions']);}
     public function identity(array $params=[]): array {return $this->data(['action'=>'identity']);}
     public function llms(array $params=[]): array
     {
         if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
-        try{$site=(new SeoMarketService($this->db))->owned((int)$this->get('website_id'),(int)$this->user['id']);$ctx=(new SeoExpertPageContext())->fresh($site['main_url']);if(empty($ctx['ok']))throw new RuntimeException('page_unavailable');return $this->success(['draft'=>(new LlmsSiteSummary())->fromContext($ctx),'status'=>'draft_requires_review','note'=>'راجع البيانات؛ النشر من خلال دورة الموصل الحالية مع موافقة وتحقق وإمكانية رجوع. مفيش ضمان ترتيب.']);}catch(Throwable $e){return $this->error('تعذر قراءة الصفحات العامة',422);}
+        if($err=$this->verifyCsrf())return $err;
+        try{$r=(new AiVisibilityService($this->db))->llmsDraft((int)$this->user['id'],(int)$this->get('website_id'));return $this->success(['draft'=>$r['draft'],'status'=>'draft_requires_review','note'=>'راجع البيانات قبل النشر. الملف ده بيساعد محركات الذكاء الاصطناعي تفهم موقعك، ومفيش ضمان ترتيب.']);}
+        catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
+        catch(Throwable $e){Logger::error('AI Visibility llms draft failed',['website_id'=>(int)$this->get('website_id'),'error'=>$e->getMessage()]);return $this->error('تعذر قراءة صفحات موقعك العامة دلوقتي. اتأكد إن الموقع شغال وجرّب تاني.',422);}
     }
     /** Compatibility with deployed web routes that still dispatch to index. */
     public function index(array $params=[]): array {return $this->page($params);}

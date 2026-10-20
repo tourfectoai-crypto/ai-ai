@@ -4,12 +4,25 @@ require_once __DIR__.'/../Jobs/SeoExpertCycleJob.php';
 require_once __DIR__.'/../Jobs/SeoExpertExecuteJob.php';
 class SeoExpertController extends Controller
 {
+    /** رسايل الخدمة مكتوبة "English / عربي"؛ العميل يشوف لغة واجهته بس */
+    protected function success(array $data=[],string $message='Success',int $code=200): array{return parent::success(self::oneLanguage($data),self::oneLanguage($message),$code);}
+    protected function error(string $error,int $code=400,array $details=[]): array{return parent::error(self::oneLanguage($error),$code,self::oneLanguage($details));}
+    private static function oneLanguage($value)
+    {
+        if(is_array($value)){foreach($value as $k=>$v)$value[$k]=self::oneLanguage($v);return $value;}
+        if(!is_string($value)||!str_contains($value,' / ')||!preg_match('/^(.*?[A-Za-z][^\x{0600}-\x{06FF}]*?) \/ ([\x{0600}-\x{06FF}].*)$/su',$value,$m))return $value;
+        // الجزء الإنجليزي ممكن يكمل بعد العربي (مثلًا "... / ... Review the draft topic: X")
+        $ar=current_lang()==='ar';$arabic=$m[2];$tail='';
+        if(preg_match('/^(.*[\x{0600}-\x{06FF}][^A-Za-z]*?)\s+([A-Z][A-Za-z].*)$/su',$arabic,$t)){$arabic=$t[1];$tail=' '.$t[2];}
+        return $ar?trim($arabic).$tail:trim($m[1]).$tail;
+    }
     public function index(array $params=[]): void{
         if(!$this->isAuthenticated()){header('Location: /login');exit;}
         $css=htmlspecialchars(asset_v('/assets/css/seo-expert.css'),ENT_QUOTES,'UTF-8');$js=htmlspecialchars(asset_v('/assets/js/seo-expert.js'),ENT_QUOTES,'UTF-8');$editorJs=htmlspecialchars(asset_v('/assets/js/seo-page-editor.js'),ENT_QUOTES,'UTF-8');$impactJs=htmlspecialchars(asset_v('/assets/js/seo-impact.js'),ENT_QUOTES,'UTF-8');$workspaceJs=htmlspecialchars(asset_v('/assets/js/seo-workspace.js'),ENT_QUOTES,'UTF-8');$workspaceCss=htmlspecialchars(asset_v('/assets/css/seo-workspace.css'),ENT_QUOTES,'UTF-8');$uid=(int)$this->user['id'];
         $readinessJs=htmlspecialchars(asset_v('/assets/js/seo-service-readiness.js'),ENT_QUOTES,'UTF-8');
         $body='<link rel="stylesheet" href="'.$css.'"><link rel="stylesheet" href="'.$workspaceCss.'"><section id="seoExpertRoot" data-user-id="'.$uid.'"><p>Loading SEO Expert… / جارٍ تحميل خبير SEO…</p></section><script defer src="'.$js.'"></script><script defer src="'.$editorJs.'"></script><script defer src="'.$impactJs.'"></script><script defer src="'.$workspaceJs.'"></script><script defer src="'.$readinessJs.'"></script>';
-        $body='<p><a href="/international-seo">اللغات والفهرسة</a> · <a href="/local-seo">البحث المحلي والروابط والتقرير الشهري</a></p>'.$body;
+        $links=['ar'=>['اللغات والفهرسة','البحث المحلي والروابط والتقرير الشهري'],'fr'=>['Langues et indexation','SEO local, liens et rapport mensuel'],'de'=>['Sprachen und Indexierung','Lokales SEO, Links und Monatsbericht']][current_lang()]??['Languages and indexing','Local search, links and monthly report'];
+        $body='<p><a href="/international-seo">'.$links[0].'</a> · <a href="/local-seo">'.$links[1].'</a></p>'.$body;
         echo $this->renderPanelPage('seo_expert','SEO / AEO / GEO','Connect → Plan → Execute → Verify → Improve',$body);exit;
     }
     private function action(string $action,array $params=[]): array{
