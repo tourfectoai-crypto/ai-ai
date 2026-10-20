@@ -187,7 +187,8 @@ class ArticleGenerator
         if($claimReview['state']==='needs_confirmation')return $claimReview['reason'];
         $facts = json_encode($brief['confirmed_facts'] ?? [], JSON_UNESCAPED_UNICODE);
         $number='[0-9]+(?:[.,][0-9]+)*';
-        $pattern='/(?:[$€£]\s*'.$number.'|\b(?:USD|EUR|GBP|EGP|AED|SAR)\s*'.$number.'|'.$number.'\s*(?:USD|EUR|GBP|EGP|AED|SAR)\b)/u';
+        $currencies='USD|EUR|GBP|EGP|AED|SAR|KWD|QAR|CHF|JPY|CNY|RMB|RUB|INR|KRW|BRL|TRY|PLN|MXN|CAD|AUD|SEK|NOK|DKK|CZK|HUF';
+        $pattern='/(?:(?:[$€£¥₹₽₩₺]|R\$|zł)\s*'.$number.'|\b(?:'.$currencies.')\s*'.$number.'|'.$number.'\s*(?:[€£¥₹₽₩₺]|zł|元|円|руб|\b(?:'.$currencies.')\b))/u';
         preg_match_all($pattern, $text, $prices);preg_match_all($pattern,$facts,$confirmedPrices);
         $normalize=static fn($price)=>preg_replace('/\s+/u','',$price);
         $allowed=array_map($normalize,$confirmedPrices[0]);
@@ -199,10 +200,11 @@ class ArticleGenerator
         $claimFacts=$normalizeClaim(implode(' ',array_map(static fn($key)=>is_string($confirmed[$key]??null)?$confirmed[$key]:'',['business_facts','offers','services','destinations'])));
         $parts=[(string)($data['title']??''),(string)($data['meta_description']??''),(string)($data['content']??'')];
         foreach($data['faqs']??[] as $faq)if(is_array($faq))$parts[]=(string)($faq['answer']??'');
-        foreach($parts as $part)foreach(preg_split('/(?<=[.!?])\s+|\R/u',$part) as $sentence){
+        foreach($parts as $part)foreach(preg_split('/(?<=[.!?])\s+|(?<=[。！？])|\R/u',$part) as $sentence){
             $sentence=trim($sentence);if($sentence===''||str_ends_with(rtrim($sentence,'*_ '),'?')||preg_match('/^(?:[#*\s-]*)(?:confirm|check|ask|verify|تأكد|اسأل|راجع)\b/iu',$sentence))continue;
-            $duration=preg_match('/\b[0-9]+(?:\s*(?:-|–|to|إلى)\s*[0-9]+)?[\s-]*(?:hours?|hrs?|days?|nights?|ساعات|ساعة|أيام|ليال)\b/iu',$sentence);
-            $family=preg_match('/\b(?:our|the|these)\s+tours?\b.{0,180}\b(?:families|all ages)\b|\b(?:suitable|safe|ideal|perfect)\s+for\s+(?:families|children)\b|مناسب.{0,30}(?:للعائلات|للأطفال)/iu',$sentence);
+            // مدة الرحلة بأي لغة سوق: "3 hours" / "3 Stunden" / "3 heures" / "3 часа" / "3小时"
+            $duration=preg_match('/\b[0-9]+(?:\s*(?:-|–|to|إلى|bis|à|a|al|до|到)\s*[0-9]+)?[\s-]*(?:hours?|hrs?|days?|nights?|ساعات|ساعة|أيام|ليال|stunden?|tage?n?|nächte|übernachtung\w*|heures?|jours?|nuits?|horas?|d[ií]as?|noches?|ore|giorni|giorno|notti|notte|uur|dagen|nachten|час\w*|дн\w*|сут\w*|ноч\w*|saat|gün|gece|godzin\w*|dni|noc\w*)(?!\p{L})|[0-9]+\s*(?:小时|个小时|天|晚|時間|日間|泊|시간|일|박)/iu',$sentence);
+            $family=preg_match('/\b(?:our|the|these)\s+tours?\b.{0,180}\b(?:families|all ages)\b|\b(?:suitable|safe|ideal|perfect)\s+for\s+(?:families|children)\b|مناسب.{0,30}(?:للعائلات|للأطفال)|(?:geeignet|ideal|perfekt)\s+für\s+(?:familien|kinder)|familienfreundlich|(?:adapté|idéal|parfait)e?s?\s+(?:aux|pour\s+les)\s+(?:familles|enfants)|(?:apt|ideal|perfect)[oa]s?\s+para\s+(?:familias|niños|famílias|crianças)|(?:adatt|ideal|perfett)[aoie]\s+(?:alle|per\s+le|per\s+i)\s+(?:famiglie|bambini)|(?:подходит|идеально)\s+для\s+(?:семей|детей)|适合(?:家庭|儿童|亲子)|家族(?:向け|連れ)|aileler\s+için\s+(?:uygun|ideal)/iu',$sentence);
             if(($duration||$family)&&!str_contains($claimFacts,$normalizeClaim($sentence)))return 'Confirm the exact duration or family-suitability statement in business facts before publishing.';
         }
         if(isset($brief['verified_internal_urls'])&&is_array($brief['verified_internal_urls'])){

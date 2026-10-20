@@ -14,7 +14,7 @@ final class SeoClaimEvidence
     private static function sentences(string $text): array
     {
         $text=html_entity_decode(preg_replace('~<[^>]+>~u',"\n",$text),ENT_QUOTES|ENT_HTML5,'UTF-8');
-        return preg_split('/(?<=[.!?؟])\s+|\R/u',$text)?:[];
+        return preg_split('/(?<=[.!?؟])\s+|(?<=[。！？])|\R/u',$text)?:[];
     }
 
     private static function normalize(string $text): string
@@ -37,6 +37,13 @@ final class SeoClaimEvidence
             'guide_credentials'=>'/\b(?:licensed|certified|accredited)\s+(?:(?:local|professional|expert|egyptologist|tour)\s+){0,3}(?:guides?|egyptologists?)\b|مرشد[\p{L}\s]{0,35}(?:مرخص|معتمد)/iu',
             'child_pricing'=>'/\b(?:child(?:ren)?|kids?|infants?)\b.{0,180}\b(?:free|discount|reduction|reduced|percent|per\s+cent|half[\s-]price)\b|\b(?:child(?:ren)?|kids?|infants?)\b.{0,180}[0-9]+\s*%|(?:الأطفال|الاطفال|أطفال|اطفال).{0,180}(?:مجان|خصم|تخفيض|بالمئة|بالمائة|%)/iu',
         ];
+        // نفس الادعاءات بلغات الأسواق السياحية الكبيرة (الطيار الآلي بيكتب بلغة كل سوق، فالحماية لازم تفهمها كلها)
+        $patterns['cancellation_policy'].='|(?:kostenlos\w*\s+(?:storn|absag)|storn\w*\s+(?:ist\s+)?(?:kostenlos|gebührenfrei|gratis)|gebührenfrei\w*\s+storn|annulation\s+(?:gratuite|sans\s+frais)|annul\w*\s+gratuitement|cancelaci[oó]n\s+(?:gratuita|gratis|sin\s+coste)|cancela\w*\s+gratis|cancellazione\s+gratuita|disdetta\s+gratuita|annullamento\s+gratuito|cancelamento\s+(?:gr[aá]tis|gratuito)|gratis\s+annuler|kosteloos\s+annuler|gratis\s+annulering|бесплатн\w*\s+отмен|отмен\w*\s+бесплатн|免费取消|無料キャンセル|キャンセル無料|무료\s*취소|ücretsiz\s+iptal|(?:bezpłatn|darmow)\w*\s+(?:anulowan|odwołan))/iu';
+        $patterns['cancellation_policy']=str_replace('/iu|','|',$patterns['cancellation_policy']);
+        $patterns['guide_credentials'].='|(?:(?:lizenziert|zertifiziert|staatlich\s+geprüft|diplomiert)\w*\s+(?:\p{L}+\s+){0,3}(?:reiseleiter|guide|führer|ägyptolog)|guides?\s+(?:\p{L}+\s+){0,2}(?:agréé|certifié|diplômé|licencié)|égyptologues?\s+(?:certifié|diplômé)|gu[ií]as?\s+(?:\p{L}+\s+){0,2}(?:licenciad|certificad|acreditad|oficial)|guid[ae]\s+(?:\p{L}+\s+){0,2}(?:autorizzat|certificat|abilitat|patentat|ufficial)|guias?\s+(?:\p{L}+\s+){0,2}(?:licenciad|certificad|credenciad)|(?:gecertificeerde|erkende|gediplomeerde)\s+(?:\p{L}+\s+){0,2}gids|(?:лицензированн|сертифицированн|аккредитованн|дипломированн)\w*\s+(?:\p{L}+\s+){0,2}гид|(?:持证|有执照|认证|持牌|官方)\S{0,6}导游|(?:公認|認定|資格を持つ)\S{0,6}ガイド|(?:공인|자격증)\S{0,6}가이드|(?:lisanslı|sertifikalı|kokartlı)\s+(?:\p{L}+\s+){0,2}rehber|(?:licencjonowan|certyfikowan)\w*\s+(?:\p{L}+\s+){0,2}przewodni)/iu';
+        $patterns['guide_credentials']=str_replace('/iu|','|',$patterns['guide_credentials']);
+        $patterns['child_pricing'].='|(?:kinder.{0,180}(?:kostenlos|gratis|rabatt|ermäßig|%)|enfants?.{0,180}(?:gratuit|réduction|remise|%)|niñ[oa]s?.{0,180}(?:gratis|gratuit|descuento|%)|bambini.{0,180}(?:gratis|gratuit|sconto|riduzion|%)|crianças?.{0,180}(?:gr[aá]tis|gratuit|desconto|%)|kinderen.{0,180}(?:gratis|korting|%)|дет\w*.{0,180}(?:бесплатн|скидк|%)|(?:儿童|孩子|小孩).{0,40}(?:免费|折扣|优惠|半价|%)|(?:子供|こども).{0,40}(?:無料|割引|%)|(?:어린이|아동).{0,40}(?:무료|할인|%)|çocuk.{0,180}(?:ücretsiz|indirim|%)|dzieci.{0,180}(?:bezpłatn|darmow|zniżk|%))/iu';
+        $patterns['child_pricing']=str_replace('/iu|','|',$patterns['child_pricing']);
         $findings=[];$seen=[];
         foreach($parts as $field=>$text){
             if(!is_string($text))continue;

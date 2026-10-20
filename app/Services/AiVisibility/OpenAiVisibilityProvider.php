@@ -6,7 +6,7 @@ final class OpenAiVisibilityProvider extends AiVisibilityProvider
     protected function request(string $question,array $market): array
     {
         return ['https://api.openai.com/v1/responses',['Content-Type: application/json','Authorization: Bearer '.$this->config['key']],
-            ['model'=>$this->model(),'input'=>$this->context($question,$market),'tools'=>[['type'=>'web_search','search_context_size'=>'low']],
+            ['model'=>$this->model(),'input'=>$this->context($question,$market),'tools'=>[['type'=>'web_search','search_context_size'=>'low']+(self::countryCode($market)?['user_location'=>['type'=>'approximate','country'=>self::countryCode($market)]]:[])],
              'tool_choice'=>'required','max_tool_calls'=>1,'max_output_tokens'=>1200,'store'=>false]];
     }
     public function parse(array $response): array

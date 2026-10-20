@@ -24,7 +24,9 @@ class SeoMarketService
     public static function defaultMarket(string $language): array
     {
         $code=strtolower(explode('-',$language)[0]);
-        $defaults=['en'=>[2840,'US – English'],'ar'=>[2818,'Egypt – Arabic'],'de'=>[2276,'Germany – German'],'fr'=>[2250,'France – French'],'es'=>[2724,'Spain – Spanish'],'it'=>[2380,'Italy – Italian']];
+        $defaults=['en'=>[2840,'US – English'],'ar'=>[2818,'Egypt – Arabic'],'de'=>[2276,'Germany – German'],'fr'=>[2250,'France – French'],'es'=>[2724,'Spain – Spanish'],'it'=>[2380,'Italy – Italian'],
+            'pt'=>[2620,'Portugal – Portuguese'],'nl'=>[2528,'Netherlands – Dutch'],'ru'=>[2643,'Russia – Russian'],'tr'=>[2792,'Turkey – Turkish'],'pl'=>[2616,'Poland – Polish'],'ja'=>[2392,'Japan – Japanese'],'ko'=>[2410,'South Korea – Korean'],
+            'sv'=>[2752,'Sweden – Swedish'],'da'=>[2208,'Denmark – Danish'],'no'=>[2578,'Norway – Norwegian'],'fi'=>[2246,'Finland – Finnish'],'cs'=>[2203,'Czechia – Czech'],'el'=>[2300,'Greece – Greek'],'he'=>[2376,'Israel – Hebrew']];
         if (!isset($defaults[$code])) throw new InvalidArgumentException('اختار السوق الأول يدويًا للغة الموقع');
         return ['location_code'=>$defaults[$code][0],'language_code'=>$code,'label'=>$defaults[$code][1],'is_primary'=>true];
     }

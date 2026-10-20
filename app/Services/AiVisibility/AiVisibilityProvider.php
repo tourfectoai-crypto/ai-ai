@@ -40,10 +40,13 @@ abstract class AiVisibilityProvider
             return $r+['available'=>true,'provider'=>$this->name(),'model'=>$this->model(),'cost_basis'=>'estimated_list_price_reported_usage'];
         } catch (Throwable $e) { return ['available'=>false,'reason'=>'provider_response_unavailable','cost'=>null]; }
     }
+    /** كود السوق (DataForSEO) => [اسم الدولة، كود الدولة]: الإجابة بتتقاس كأن المسافر بيسأل من جوه بلده */
+    public const LOCATIONS=[2840=>['United States','US'],2826=>['United Kingdom','GB'],2124=>['Canada','CA'],2036=>['Australia','AU'],2372=>['Ireland','IE'],2554=>['New Zealand','NZ'],2356=>['India','IN'],2710=>['South Africa','ZA'],2702=>['Singapore','SG'],2276=>['Germany','DE'],2040=>['Austria','AT'],2756=>['Switzerland','CH'],2250=>['France','FR'],2056=>['Belgium','BE'],2528=>['Netherlands','NL'],2442=>['Luxembourg','LU'],2724=>['Spain','ES'],2620=>['Portugal','PT'],2380=>['Italy','IT'],2300=>['Greece','GR'],2616=>['Poland','PL'],2203=>['Czechia','CZ'],2348=>['Hungary','HU'],2642=>['Romania','RO'],2752=>['Sweden','SE'],2578=>['Norway','NO'],2208=>['Denmark','DK'],2246=>['Finland','FI'],2643=>['Russia','RU'],2804=>['Ukraine','UA'],2792=>['Turkey','TR'],2376=>['Israel','IL'],2682=>['Saudi Arabia','SA'],2784=>['United Arab Emirates','AE'],2414=>['Kuwait','KW'],2634=>['Qatar','QA'],2048=>['Bahrain','BH'],2512=>['Oman','OM'],2400=>['Jordan','JO'],2818=>['Egypt','EG'],2504=>['Morocco','MA'],2156=>['China','CN'],2344=>['Hong Kong','HK'],2158=>['Taiwan','TW'],2392=>['Japan','JP'],2410=>['South Korea','KR'],2458=>['Malaysia','MY'],2360=>['Indonesia','ID'],2764=>['Thailand','TH'],2704=>['Vietnam','VN'],2608=>['Philippines','PH'],2076=>['Brazil','BR'],2484=>['Mexico','MX'],2032=>['Argentina','AR'],2170=>['Colombia','CO'],2152=>['Chile','CL']];
+    public static function countryCode(array $market): ?string{return self::LOCATIONS[(int)($market['location_code']??0)][1]??null;}
     protected function context(string $question,array $market): string
     {
         // Deliberately no customer identity, domain, competitors or company facts.
-        $countries=[2826=>'United Kingdom',2840=>'United States',2276=>'Germany',2818=>'Egypt',2250=>'France',2724=>'Spain',2380=>'Italy',2682=>'Saudi Arabia',2784=>'United Arab Emirates',2124=>'Canada',2036=>'Australia',2528=>'Netherlands',2616=>'Poland',2752=>'Sweden',2040=>'Austria',2756=>'Switzerland'];
+        $countries=array_map(static fn($c)=>$c[0],self::LOCATIONS);
         $country=$countries[(int)($market['location_code']??0)]??('DataForSEO location code '.(int)($market['location_code']??0));
         return 'Answer this traveler question using web search and cite sources. Do not invent prices or reviews. Reply in language '.$market['language_code'].'. Traveler market: '.$country.'. Question: '.$question;
     }

@@ -6,7 +6,7 @@ final class SonarVisibilityProvider extends AiVisibilityProvider
     protected function request(string $question,array $market): array
     {
         return ['https://api.perplexity.ai/v1/sonar',['Content-Type: application/json','Authorization: Bearer '.$this->config['key']],
-            ['model'=>$this->model(),'messages'=>[['role'=>'user','content'=>$this->context($question,$market)]],'max_tokens'=>1200,'web_search_options'=>['search_context_size'=>'low']]];
+            ['model'=>$this->model(),'messages'=>[['role'=>'user','content'=>$this->context($question,$market)]],'max_tokens'=>1200,'web_search_options'=>['search_context_size'=>'low']+(self::countryCode($market)?['user_location'=>['country'=>self::countryCode($market)]]:[])]];
     }
     public function parse(array $response): array
     {
