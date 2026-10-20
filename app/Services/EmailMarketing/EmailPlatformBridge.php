@@ -37,6 +37,8 @@ class EmailPlatformBridge
 
     public const STEP_CREATE_CRM_TASK = 'create_crm_task';
     public const STEP_NOTIFY_OWNER = 'notify_owner';
+    public const STEP_SEND_WHATSAPP = 'send_whatsapp';
+    public const STEP_REQUEST_REVIEW = 'request_review';
 
     /** حدث CRM → مشغّل أتمتة البريد */
     public const CRM_EVENT_MAP = [
@@ -83,6 +85,8 @@ class EmailPlatformBridge
         return [
             self::STEP_CREATE_CRM_TASK => 'إنشاء مهمة في CRM',
             self::STEP_NOTIFY_OWNER => 'إشعار لصاحب الحساب',
+            self::STEP_SEND_WHATSAPP => 'رسالة واتساب (قالب خدمي معتمد)',
+            self::STEP_REQUEST_REVIEW => 'طلب تقييم (Google/TripAdvisor)',
         ];
     }
 
@@ -294,6 +298,8 @@ class EmailPlatformBridge
             'trip_date' => (string) ($booking['start_date'] ?? ''),
             'booking_total' => number_format((float) ($booking['total_amount'] ?? 0), 2, '.', ''),
             'booking_currency' => (string) ($booking['currency'] ?? ''),
+            'customer_phone' => (string) ($booking['customer_phone'] ?? ''),
+            'trip_end_date' => (string) (($booking['end_date'] ?? '') ?: ($booking['start_date'] ?? '')),
         ];
     }
 
@@ -459,7 +465,7 @@ class EmailPlatformBridge
         if (!isset(self::stepTypes()[$type])) {
             return null;
         }
-        $sub = $this->db->query("SELECT id, name, email FROM email_subscribers WHERE id = ? AND user_id = ? LIMIT 1", [$subscriberId, $userId])[0] ?? null;
+        $sub = $this->db->query("SELECT id, name, email, attributes FROM email_subscribers WHERE id = ? AND user_id = ? LIMIT 1", [$subscriberId, $userId])[0] ?? null;
         if (!$sub) {
             return false;
         }
@@ -486,6 +492,12 @@ class EmailPlatformBridge
                 ]);
                 return true;
             }
+            if ($type === self::STEP_SEND_WHATSAPP) {
+                return $this->stepWhatsApp($userId, $sub, $value, $context, $vars);
+            }
+            if ($type === self::STEP_REQUEST_REVIEW) {
+                return $this->stepReviewRequest($userId, $sub, $value, $context);
+            }
             if ($type === self::STEP_NOTIFY_OWNER) {
                 $title = self::fill((string) ($value['title'] ?? ''), $vars) ?: ('أتمتة البريد: ' . $sub['email']);
                 if (class_exists('Notification')) {
@@ -497,6 +509,111 @@ class EmailPlatformBridge
             $this->log('automation step failed', ['type' => $type, 'error' => $e->getMessage()]);
         }
         return false;
+    }
+
+    /**
+     * واتساب: قالب UTILITY معتمد بس (رسائل خدمة زي تذكير الرحلة) عبر
+     * WhatsAppTransactionalService — نفس مسار الإرسال الموثّق في المنصة.
+     * رسائل التسويق على واتساب ليها موافقة منفصلة (WhatsAppMarketingService)
+     * فمش بنبعتها من هنا. أي رقم عامل opt-out (واتساب أو التقييمات) بيتخطّى.
+     */
+    private function stepWhatsApp(int $userId, array $sub, array $value, array $context, array $vars): bool
+    {
+        $template = trim((string) ($value['template_name'] ?? ''));
+        $phone = self::subscriberPhone($sub, $context);
+        if ($template === '' || $phone === '' || !class_exists('WhatsAppTransactionalService')) {
+            return false;
+        }
+        $websiteId = $this->resolveWebsiteId($userId, (int) ($value['website_id'] ?? 0));
+        if ($websiteId <= 0 || $this->phoneOptedOut($userId, $websiteId, $phone)) {
+            return false;
+        }
+        $params = [];
+        foreach (array_filter(array_map('trim', explode('|', (string) ($value['params'] ?? ''))), 'strlen') as $param) {
+            $params[] = self::fill($param, $vars);
+        }
+        // مفتاح التنفيذ ثابت لكل (مشاركة، خطوة): إعادة المعالجة ما تبعتش الرسالة مرتين
+        $operation = 'email_auto:' . (int) ($context['_entry_id'] ?? 0) . ':' . (int) ($context['_step_id'] ?? 0) . ':' . (int) $sub['id'];
+        $language = preg_match('/^[a-z]{2}(_[A-Z]{2})?$/', (string) ($value['language'] ?? '')) ? (string) $value['language'] : 'ar';
+        $result = WhatsAppTransactionalService::send($userId, $websiteId, $phone, $template, $language, $params, $operation);
+        if (empty($result['ok'])) {
+            $this->log('whatsapp step not sent', ['user_id' => $userId, 'error' => $result['error'] ?? '']);
+        }
+        return !empty($result['ok']);
+    }
+
+    /** طلب تقييم عبر ReviewRequestService (بيحترم opt-out ومنع التكرار والجدولة بتاعته). */
+    private function stepReviewRequest(int $userId, array $sub, array $value, array $context): bool
+    {
+        if (!class_exists('ReviewRequestService')) {
+            return false;
+        }
+        $websiteId = $this->resolveWebsiteId($userId, (int) ($value['website_id'] ?? 0));
+        if ($websiteId <= 0) {
+            return false;
+        }
+        $channel = in_array($value['channel'] ?? '', ['email', 'whatsapp'], true) ? $value['channel'] : 'email';
+        $phone = self::subscriberPhone($sub, $context);
+        if ($channel === 'whatsapp' && $phone === '') {
+            $channel = 'email';
+        }
+        $destination = in_array($value['destination'] ?? '', ['google_business', 'tripadvisor', 'other'], true) ? $value['destination'] : 'google_business';
+        $endDate = (string) ($context['trip_end_date'] ?? '');
+        $serviceEnd = preg_match('/^\d{4}-\d{2}-\d{2}$/', $endDate) && strtotime($endDate) <= time() ? $endDate . ' 20:00:00' : date('Y-m-d H:i:s');
+        $service = new ReviewRequestService();
+        try {
+            $request = $service->createRequest(
+                $userId, $websiteId, (string) ($sub['name'] ?: $sub['email']),
+                $channel === 'whatsapp' ? $phone : null, $serviceEnd, $channel,
+                $channel === 'email' ? (string) $sub['email'] : null, 'email_automation', null, $destination
+            );
+        } catch (\Throwable $e) {
+            // مكرر / opt-out / القناة أو رابط التقييم مش متظبط
+            $this->log('review request step skipped', ['user_id' => $userId, 'reason' => $e->getMessage()]);
+            return false;
+        }
+        if (!empty($context['booking_id'])) {
+            try {
+                // عشان الطلب التلقائي من الحجوزات ما يعملش طلب تاني لنفس الحجز
+                $this->db->query('UPDATE review_requests SET booking_id = ? WHERE id = ? AND booking_id IS NULL', [(int) $context['booking_id'], (int) $request->getAttribute('id')]);
+            } catch (\Throwable $e) {
+            }
+        }
+        return true;
+    }
+
+    public static function subscriberPhone(array $sub, array $context): string
+    {
+        $phone = (string) ($context['customer_phone'] ?? '');
+        if ($phone === '') {
+            $attributes = json_decode((string) ($sub['attributes'] ?? 'null'), true) ?: [];
+            $phone = (string) ($attributes['phone'] ?? '');
+        }
+        return preg_replace('/[^0-9]/', '', $phone);
+    }
+
+    /** موقع مملوك للحساب (جدول websites): المحدد في الخطوة أو أول موقع. */
+    private function resolveWebsiteId(int $userId, int $requested): int
+    {
+        if ($requested > 0) {
+            return (int) ($this->db->query("SELECT id FROM websites WHERE id = ? AND user_id = ? LIMIT 1", [$requested, $userId])[0]['id'] ?? 0);
+        }
+        return (int) ($this->db->query("SELECT id FROM websites WHERE user_id = ? ORDER BY created_at ASC, id ASC LIMIT 1", [$userId])[0]['id'] ?? 0);
+    }
+
+    private function phoneOptedOut(int $userId, int $websiteId, string $phone): bool
+    {
+        try {
+            if (!empty($this->db->query("SELECT id FROM wa_marketing_contacts WHERE user_id = ? AND phone LIKE ? AND consent_state = 'opted_out' LIMIT 1", [$userId, '%' . substr($phone, -9)]))) {
+                return true;
+            }
+        } catch (\Throwable $e) {
+        }
+        try {
+            return !empty($this->db->query("SELECT id FROM review_request_opt_outs WHERE website_id = ? AND guest_phone = ? LIMIT 1", [$websiteId, $phone]));
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     public static function stepVariables(array $sub, array $context): array

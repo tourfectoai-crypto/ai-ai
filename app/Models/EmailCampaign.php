@@ -12,7 +12,8 @@ class EmailCampaign extends Model
         'template_id', 'list_id', 'audience_ids', 'segment_id', 'html_body',
         'status', 'scheduled_at', 'sent_at',
         'total_recipients', 'sent_count', 'opened_count', 'clicked_count',
-        'unsubscribed_count', 'bounced_count', 'error_message'
+        'unsubscribed_count', 'bounced_count', 'error_message',
+        'send_time_optimization', 'recurrence', 'next_run_at', 'parent_campaign_id'
     ];
 
     public const STATUS_DRAFT = 'draft';

@@ -1059,11 +1059,18 @@ class ContactManagementService
         $rejected = 0;
         $risky = 0;
         $rejectReasons = [];
+        $optedOut = 0;
 
         foreach ($rows as $row) {
             $email = strtolower(trim((string) ($row['email'] ?? '')));
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                 $invalid++;
+                continue;
+            }
+            // الاستيراد عمره ما يرجّع اشتراك حد لغى/ارتد/اشتكى أو محظور عند الحساب
+            // (subscribe() كان بيحوّل أي مشترك موجود لـ subscribed)
+            if ($this->importBlockedByOptOut($userId, $email)) {
+                $optedOut++;
                 continue;
             }
             if ($hygiene) {
@@ -1128,7 +1135,8 @@ class ContactManagementService
             $result['created'] ? $added++ : $updated++;
 
             $rowStatus = strtolower(trim((string) ($row['status'] ?? '')));
-            if (in_array($rowStatus, ['subscribed', 'unsubscribed', 'bounced', 'complained'], true)) {
+            // عمود status في الملف بيقدر ينزّل الحالة بس (إلغاء/ارتداد)، "subscribed" هي الافتراضي أصلًا
+            if (in_array($rowStatus, ['unsubscribed', 'bounced', 'complained'], true)) {
                 $this->db->exec('UPDATE email_subscribers SET status = ? WHERE id = ?', [$rowStatus, $subscriberId]);
             }
 
@@ -1146,7 +1154,76 @@ class ContactManagementService
         }
 
         return ['success' => true, 'added' => $added, 'updated' => $updated, 'invalid' => $invalid,
-            'rejected' => $rejected, 'risky' => $risky, 'reject_reasons' => $rejectReasons];
+            'rejected' => $rejected, 'risky' => $risky, 'reject_reasons' => $rejectReasons, 'skipped_opted_out' => $optedOut];
+    }
+
+    private function importBlockedByOptOut(int $userId, string $email): bool
+    {
+        $existing = $this->db->query("SELECT status FROM email_subscribers WHERE user_id = ? AND email = ? LIMIT 1", [$userId, $email])[0] ?? null;
+        if ($existing && in_array($existing['status'], ['unsubscribed', 'bounced', 'complained'], true)) {
+            return true;
+        }
+        try {
+            return !empty($this->db->query("SELECT id FROM email_suppressions WHERE user_id = ? AND email = ? LIMIT 1", [$userId, $email]));
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * معاينة الاستيراد قبل التنفيذ (Dry-run): نفس قواعد importContacts بالظبط
+     * من غير أي كتابة. بترجّع الأعداد + أول 50 صف بحكم كل واحد.
+     */
+    public function previewImport(int $userId, array $rows, array $options = []): array
+    {
+        $hygieneOn = !array_key_exists('hygiene', $options) || !empty($options['hygiene']);
+        $hygiene = $hygieneOn && class_exists('EmailListHygieneService') ? new EmailListHygieneService() : null;
+        $guard = $hygieneOn && class_exists('EmailReputationGuard') ? new EmailReputationGuard() : null;
+        $counts = ['total' => 0, 'new' => 0, 'update' => 0, 'invalid' => 0, 'duplicate_in_file' => 0, 'opted_out' => 0, 'rejected' => 0, 'risky' => 0];
+        $sample = [];
+        $seen = [];
+        foreach ($rows as $row) {
+            $counts['total']++;
+            $email = strtolower(trim((string) ($row['email'] ?? '')));
+            $verdict = 'new';
+            $reason = '';
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                $verdict = 'invalid';
+            } elseif (isset($seen[$email])) {
+                $verdict = 'duplicate_in_file';
+            } elseif ($this->importBlockedByOptOut($userId, $email)) {
+                $verdict = 'opted_out';
+            } else {
+                $seen[$email] = true;
+                if ($hygiene) {
+                    $a = $hygiene->assess($email, !empty($options['check_mx']));
+                    if ($a['verdict'] === 'reject') {
+                        $verdict = 'rejected';
+                        $reason = (string) ($a['reasons'][0] ?? '');
+                    } elseif ($a['verdict'] === 'risky') {
+                        $counts['risky']++;
+                        $reason = (string) ($a['reasons'][0] ?? '');
+                    }
+                }
+                if ($verdict === 'new' && $guard) {
+                    try {
+                        if ($guard->isGloballySuppressed($email)) {
+                            $verdict = 'rejected';
+                            $reason = 'global_suppression';
+                        }
+                    } catch (\Throwable $e) {
+                    }
+                }
+                if ($verdict === 'new' && !empty($this->db->query("SELECT id FROM email_subscribers WHERE user_id = ? AND email = ? LIMIT 1", [$userId, $email]))) {
+                    $verdict = 'update';
+                }
+            }
+            $counts[$verdict]++;
+            if (count($sample) < 50) {
+                $sample[] = ['email' => $email, 'name' => (string) ($row['name'] ?? ''), 'verdict' => $verdict, 'reason' => $reason];
+            }
+        }
+        return ['success' => true, 'counts' => $counts, 'sample' => $sample];
     }
 
     /**

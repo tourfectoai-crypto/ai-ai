@@ -540,7 +540,7 @@ class EmailAutomationService
             default:
                 // خطوات بتنفّذ في خدمات تانية (مهمة CRM / إشعار)
                 if (class_exists('EmailPlatformBridge')) {
-                    return (bool) (new EmailPlatformBridge())->executeStep((string) $step['step_type'], $userId, $subscriberId, $value, $context);
+                    return (bool) (new EmailPlatformBridge())->executeStep((string) $step['step_type'], $userId, $subscriberId, $value, $context + ['_entry_id' => $entryId, '_step_id' => (int) ($step['id'] ?? 0)]);
                 }
                 return false;
         }

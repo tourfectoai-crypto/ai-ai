@@ -179,7 +179,10 @@ class EmailMarketingController extends Controller
                     <label class="p-cell-muted" style="font-size:12px;">Data (JSON or CSV format: email,name on each line)</label>
                     <textarea id="importData" class="p-select" style="width:100%;min-height:120px;font-family:monospace;font-size:12px;"
                         placeholder='[{&quot;email&quot;:&quot;a@example.com&quot;,&quot;name&quot;:&quot;Ahmed&quot;},{&quot;email&quot;:&quot;b@example.com&quot;,&quot;name&quot;:&quot;Sara&quot;}]'></textarea>
-                    <button class="p-btn primary xs" style="margin-top:8px;" onclick="importSubscribers()">Import</button>
+                    <div style="display:flex;gap:8px;margin-top:8px;">
+                        <button class="p-btn xs" onclick="previewImport()">👁 Preview</button>
+                        <button class="p-btn primary xs" onclick="importSubscribers()">Import</button>
+                    </div>
                     <div id="importResult" style="margin-top:10px;font-size:13px;"></div>
                 </div>
             </div>
@@ -721,8 +724,21 @@ class EmailMarketingController extends Controller
                             <option value="0">— No segment —</option>
                         </select>
                     </div>
-                    <label class="p-cell-muted" style="font-size:12px;margin-top:8px;display:block;">Topic (subject) *</label>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;">
+                        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;"><input type="checkbox" id="campaignSto"/> <span>Send at each subscriber's best time<br><small class="p-cell-muted">Learned from their real opens/clicks (within 24h). Others get it immediately.</small></span></label>
+                        <div>
+                            <label class="p-cell-muted" style="font-size:12px;">Repeat (newsletter)</label>
+                            <div style="display:flex;gap:6px;">
+                                <select id="campaignRecurrence" class="p-select" style="flex:1;" onchange="document.getElementById('campaignFirstRun').style.display=this.value?'block':'none'">
+                                    <option value="">Send once</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option>
+                                </select>
+                                <input type="datetime-local" id="campaignFirstRun" class="p-select" style="flex:1;display:none;" title="First send">
+                            </div>
+                        </div>
+                    </div>
+                    <label class="p-cell-muted" style="font-size:12px;margin-top:8px;display:block;">Topic (subject) * <button type="button" class="p-btn xs" onclick="aiSubjects(this)">✨ Suggest subjects</button></label>
                     <input type="text" id="campaignSubject" class="p-select" style="width:100%;margin-bottom:8px;" placeholder="Example: special offer for the first 50 customers {{first_name}}">
+                    <div id="campaignAiSubjects" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;"></div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                         <div>
                             <label class="p-cell-muted" style="font-size:12px;">From (name)</label>
@@ -739,6 +755,8 @@ class EmailMarketingController extends Controller
                         <button class="p-btn xs" onclick="insertVarCampaign('{{first_name}}')">{{first_name}}</button>
                         <button class="p-btn xs" onclick="insertVarCampaign('{{email}}')">{{email}}</button>
                         <button class="p-btn xs" onclick="insertVarCampaign('{{unsubscribe_url}}')">{{unsubscribe_url}}</button>
+                        <button class="p-btn xs" onclick="aiWriteBody(this)">✨ Write with AI</button>
+                        <button class="p-btn xs" onclick="aiRewriteBody(this)">✨ Improve text</button>
                     </div>
                     <textarea id="campaignHtml" class="p-select" style="width:100%;min-height:220px;font-family:monospace;font-size:12px;" placeholder="<p>Hello {{first_name}},</p><p>This week offer...</p>"></textarea>
                     <div id="campaignScheduleWrap" style="margin-top:10px;display:none;">
@@ -821,6 +839,14 @@ class EmailMarketingController extends Controller
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;" id="emStatsKpis">
                 <div class="p-loading-row">Loading...</div>
             </div>
+        </div>
+
+        <div class="p-card" style="margin-bottom:16px;">
+            <div class="p-card-head"><h3>📉 Daily trend</h3>
+                <select id="emTsDays" class="p-select" style="width:auto;" onchange="loadTimeseries()"><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="14">Last 14 days</option></select>
+            </div>
+            <div id="emTsChart" style="min-height:240px;"><div class="p-loading-row">Loading...</div></div>
+            <div id="emTsRevenue" style="margin-top:6px;"></div>
         </div>
 
         <div class="p-card">
@@ -1536,7 +1562,8 @@ HTML;
         if (empty($rows)) {
             return $this->error('No valid data to import', 422);
         }
-        $result = $this->listService->import($this->uid(), $rows, $listId);
+        // نفس مسار الاستيراد المتقدم: تنضيف القائمة + عدم إعادة اشتراك اللي لغى/ارتد
+        $result = $this->contacts()->importContacts($this->uid(), $rows, ['list_id' => $listId]);
         return $this->success($result, 'Imported');
     }
 
@@ -1635,6 +1662,49 @@ HTML;
         ];
         $result = $this->contacts()->importContacts($this->uid(), $rows, $options);
         return $this->success($result, 'Imported');
+    }
+
+    /** POST /subscribers/import-preview — نفس قواعد الاستيراد من غير كتابة */
+    public function previewImport(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $rows = $this->parseImportData((string) $this->get('data'));
+        if (empty($rows)) {
+            return $this->error('No valid data to import', 422);
+        }
+        return $this->success($this->contacts()->previewImport($this->uid(), $rows));
+    }
+
+    /** POST /ai-assist — اقتراحات عنوان/نص بالذكاء الاصطناعي (اقتراح فقط) */
+    public function aiAssist(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $company = $this->db->query("SELECT company_name FROM users WHERE id = ? LIMIT 1", [$this->uid()])[0]['company_name'] ?? '';
+        $result = (new EmailAiWriterService())->assist(
+            (string) $this->get('action', ''),
+            (string) $this->get('input', ''),
+            ['company_name' => (string) $company, 'language' => (string) $this->get('language', 'ar')]
+        );
+        return $result['success'] ? $this->success($result) : $this->error($result['error'], 422);
+    }
+
+    /** POST /campaigns/{id}/recurrence — {recurrence: daily|weekly|monthly|'', first_run_at} */
+    public function setCampaignRecurrence(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $result = (new EmailRecurringCampaignService())->configure(
+            $this->uid(),
+            (int) ($params['id'] ?? 0),
+            (string) $this->get('recurrence', ''),
+            (string) $this->get('first_run_at', '')
+        );
+        return $result['success'] ? $this->success($result, 'Recurrence saved') : $this->error($result['error'], 422);
     }
 
     public function exportSubscribers(array $params = []): array
@@ -2882,6 +2952,15 @@ HTML;
             : $this->error($result['error'], 422);
     }
 
+    /** GET /stats/timeseries?days=30 — بيانات الرسم البياني اليومي */
+    public function statsTimeseries(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        return $this->success((new EmailEngagementService())->timeseries($this->uid(), (int) $this->get('days', 30)));
+    }
+
     public function stats(array $params = []): array
     {
         if (!$this->isAuthenticated()) {
@@ -2939,7 +3018,11 @@ HTML;
             $this->gif();
             exit;
         }
-        $this->trackingService->recordOpen($token);
+        $this->trackingService->recordOpen(
+            $token,
+            isset($_SERVER['HTTP_USER_AGENT']) ? (string) $_SERVER['HTTP_USER_AGENT'] : null,
+            isset($_SERVER['REMOTE_ADDR']) ? (string) $_SERVER['REMOTE_ADDR'] : null
+        );
         $this->trackingService->recordTransactionalOpen($token);
         $this->trackingService->recordAutomationOpen($token);
         $this->gif();
@@ -3319,9 +3402,22 @@ HTML;
             const body = {list_id: document.getElementById('importList').value, data: document.getElementById('importData').value};
             const r = await emApi('/subscribers/import', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
             document.getElementById('importResult').innerHTML = r.success
-                ? `✅ Imported: ${r.data.added} new, ${r.data.updated} updated, ${r.data.invalid} Invalid`
+                ? `✅ Imported: ${r.data.added} new, ${r.data.updated} updated, ${r.data.invalid} invalid, ${r.data.rejected || 0} rejected, ${r.data.skipped_opted_out || 0} skipped (unsubscribed before)`
                 : '❌ ' + (r.error || 'Error');
             if (r.success) setTimeout(loadSubscribers, 600);
+        }
+        async function previewImport() {
+            const body = {data: document.getElementById('importData').value};
+            const r = await emApi('/subscribers/import-preview', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+            const box = document.getElementById('importResult');
+            if (!r.success) { box.innerHTML = '❌ ' + emText(r.error || 'Error'); return; }
+            const c = r.data.counts;
+            const labels = {new:'New', update:'Already in list (updated)', invalid:'Invalid', duplicate_in_file:'Duplicate in file', opted_out:'Unsubscribed before (skipped)', rejected:'Rejected (disposable/blocked)'};
+            const colors = {new:'#16a34a', update:'#2563eb', invalid:'#dc2626', duplicate_in_file:'#9ca3af', opted_out:'#d97706', rejected:'#dc2626'};
+            const chips = Object.keys(labels).map(k => `<span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 10px;border-radius:20px;background:#f3f4f6;"><b style="color:${colors[k]}">${c[k] || 0}</b> ${labels[k]}</span>`).join('');
+            const rows = (r.data.sample || []).map(x => `<tr><td>${emText(x.email)}</td><td>${emText(x.name)}</td><td style="color:${colors[x.verdict] || '#111'}">${emText(labels[x.verdict] || x.verdict)}${x.reason ? ' · ' + emText(x.reason) : ''}</td></tr>`).join('');
+            box.innerHTML = `<div style="margin-bottom:6px;">${c.total} rows${c.risky ? ` · ${c.risky} risky (role/typo)` : ''}</div>${chips}
+                <div style="max-height:220px;overflow:auto;margin-top:8px;"><table class="p-table" style="font-size:12px;"><thead><tr><th>Email</th><th>Name</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>`;
         }
         async function unsubSub(id) {
             if (!confirm('Unsubscribe this subscriber permanently?')) return;
@@ -3543,6 +3639,8 @@ HTML;
             {type:'divider', label:'Divider', icon:'➖'},
             {type:'spacer', label:'Spacer', icon:'⬜'},
             {type:'social', label:'Social', icon:'🌐'},
+            {type:'video', label:'Video', icon:'🎬'},
+            {type:'columns', label:'Two columns (trip cards)', icon:'🧳'},
             {type:'html', label:'Code HTML', icon:'💻'}
         ];
         const FIELD_DEFS = {
@@ -3552,7 +3650,13 @@ HTML;
             button: [ {k:'text', label:'Button text', type:'text'}, {k:'url', label:'Link', type:'text'}, {k:'bg', label:'Background color', type:'color'}, {k:'color', label:'Text color', type:'color'} ],
             divider: [ {k:'color', label:'Color', type:'color'}, {k:'thickness', label:'Thickness (px)', type:'number'} ],
             spacer: [ {k:'height', label:'Height (px)', type:'number'} ],
-            social: [ {k:'networks', label:'Networks', type:'checkboxes', opts:['facebook','twitter','instagram','linkedin','youtube','whatsapp']} ],
+            social: [ {k:'networks', label:'Networks', type:'checkboxes', opts:['facebook','twitter','instagram','linkedin','youtube','whatsapp']},
+                {k:'link_facebook', label:'Facebook page URL', type:'text'}, {k:'link_instagram', label:'Instagram URL', type:'text'},
+                {k:'link_twitter', label:'X URL', type:'text'}, {k:'link_linkedin', label:'LinkedIn URL', type:'text'},
+                {k:'link_youtube', label:'YouTube URL', type:'text'}, {k:'link_whatsapp', label:'WhatsApp link (wa.me/...)', type:'text'} ],
+            video: [ {k:'url', label:'Video URL (YouTube/Vimeo/any)', type:'text'}, {k:'thumbnail', label:'Thumbnail URL (auto for YouTube)', type:'text'}, {k:'caption', label:'Caption', type:'text'} ],
+            columns: [ {k:'left_image', label:'Left: image URL', type:'text'}, {k:'left_title', label:'Left: title', type:'text'}, {k:'left_text', label:'Left: text', type:'text'}, {k:'left_button', label:'Left: button text', type:'text'}, {k:'left_url', label:'Left: link', type:'text'},
+                {k:'right_image', label:'Right: image URL', type:'text'}, {k:'right_title', label:'Right: title', type:'text'}, {k:'right_text', label:'Right: text', type:'text'}, {k:'right_button', label:'Right: button text', type:'text'}, {k:'right_url', label:'Right: link', type:'text'} ],
             html: [ {k:'html', label:'Code HTML', type:'textarea'} ]
         };
         const NET_LABELS = {facebook:'Facebook', twitter:'X', instagram:'Instagram', linkedin:'LinkedIn', youtube:'YouTube', whatsapp:'WhatsApp'};
@@ -3591,19 +3695,51 @@ HTML;
                 divider: {type:'divider', color:'#e5e7eb', thickness:'1'},
                 spacer: {type:'spacer', height:'24'},
                 social: {type:'social', networks:['facebook','twitter','instagram','linkedin']},
+                video: {type:'video', url:'', thumbnail:'', caption:''},
+                columns: {type:'columns', left_image:'', left_title:'Trip one', left_text:'Short description', left_button:'Book now', left_url:'https://example.com',
+                    right_image:'', right_title:'Trip two', right_text:'Short description', right_button:'Book now', right_url:'https://example.com'},
                 html: {type:'html', html:'<div style="background:#f3f4f6;padding:16px;border-radius:8px;">Custom code</div>'}
             };
             return JSON.parse(JSON.stringify(base[type] || base.text));
         }
         function renderPalette() {
             document.getElementById('bdPalette').innerHTML = BLOCK_TYPES.map(bt =>
-                `<button class="p-btn xs" style="justify-content:flex-start;text-align:right;" onclick="addBlock('${bt.type}')">${bt.icon} ${bt.label}</button>`
+                `<button class="p-btn xs" draggable="true" ondragstart="bdDragStart(event,'add','${bt.type}')" style="justify-content:flex-start;text-align:right;cursor:grab;" onclick="addBlock('${bt.type}')">${bt.icon} ${bt.label}</button>`
             ).join('');
+            // الإفلات في آخر القائمة
+            const bar = document.getElementById('bdBlocksBar');
+            bar.ondragover = e => e.preventDefault();
+            bar.ondrop = e => { if (e.target === bar) bdDrop(e, bdBlocks.length); };
         }
-        function addBlock(type) {
-            bdBlocks.push(defaultBlock(type));
-            bdSelected = bdBlocks.length - 1;
+        function addBlock(type, at) {
+            const pos = typeof at === 'number' ? Math.max(0, Math.min(at, bdBlocks.length)) : bdBlocks.length;
+            bdBlocks.splice(pos, 0, defaultBlock(type));
+            bdSelected = pos;
             renderAll();
+        }
+        // سحب وإفلات (HTML5): من اللوحة = إضافة في المكان، من القائمة = إعادة ترتيب
+        let bdDrag = null;
+        function bdDragStart(e, kind, value) {
+            bdDrag = {kind, value};
+            try { e.dataTransfer.setData('text/plain', String(value)); e.dataTransfer.effectAllowed = kind === 'add' ? 'copy' : 'move'; } catch (err) {}
+        }
+        function bdDrop(e, index) {
+            e.preventDefault();
+            e.stopPropagation();
+            document.querySelectorAll('.bd-row').forEach(r => r.style.borderTop = '');
+            if (!bdDrag) return;
+            if (bdDrag.kind === 'add') {
+                addBlock(bdDrag.value, index);
+            } else {
+                const from = parseInt(bdDrag.value, 10);
+                if (from === index || from + 1 === index) { bdDrag = null; return; }
+                const [moved] = bdBlocks.splice(from, 1);
+                const to = from < index ? index - 1 : index;
+                bdBlocks.splice(to, 0, moved);
+                bdSelected = to;
+                renderAll();
+            }
+            bdDrag = null;
         }
         function moveBlock(i, dir) {
             const j = i + dir;
@@ -3632,7 +3768,8 @@ HTML;
             wrap.innerHTML = bdBlocks.map((b, i) => {
                 const def = BLOCK_TYPES.find(t => t.type === b.type) || {label:b.type, icon:'🧩'};
                 const sel = i === bdSelected ? 'background:#0b2436;border-color:#3b82f6;' : '';
-                return `<div style="display:flex;align-items:center;gap:8px;background:#0b2436;border:1px solid ${i===bdSelected?'#3b82f6':'#1f2937'};border-radius:8px;padding:6px 10px;cursor:pointer;${sel}" onclick="selectBlock(${i})">
+                return `<div class="bd-row" draggable="true" ondragstart="bdDragStart(event,'move',${i})" ondragover="event.preventDefault();this.style.borderTop='3px solid #3b82f6'" ondragleave="this.style.borderTop=''" ondrop="bdDrop(event,${i})" style="display:flex;align-items:center;gap:8px;background:#0b2436;border:1px solid ${i===bdSelected?'#3b82f6':'#1f2937'};border-radius:8px;padding:6px 10px;cursor:grab;${sel}" onclick="selectBlock(${i})">
+                    <span title="Drag to reorder">⠿</span>
                     <span>${def.icon}</span>
                     <span style="flex:1;font-size:13px;">${def.label} #${i+1}</span>
                     <button class="p-btn xs" onclick="event.stopPropagation();moveBlock(${i},-1)">↑</button>
@@ -3644,7 +3781,9 @@ HTML;
         async function renderBlocks() {
             const r = await emApiBuilder('/templates/blocks/render', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({blocks: JSON.stringify(bdBlocks)})});
             const html = r.success ? r.data.html : '<div style="color:#f87171;padding:12px;">Could not show the preview</div>';
-            document.getElementById('bdCanvas').innerHTML = `<iframe sandbox="" style="width:100%;min-height:520px;border:none;border-radius:8px;background:#fff;" srcdoc="${encodeURI(html)}"></iframe>`;
+            // srcdoc بياخد HTML مش URL: encodeURI كان بيعرض النص كـ %3C...
+            const srcdoc = String(html).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+            document.getElementById('bdCanvas').innerHTML = `<iframe sandbox="" style="width:100%;min-height:520px;border:none;border-radius:8px;background:#fff;" srcdoc="${srcdoc}"></iframe>`;
         }
         function renderInspector() {
             const el = document.getElementById('bdInspector');
@@ -3783,6 +3922,11 @@ HTML;
             document.getElementById('campaignList').value = '0';
             document.getElementById('campaignSegment').value = '0';
             document.getElementById('campaignScheduleWrap').style.display = 'none';
+            document.getElementById('campaignSto').checked = false;
+            document.getElementById('campaignRecurrence').value = '';
+            document.getElementById('campaignFirstRun').value = '';
+            document.getElementById('campaignFirstRun').style.display = 'none';
+            document.getElementById('campaignAiSubjects').innerHTML = '';
             document.getElementById('campaignModal').classList.add('open');
         }
         async function editCampaign(id) {
@@ -3800,8 +3944,49 @@ HTML;
             const cs = document.getElementById('campaignSegment');
             if (cs) cs.value = c.segment_id ? String(c.segment_id) : '0';
             document.getElementById('campaignScheduleWrap').style.display = c.status === 'scheduled' ? 'block' : 'none';
+            document.getElementById('campaignSto').checked = !!parseInt(c.send_time_optimization || 0, 10);
+            document.getElementById('campaignRecurrence').value = c.recurrence || '';
+            document.getElementById('campaignFirstRun').style.display = c.recurrence ? 'block' : 'none';
+            document.getElementById('campaignFirstRun').value = c.next_run_at ? (window.Panel && window.Panel.localDateTime ? window.Panel.localDateTime(c.next_run_at) : c.next_run_at.slice(0, 16)) : '';
+            document.getElementById('campaignAiSubjects').innerHTML = '';
             document.getElementById('campaignScheduledAt').value = c.scheduled_at ? (window.Panel.localDateTime ? window.Panel.localDateTime(c.scheduled_at) : c.scheduled_at.slice(0,16)) : '';
             document.getElementById('campaignModal').classList.add('open');
+        }
+        async function aiCall(action, input) {
+            return emApi('/ai-assist', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, input})});
+        }
+        async function aiSubjects(btn) {
+            const idea = document.getElementById('campaignName').value.trim() || document.getElementById('campaignSubject').value.trim();
+            btnBusy(btn, true);
+            try {
+                const r = await aiCall('subjects', idea);
+                if (!r.success) { notify(r.error || 'AI is unavailable'); return; }
+                const box = document.getElementById('campaignAiSubjects');
+                box.innerHTML = (r.data.suggestions || []).map(sg => `<button type="button" class="p-btn xs" style="text-align:start;" data-sg="${emText(sg)}">${emText(sg)}</button>`).join('');
+                box.querySelectorAll('[data-sg]').forEach(b => b.onclick = () => { document.getElementById('campaignSubject').value = b.dataset.sg; box.innerHTML = ''; });
+            } finally { btnBusy(btn, false); }
+        }
+        async function aiWriteBody(btn) {
+            const brief = prompt('Describe the email (offer, destination, dates, call to action):', document.getElementById('campaignName').value || '');
+            if (!brief) return;
+            btnBusy(btn, true);
+            try {
+                const r = await aiCall('body', brief);
+                if (!r.success) { notify(r.error || 'AI is unavailable'); return; }
+                const ta = document.getElementById('campaignHtml');
+                if (ta.value.trim() && !confirm('Replace the current content with the AI draft?')) return;
+                ta.value = r.data.html || '';
+            } finally { btnBusy(btn, false); }
+        }
+        async function aiRewriteBody(btn) {
+            const ta = document.getElementById('campaignHtml');
+            if (!ta.value.trim()) { notify('Write some content first'); return; }
+            btnBusy(btn, true);
+            try {
+                const r = await aiCall('body', 'Improve this email, keep the same offer, links and variables:\n' + ta.value);
+                if (!r.success) { notify(r.error || 'AI is unavailable'); return; }
+                if (confirm('Replace the content with the improved version?')) ta.value = r.data.html || ta.value;
+            } finally { btnBusy(btn, false); }
         }
         function insertVarCampaign(v) {
             const ta = document.getElementById('campaignHtml');
@@ -3818,7 +4003,8 @@ HTML;
                 list_id: document.getElementById('campaignList').value,
                 segment_id: document.getElementById('campaignSegment').value,
                 html_body: document.getElementById('campaignHtml').value,
-                scheduled_at: schedule ? document.getElementById('campaignScheduledAt').value : null
+                scheduled_at: schedule ? document.getElementById('campaignScheduledAt').value : null,
+                send_time_optimization: document.getElementById('campaignSto').checked ? 1 : 0
             };
             if (!body.name || !body.subject || !body.html_body) { notify('Fill in the campaign name, subject and content'); return; }
             const path = id ? '/campaigns/' + id : '/campaigns';
@@ -3826,6 +4012,9 @@ HTML;
             const r = await emApi(path, opts);
             if (!r.success) { notify(r.error); return; }
             const cid = r.data.id || id;
+            const recurrence = document.getElementById('campaignRecurrence').value;
+            const rr = (!recurrence && !document.getElementById('campaignFirstRun').value) ? {success: true} : await emApi('/campaigns/' + cid + '/recurrence', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({recurrence, first_run_at: document.getElementById('campaignFirstRun').value})});
+            if (!rr.success && recurrence) { notify(rr.error); return; }
             if (schedule) {
                 const s = await emApi('/campaigns/' + cid + '/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({scheduled_at: document.getElementById('campaignScheduledAt').value})});
                 if (!s.success) { notify(s.error); return; }
@@ -3917,7 +4106,9 @@ HTML;
             document.getElementById('crKpis').innerHTML = kpis;
 
             const rates = [
-                ['Open rate', c.open_rate + '%'],
+                ['Open rate (all)', c.open_rate + '%'],
+                ['Real open rate (excl. Apple MPP & scanners)', (c.human_open_rate ?? c.open_rate) + '%'],
+                ['Machine opens (Apple MPP / scanners)', c.open_breakdown ? ((c.open_breakdown.apple_mpp || 0) + ' / ' + (c.open_breakdown.scanner || 0)) : '—'],
                 ['Click rate', c.click_rate + '%'],
                 ['Click/open', c.click_to_open_rate + '%'],
                 ['Unsubscribe rate', c.unsubscribe_rate + '%'],
@@ -3973,6 +4164,43 @@ HTML;
             const res = await fetch('/api/email-marketing' + path, opts || {});
             return res.json();
         }
+
+        // رسم يومي SVG من غير مكتبات خارجية: مرسل / فتح حقيقي / كليك
+        async function loadTimeseries() {
+            const days = document.getElementById('emTsDays').value;
+            const r = await emApi('/stats/timeseries?days=' + days);
+            const box = document.getElementById('emTsChart');
+            if (!r.success) { box.innerHTML = '<p class="p-cell-muted">Could not load the chart.</p>'; return; }
+            const d = r.data;
+            const series = [
+                {key: 'sent', label: 'Sent', color: '#94a3b8'},
+                {key: 'opens', label: 'Real opens', color: '#2563eb'},
+                {key: 'clicks', label: 'Clicks', color: '#16a34a'},
+            ];
+            const W = 760, H = 220, P = {l: 40, r: 10, t: 10, b: 26};
+            const max = Math.max(1, ...series.flatMap(s => d[s.key] || []));
+            const n = d.days.length;
+            const x = i => P.l + (n <= 1 ? 0 : i * (W - P.l - P.r) / (n - 1));
+            const y = v => H - P.b - v * (H - P.t - P.b) / max;
+            const grid = [0, 0.5, 1].map(f => {
+                const v = Math.round(max * f), yy = y(v);
+                return `<line x1="${P.l}" x2="${W - P.r}" y1="${yy}" y2="${yy}" stroke="currentColor" stroke-opacity=".12"/><text x="${P.l - 6}" y="${yy + 4}" font-size="10" text-anchor="end" fill="currentColor" fill-opacity=".6">${v}</text>`;
+            }).join('');
+            const step = Math.max(1, Math.ceil(n / 8));
+            const xLabels = d.days.map((day, i) => i % step === 0 ? `<text x="${x(i)}" y="${H - 8}" font-size="10" text-anchor="middle" fill="currentColor" fill-opacity=".6">${day.slice(5)}</text>` : '').join('');
+            const lines = series.map(s => {
+                const pts = (d[s.key] || []).map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+                const dots = (d[s.key] || []).map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="6" fill="transparent"><title>${d.days[i]} · ${s.label}: ${v}</title></circle>`).join('');
+                return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
+            }).join('');
+            const legend = series.map(s => `<span style="display:inline-flex;align-items:center;gap:6px;margin-inline-end:14px;font-size:12px;"><span style="width:14px;height:3px;border-radius:2px;background:${s.color};display:inline-block;"></span>${s.label}: <b>${(d[s.key] || []).reduce((a, b) => a + b, 0)}</b></span>`).join('');
+            box.innerHTML = `<div style="margin-bottom:6px;">${legend}</div><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" role="img" aria-label="Daily email activity">${grid}${xLabels}${lines}</svg>`;
+            const bookings = (d.bookings || []).reduce((a, b) => a + b, 0);
+            const revenue = (d.revenue || []).reduce((a, b) => a + b, 0);
+            document.getElementById('emTsRevenue').innerHTML = `<span class="p-cell-muted" style="font-size:13px;">🧳 Bookings from email in this period: <b>${bookings}</b> · 💰 Revenue: <b>${revenue.toLocaleString()}</b></span>`;
+        }
+        document.addEventListener('DOMContentLoaded', loadTimeseries);
+        if (document.readyState !== 'loading') loadTimeseries();
         function notify(msg, type) {
             window.__emFallbackAlert = window.__emFallbackAlert || function (m) { alert(m); };
             if (!type) {
@@ -4656,15 +4884,20 @@ HTML;
             campaign_opened: { label: 'Campaign (optional)', type: 'campaign' },
             campaign_clicked: { label: 'Campaign (optional)', type: 'campaign' },
             date_after: { label: 'Number of days after subscribing', type: 'days' },
-            booking_created: { label: '', type: 'none' },
-            booking_confirmed: { label: '', type: 'none' },
-            booking_cancelled: { label: '', type: 'none' },
-            trip_upcoming: { label: 'Days before the trip', type: 'days', def: 3 },
-            trip_completed: { label: 'Days after the trip ends', type: 'days', def: 1 },
+            booking_created: { label: 'Trip / service (optional)', type: 'product' },
+            booking_confirmed: { label: 'Trip / service (optional)', type: 'product' },
+            booking_cancelled: { label: 'Trip / service (optional)', type: 'product' },
+            trip_upcoming: { label: 'Days before the trip', type: 'days', def: 3, product: true },
+            trip_completed: { label: 'Days after the trip ends', type: 'days', def: 1, product: true },
             crm_lead_created: { label: '', type: 'none' },
             crm_deal_won: { label: '', type: 'none' },
         };
         const EM_AUTO_DAY_TRIGGERS = ['date_after', 'trip_upcoming', 'trip_completed'];
+        const EM_AUTO_PRODUCT_TRIGGERS = ['booking_created', 'booking_confirmed', 'booking_cancelled', 'trip_upcoming', 'trip_completed'];
+        let emAutoProducts = [];
+        function productSelectHtml(id) {
+            return `<select class="p-input" id="${id}" style="width:100%;"><option value="">All trips / services</option>${emAutoProducts.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>`;
+        }
         const EM_AUTO_CHECKS = {
             has_tag: 'Has tag', not_has_tag: 'Does not have tag', in_list: 'In list', not_in_list: 'Not in list',
             opened_last_email: 'Opened previous email', not_opened_last_email: 'Did not open previous email',
@@ -4710,6 +4943,10 @@ HTML;
             emAutoLists = listsR.lists || [];
             emAutoTemplates = (tmplR.templates || []).filter(t => t.status === 'ready' || !t.status);
             emAutoCampaigns = campR.campaigns || [];
+            try {
+                const pr = await (await fetch('/api/crm/products?only_active=1')).json();
+                emAutoProducts = (pr.data && pr.data.products) || pr.products || [];
+            } catch (e) { emAutoProducts = []; }
             loadPlatformIntegration();
 
             const rows = emAutomations.map(a => {
@@ -4762,6 +4999,9 @@ HTML;
             if (type === 'none') {
                 return '';
             }
+            if (type === 'product') {
+                return productSelectHtml('emAutoTriggerValue');
+            }
             return `<input class="p-input" id="emAutoTriggerValue" placeholder="Example: vip" style="width:100%;"/>`;
         }
 
@@ -4769,7 +5009,8 @@ HTML;
             const type = EM_AUTO_TRIGGER_OPTIONS[document.getElementById('emAutoTrigger').value] || { label: '', type: 'text' };
             document.getElementById('emAutoTriggerValueLabel').textContent = type.label;
             const wrap = document.getElementById('emAutoTriggerValueWrap');
-            wrap.innerHTML = '<label class="p-label" id="emAutoTriggerValueLabel">' + esc(type.label) + '</label>' + automationTriggerValueHtml(type.type, type.def);
+            wrap.innerHTML = '<label class="p-label" id="emAutoTriggerValueLabel">' + esc(type.label) + '</label>' + automationTriggerValueHtml(type.type, type.def)
+                + (type.product ? '<label class="p-label" style="margin-top:6px;">Trip / service (optional)</label>' + productSelectHtml('emAutoTriggerProduct') : '');
         }
 
         function openAutomationModal(id) {
@@ -4802,8 +5043,12 @@ HTML;
                             tvEl.value = tv.tag || '';
                         } else if (EM_AUTO_DAY_TRIGGERS.includes(a.trigger_type)) {
                             tvEl.value = tv.days || (EM_AUTO_TRIGGER_OPTIONS[a.trigger_type] || {}).def || 7;
+                        } else if (EM_AUTO_PRODUCT_TRIGGERS.includes(a.trigger_type)) {
+                            tvEl.value = tv.product_id ? String(tv.product_id) : '';
                         }
                     }
+                    const prodEl = document.getElementById('emAutoTriggerProduct');
+                    if (prodEl) prodEl.value = tv.product_id ? String(tv.product_id) : '';
                     // multiple select: .value = array بيختار عنصر واحد بس
                     const selectMany = (el, ids) => [...el.options].forEach(o => { o.selected = (ids || []).map(String).includes(o.value); });
                     selectMany(document.getElementById('emAutoEntryAudience'), a.entry_audience_ids);
@@ -4907,6 +5152,17 @@ HTML;
                     <input class="p-input" placeholder="Task title, e.g. Call {{name}} about {{trip_name}}" data-step-k="title" value="${esc(value.title || '')}" style="grid-column:1/-1;"/>
                     <input class="p-input" type="number" min="0" placeholder="Due in (days)" data-step-k="due_days" value="${value.due_days ?? 1}"/>
                     <select class="p-input" data-step-k="priority">${['low', 'medium', 'high'].map(pr => `<option value="${pr}"${(value.priority || 'medium') === pr ? ' selected' : ''}>${pr}</option>`).join('')}</select>`;
+            } else if (type === 'send_whatsapp') {
+                body.innerHTML = `
+                    <input class="p-input" placeholder="Approved UTILITY template name (WhatsApp Manager)" data-step-k="template_name" value="${esc(value.template_name || '')}" style="grid-column:1/-1;"/>
+                    <input class="p-input" placeholder="Template variables in order, separated by | e.g. {{name}}|{{trip_name}}|{{trip_date}}" data-step-k="params" value="${esc(value.params || '')}" style="grid-column:1/-1;"/>
+                    <input class="p-input" placeholder="Language code (ar, en, fr...)" data-step-k="language" value="${esc(value.language || 'ar')}"/>
+                    <small class="p-cell-muted" style="grid-column:1/-1;">Sent to the booking phone or the contact's phone attribute. Contacts who opted out on WhatsApp are skipped.</small>`;
+            } else if (type === 'request_review') {
+                body.innerHTML = `
+                    <select class="p-input" data-step-k="channel">${[['email', 'By email'], ['whatsapp', 'By WhatsApp']].map(([k, v]) => `<option value="${k}"${(value.channel || 'email') === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+                    <select class="p-input" data-step-k="destination">${[['google_business', 'Google Business'], ['tripadvisor', 'TripAdvisor'], ['other', 'Other link']].map(([k, v]) => `<option value="${k}"${(value.destination || 'google_business') === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+                    <small class="p-cell-muted" style="grid-column:1/-1;">Uses your Review Requests settings (review links, delay, opt-outs, duplicate protection).</small>`;
             } else if (type === 'notify_owner') {
                 body.innerHTML = `
                     <input class="p-input" placeholder="Notification title" data-step-k="title" value="${esc(value.title || '')}" style="grid-column:1/-1;"/>
@@ -4932,6 +5188,7 @@ HTML;
                 if (type === 'send_email' && !value.subject && !value.html && !value.template_id) return;
                 if ((type === 'add_tag' || type === 'remove_tag') && !value.tag) return;
                 if ((type === 'create_crm_task') && !value.title) return;
+                if (type === 'send_whatsapp' && !value.template_name) return;
                 if ('else_step' in value) {
                     const n = parseInt(value.else_step, 10);
                     value.else_position = n > 0 ? n - 1 : -1; // ترتيب الخطوة في الشاشة
@@ -4960,6 +5217,9 @@ HTML;
             else if (triggerType === 'campaign_opened' || triggerType === 'campaign_clicked') triggerValue = { campaign_id: parseInt(tvRaw, 10) || 0 };
             else if (triggerType === 'tag_added') triggerValue = { tag: tvRaw || '' };
             else if (EM_AUTO_DAY_TRIGGERS.includes(triggerType)) triggerValue = { days: parseInt(tvRaw, 10) || (EM_AUTO_TRIGGER_OPTIONS[triggerType] || {}).def || 7 };
+            else if (EM_AUTO_PRODUCT_TRIGGERS.includes(triggerType)) triggerValue = { product_id: parseInt(tvRaw, 10) || 0 };
+            const prodSel = document.getElementById('emAutoTriggerProduct');
+            if (prodSel && EM_AUTO_PRODUCT_TRIGGERS.includes(triggerType)) triggerValue.product_id = parseInt(prodSel.value, 10) || 0;
 
             const body = {
                 name,

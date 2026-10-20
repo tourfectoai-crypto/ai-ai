@@ -31,13 +31,16 @@ try {
 
     $service = new EmailAutomationService();
     $result = $service->processDue();
+    // الحملات المتكررة (يومي/أسبوعي/شهري) — نفس الـ cron، مفيش cron جديد
+    $recurring = class_exists('EmailRecurringCampaignService') ? (new EmailRecurringCampaignService())->processDue() : 0;
     $durationMs = round((microtime(true) - $startedAt) * 1000);
 
     fwrite(STDOUT, sprintf(
-        "[%s] Email Automations run: %d اتجليت، %d اكتملت (%dms)\n",
+        "[%s] Email Automations run: %d اتجليت، %d اكتملت، %d حملة متكررة (%dms)\n",
         date('Y-m-d H:i:s'),
         $result['processed'],
         $result['completed'],
+        $recurring,
         $durationMs
     ));
 } catch (Throwable $e) {

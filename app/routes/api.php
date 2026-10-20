@@ -802,6 +802,7 @@ $router->post('/api/ads/autopilot/run', 'AdsController', 'runAutopilotNow', ['Au
 // Dashboard & Stats
 $router->get('/api/email-marketing/dashboard', 'EmailMarketingController', 'dashboard', ['AuthMiddleware']);
 $router->get('/api/email-marketing/stats', 'EmailMarketingController', 'stats', ['AuthMiddleware']);
+$router->get('/api/email-marketing/stats/timeseries', 'EmailMarketingController', 'statsTimeseries', ['AuthMiddleware']);
 // Lists
 $router->get('/api/email-marketing/lists', 'EmailMarketingController', 'lists', ['AuthMiddleware']);
 $router->post('/api/email-marketing/lists', 'EmailMarketingController', 'createList', ['AuthMiddleware']);
@@ -813,6 +814,9 @@ $router->get('/api/email-marketing/lists/{id}/subscribers', 'EmailMarketingContr
 $router->post('/api/email-marketing/subscribers', 'EmailMarketingController', 'createSubscriber', ['AuthMiddleware']);
 $router->post('/api/email-marketing/subscribers/import', 'EmailMarketingController', 'importSubscribers', ['AuthMiddleware']);
 $router->post('/api/email-marketing/subscribers/import-advanced', 'EmailMarketingController', 'importContactsAdvanced', ['AuthMiddleware']);
+$router->post('/api/email-marketing/subscribers/import-preview', 'EmailMarketingController', 'previewImport', ['AuthMiddleware']);
+$router->post('/api/email-marketing/ai-assist', 'EmailMarketingController', 'aiAssist', ['AuthMiddleware']);
+$router->post('/api/email-marketing/campaigns/{id}/recurrence', 'EmailMarketingController', 'setCampaignRecurrence', ['AuthMiddleware']);
 $router->get('/api/email-marketing/subscribers/export', 'EmailMarketingController', 'exportSubscribers', ['AuthMiddleware']);
 $router->get('/api/email-marketing/subscribers/{id}', 'EmailMarketingController', 'getSubscriber', ['AuthMiddleware']);
 $router->patch('/api/email-marketing/subscribers/{id}', 'EmailMarketingController', 'updateSubscriber', ['AuthMiddleware']);

@@ -56,3 +56,24 @@ ALTER TABLE `email_campaigns`
 ALTER TABLE `email_automations`
     ADD COLUMN IF NOT EXISTS `attributed_bookings_count` INT UNSIGNED NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS `attributed_revenue` DECIMAL(12,2) NOT NULL DEFAULT 0.00;
+
+-- Send-Time Optimization + الحملات المتكررة
+ALTER TABLE `email_campaigns`
+    ADD COLUMN IF NOT EXISTS `send_time_optimization` TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'كل مستلم يتبعتله في أنسب ساعة ليه',
+    ADD COLUMN IF NOT EXISTS `recurrence` VARCHAR(16) NULL DEFAULT NULL COMMENT 'daily/weekly/monthly — الحملة قالب بيتنسخ كل مرة',
+    ADD COLUMN IF NOT EXISTS `next_run_at` DATETIME NULL DEFAULT NULL COMMENT 'UTC',
+    ADD COLUMN IF NOT EXISTS `parent_campaign_id` INT(11) NULL DEFAULT NULL COMMENT 'الحملة المتكررة الأصلية';
+
+-- تصنيف الفتح (Apple MPP / فلاتر الأمان) — نفس أعمدة enterprise upgrade، مكررة هنا
+-- عشان الميزة تشتغل حتى لو ملف 2026_10_18 ما اتشغّلش
+ALTER TABLE `email_campaign_recipients`
+    ADD COLUMN IF NOT EXISTS `is_human_open` TINYINT(1) NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS `open_type` VARCHAR(32) NULL DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS `user_agent` VARCHAR(512) NULL DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS `ip_address` VARCHAR(64) NULL DEFAULT NULL;
+
+ALTER TABLE `email_subscribers`
+    ADD COLUMN IF NOT EXISTS `optimal_send_hour` TINYINT UNSIGNED NULL DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS `last_engaged_at` TIMESTAMP NULL DEFAULT NULL;
+
+CREATE INDEX IF NOT EXISTS `idx_email_campaigns_recurring` ON `email_campaigns` (`recurrence`, `next_run_at`);

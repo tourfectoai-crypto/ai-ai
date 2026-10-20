@@ -38,6 +38,8 @@ class EmailTemplateEditorService
             ['type' => 'divider', 'label' => 'فاصل', 'icon' => '➖', 'default' => ['type' => 'divider', 'color' => '#e5e7eb', 'thickness' => '1']],
             ['type' => 'spacer', 'label' => 'مسافة', 'icon' => '⬜', 'default' => ['type' => 'spacer', 'height' => '24']],
             ['type' => 'social', 'label' => 'سوشيال', 'icon' => '🌐', 'default' => ['type' => 'social', 'networks' => ['facebook', 'twitter', 'instagram', 'linkedin']]],
+            ['type' => 'video', 'label' => 'فيديو', 'icon' => '🎬', 'default' => ['type' => 'video', 'url' => '', 'thumbnail' => '', 'caption' => '']],
+            ['type' => 'columns', 'label' => 'عمودين (كروت رحلات)', 'icon' => '🧳', 'default' => ['type' => 'columns', 'left_title' => 'رحلة 1', 'right_title' => 'رحلة 2']],
             ['type' => 'html', 'label' => 'كود HTML', 'icon' => '💻', 'default' => ['type' => 'html', 'html' => '<div style="background:#f3f4f6;padding:16px;border-radius:8px;">كود مخصص</div>']],
         ];
     }
@@ -132,17 +134,89 @@ class EmailTemplateEditorService
                         continue;
                     }
                     [$url, $bg, $glyph] = $icons[$net];
+                    // رابط صفحة الشركة نفسها لو اتحدد (قبل كده كان بيودّي للصفحة الرئيسية للشبكة)
+                    $custom = (string) ($block['link_' . $net] ?? '');
+                    if (preg_match('#^https?://#i', $custom)) {
+                        $url = htmlspecialchars($custom, ENT_QUOTES, 'UTF-8');
+                    }
                     $cells .= '<td align="center" style="padding:0 5px;"><a href="' . $url . '" style="display:inline-block;width:36px;height:36px;line-height:36px;border-radius:50%;background-color:' . $bg . ';color:#ffffff;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:16px;font-weight:700;text-decoration:none;">' . $glyph . '</a></td>';
                 }
                 return $this->wrapCell(
                     $cells === '' ? '' : '<table role="presentation" cellpadding="0" cellspacing="0" align="center"><tr>' . $cells . '</tr></table>',
                     $block
                 );
+            case 'video':
+                return $this->wrapCell(self::videoHtml($block), $block);
+            case 'columns':
+                return $this->wrapCell(self::columnsHtml($block), $block);
             case 'html':
                 return $this->wrapCell((string) ($block['html'] ?? ''), $block);
             default:
                 return '';
         }
+    }
+
+    /** معرف فيديو يوتيوب من أي شكل رابط، أو '' */
+    public static function youtubeId(string $url): string
+    {
+        return preg_match('~(?:youtube\.com/(?:watch\?(?:.*&)?v=|embed/|shorts/)|youtu\.be/)([A-Za-z0-9_-]{11})~', $url, $m) ? $m[1] : '';
+    }
+
+    /**
+     * الإيميل ما بيشغّلش فيديو: صورة مصغرة عليها ▶ ومربوطة بالفيديو (نفس أسلوب Mailchimp).
+     */
+    public static function videoHtml(array $block): string
+    {
+        $url = (string) ($block['url'] ?? '');
+        if (!preg_match('#^https?://#i', $url)) {
+            return '<div style="background:#111827;color:#9ca3af;text-align:center;padding:40px;border-radius:8px;font-size:13px;">أضف رابط الفيديو من اللوحة الجانبية</div>';
+        }
+        $thumb = (string) ($block['thumbnail'] ?? '');
+        if (!preg_match('#^https?://#i', $thumb)) {
+            $id = self::youtubeId($url);
+            $thumb = $id !== '' ? 'https://img.youtube.com/vi/' . $id . '/hqdefault.jpg' : '';
+        }
+        $href = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+        $visual = $thumb !== ''
+            ? '<img src="' . htmlspecialchars($thumb, ENT_QUOTES, 'UTF-8') . '" alt="▶" width="552" style="max-width:100%;height:auto;display:block;border:0;border-radius:8px;" />'
+            : '<div style="background:#111827;height:260px;border-radius:8px;"></div>';
+        $html = '<a href="' . $href . '" style="text-decoration:none;display:block;">' . $visual
+            . '<div style="text-align:center;margin-top:-58px;margin-bottom:22px;"><span style="display:inline-block;background:rgba(17,24,39,.85);color:#ffffff;border-radius:999px;padding:10px 22px;font-size:15px;font-weight:700;font-family:Arial,Helvetica,sans-serif;">▶ تشغيل الفيديو</span></div></a>';
+        $caption = trim((string) ($block['caption'] ?? ''));
+        if ($caption !== '') {
+            $html .= '<p style="margin:8px 0 0;text-align:center;color:#6b7280;font-size:13px;">' . htmlspecialchars($caption, ENT_QUOTES, 'UTF-8') . '</p>';
+        }
+        return $html;
+    }
+
+    /** عمودين (مثلًا كارتين رحلات) — بيتراصّوا تحت بعض على الموبايل (inline-block) */
+    public static function columnsHtml(array $block): string
+    {
+        $cells = '';
+        foreach (['left', 'right'] as $side) {
+            $img = (string) ($block[$side . '_image'] ?? '');
+            $title = htmlspecialchars((string) ($block[$side . '_title'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $text = htmlspecialchars((string) ($block[$side . '_text'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $btn = htmlspecialchars((string) ($block[$side . '_button'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $url = (string) ($block[$side . '_url'] ?? '');
+            $href = preg_match('#^https?://#i', $url) ? htmlspecialchars($url, ENT_QUOTES, 'UTF-8') : '';
+            $inner = '';
+            if (preg_match('#^https?://#i', $img)) {
+                $imgTag = '<img src="' . htmlspecialchars($img, ENT_QUOTES, 'UTF-8') . '" alt="' . $title . '" width="252" style="max-width:100%;height:auto;display:block;border:0;border-radius:8px;" />';
+                $inner .= $href !== '' ? '<a href="' . $href . '">' . $imgTag . '</a>' : $imgTag;
+            }
+            if ($title !== '') {
+                $inner .= '<h3 style="margin:10px 0 6px;font-size:17px;color:#111827;">' . $title . '</h3>';
+            }
+            if ($text !== '') {
+                $inner .= '<p style="margin:0 0 10px;font-size:14px;color:#4b5563;">' . $text . '</p>';
+            }
+            if ($btn !== '' && $href !== '') {
+                $inner .= '<a href="' . $href . '" style="display:inline-block;background:#2563eb;color:#ffffff;padding:9px 18px;border-radius:8px;font-weight:700;font-size:14px;text-decoration:none;">' . $btn . '</a>';
+            }
+            $cells .= '<div style="display:inline-block;vertical-align:top;width:100%;max-width:262px;margin:0 4px 12px;text-align:start;">' . $inner . '</div>';
+        }
+        return '<div style="text-align:center;font-size:0;">' . str_replace('<div style="display:inline-block', '<div style="font-size:15px;display:inline-block', $cells) . '</div>';
     }
 
     private function wrapCell(string $inner, array $block = []): string

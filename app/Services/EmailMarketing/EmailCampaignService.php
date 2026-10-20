@@ -79,6 +79,9 @@ class EmailCampaignService
             'html_body' => (string) $data['html_body'],
             'status' => EmailCampaign::STATUS_DRAFT,
         ]);
+        if (!empty($data['send_time_optimization'])) {
+            $campaign->setAttribute('send_time_optimization', 1);
+        }
         $id = (int) $campaign->save();
         if ($id <= 0) {
             return ['success' => false, 'error' => 'تعذر حفظ الحملة'];
@@ -119,6 +122,11 @@ class EmailCampaignService
         }
         if (array_key_exists('scheduled_at', $data)) {
             $campaign->setAttribute('scheduled_at', !empty($data['scheduled_at']) ? $data['scheduled_at'] : null);
+        }
+        // العمود null = الـ migration لسه ما اتشغّلش: ما نكتبش عمود مش موجود إلا لو العميل فعّل الخيار
+        if (array_key_exists('send_time_optimization', $data)
+            && ($campaign->getAttribute('send_time_optimization') !== null || !empty($data['send_time_optimization']))) {
+            $campaign->setAttribute('send_time_optimization', !empty($data['send_time_optimization']) ? 1 : 0);
         }
         $campaign->save();
         return ['success' => true];
@@ -300,6 +308,11 @@ class EmailCampaignService
         $campaign->setAttribute('total_recipients', $total);
         $campaign->save();
 
+        // Send-Time Optimization: كل مستلم يتأجّل لأنسب ساعة ليه (sendBatch بيحترم next_attempt_at)
+        if (!empty($campaign->getAttribute('send_time_optimization')) && class_exists('EmailEngagementService')) {
+            (new EmailEngagementService())->applySendTimeOptimization($campaignId);
+        }
+
         return ['success' => true, 'recipients' => $inserted, 'total' => $total];
     }
 
@@ -358,6 +371,11 @@ class EmailCampaignService
 
         $campaign->setAttribute('total_recipients', $total);
         $campaign->save();
+
+        // Send-Time Optimization: كل مستلم يتأجّل لأنسب ساعة ليه (sendBatch بيحترم next_attempt_at)
+        if (!empty($campaign->getAttribute('send_time_optimization')) && class_exists('EmailEngagementService')) {
+            (new EmailEngagementService())->applySendTimeOptimization($campaignId);
+        }
 
         return ['success' => true, 'recipients' => $inserted, 'total' => $total];
     }
@@ -763,6 +781,12 @@ class EmailCampaignService
         $row['click_rate'] = round(((int) ($row['clicked_count'] ?? 0)) / $total * 100, 1);
         $row['click_to_open_rate'] = round(((int) ($row['clicked_count'] ?? 0)) / $clickRateBase * 100, 1);
         $row['unsubscribe_rate'] = round(((int) ($row['unsubscribed_count'] ?? 0)) / $total * 100, 1);
+        // معدل الفتح الحقيقي (من غير Apple MPP وفلاتر الأمان)
+        if (class_exists('EmailEngagementService')) {
+            $breakdown = (new EmailEngagementService())->campaignOpenBreakdown($campaignId);
+            $row['open_breakdown'] = $breakdown;
+            $row['human_open_rate'] = $breakdown['human'] === null ? $row['open_rate'] : round($breakdown['human'] / $total * 100, 1);
+        }
         return $row;
     }
 

@@ -156,7 +156,7 @@ class EmailTrackingService
     /**
      * تسجيل فتح البريد. يرفع open_count على المستلم ويحدّث عدّاد الحملة.
      */
-    public function recordOpen(string $openToken): bool
+    public function recordOpen(string $openToken, ?string $userAgent = null, ?string $ip = null): bool
     {
         $rows = $this->db->query(
             "SELECT r.id, r.campaign_id, r.subscriber_id, r.open_count
@@ -185,7 +185,18 @@ class EmailTrackingService
             [$id]
         );
         $this->recomputeCampaignCounts($campaignId);
+
+        // فتح آلي (Apple MPP / فلتر أمان) ما يتحسبش تفاعل وما يشغّلش أتمتة "عند الفتح"
+        $openType = class_exists('EmailEngagementService')
+            ? (new EmailEngagementService())->recordCampaignOpen($id, $userAgent, $ip)
+            : 'human';
+        if ($openType !== 'human') {
+            return true;
+        }
         $this->bumpEngagement($this->campaignOwnerId($campaignId), $subscriberId);
+        if (class_exists('EmailEngagementService')) {
+            (new EmailEngagementService())->refreshOptimalHour($subscriberId);
+        }
 
         // خطاف الأتمتة: "عند فتح حملة"
         if ($subscriberId > 0 && class_exists('EmailAutomationService')) {
@@ -242,6 +253,9 @@ class EmailTrackingService
         );
         $this->recomputeCampaignCounts($campaignId);
         $this->bumpEngagement($this->campaignOwnerId($campaignId), $subscriberId);
+        if (class_exists('EmailEngagementService')) {
+            (new EmailEngagementService())->refreshOptimalHour($subscriberId);
+        }
 
         // خطاف الأتمتة: "عند النقر في حملة"
         if ($subscriberId > 0 && class_exists('EmailAutomationService')) {
