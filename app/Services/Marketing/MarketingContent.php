@@ -317,6 +317,9 @@ class MarketingContent
             'starter' => ['الباقة الأساسية', 'Starter'],
             'professional' => ['الباقة الاحترافية', 'Professional'],
             'enterprise' => ['الباقة المؤسسية', 'Enterprise'],
+            'seo-essential' => ['سيو أساسي', 'SEO Essential'],
+            'seo-growth' => ['سيو النمو', 'SEO Growth'],
+            'seo-agency' => ['سيو الوكالات', 'SEO Agency'],
         ];
         if (self::isAr()) {
             return $dbName;
@@ -330,6 +333,9 @@ class MarketingContent
             'starter' => ['لشركة صغيرة بتبدأ تستقبل حجوزات أونلاين.', 'For a small company starting to take bookings online.'],
             'professional' => ['لشركة بتكبر وعايزة الأتمتة تشتغل لوحدها.', 'For a growing company that wants automation to run on its own.'],
             'enterprise' => ['للشركات الكبيرة والوكالات اللي بتدير أكتر من موقع.', 'For larger companies and agencies running several sites.'],
+            'seo-essential' => ['لشركة عايزة تظهر في جوجل والذكاء الاصطناعي في سوق واحد.', 'For a company that wants to rank in Google and AI answers in one market.'],
+            'seo-growth' => ['لشركة بتستهدف أكتر من سوق ولغة، وعايزة تحسين كل أسبوع.', 'For a company targeting several markets and languages, improved every week.'],
+            'seo-agency' => ['للوكالات اللي بتدير السيو لأكتر من عميل.', 'For agencies managing SEO for several clients.'],
         ];
         return isset($b[$key]) ? self::t($b[$key]) : '';
     }

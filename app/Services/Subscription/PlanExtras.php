@@ -30,6 +30,8 @@ class PlanExtras
         'ai_analysis' => ['kind' => 'credit', 'ar' => 'تحليلات بالذكاء الصناعي', 'en' => 'AI analyses', 'unit' => 0.60, 'step' => 5, 'max' => 1000],
         'competitor' => ['kind' => 'credit', 'ar' => 'تحليلات منافسين', 'en' => 'Competitor analyses', 'unit' => 1.00, 'step' => 2, 'max' => 300],
         'ai_tool' => ['kind' => 'usage', 'ar' => 'أدوات الذكاء الصناعي (كابشن، إعلانات، ردود مقترحة)', 'en' => 'AI tools (captions, ad copy, suggested replies)', 'unit' => 0.03, 'step' => 100, 'max' => 20000],
+        'ai_visibility' => ['kind' => 'usage', 'ar' => 'قياسات ظهورك في ChatGPT و Gemini و Perplexity', 'en' => 'AI visibility checks (ChatGPT, Gemini, Perplexity)', 'unit' => 0.19, 'step' => 100, 'max' => 5000],
+        'seo_data' => ['kind' => 'usage', 'ar' => 'بيانات بحث الكلمات (لكتابة المقالات وتحليل السوق)', 'en' => 'Keyword research data (for articles and market research)', 'unit' => 0.015, 'step' => 1000, 'max' => 50000],
     ];
 
     /** إضافات جاهزة (مرة واحدة - صالحة 30 يوم) */
@@ -43,6 +45,8 @@ class PlanExtras
         'analysis_20' => ['service' => 'ai_analysis', 'qty' => 20, 'price' => 10, 'icon' => '📊'],
         'assistant_2000' => ['service' => 'ai_assistant_message', 'qty' => 2000, 'price' => 15, 'icon' => '🤖'],
         'ai_tools_500' => ['service' => 'ai_tool', 'qty' => 500, 'price' => 12, 'icon' => '✨'],
+        'ai_visibility_100' => ['service' => 'ai_visibility', 'qty' => 100, 'price' => 19, 'icon' => '🤖'],
+        'seo_data_1000' => ['service' => 'seo_data', 'qty' => 1000, 'price' => 15, 'icon' => '🔎'],
     ];
 
     /**

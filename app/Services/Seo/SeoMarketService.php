@@ -16,8 +16,8 @@ class SeoMarketService
         $owner=$this->db->query('SELECT owner_user_id FROM users WHERE id=?',[$uid])[0]['owner_user_id']??0;
         $s=Subscription::activeSubscriptionRow((int)$owner ?: $uid);
         if (!$s) return 1;
-        $tier=(string)($s['plan_name']??'starter');
-        $max=['starter'=>1,'professional'=>3,'enterprise'=>6][$tier]??1;
+        require_once __DIR__.'/../SeoExpert/SeoPlanLimits.php';
+        $max=SeoPlanLimits::forUser($uid,$this->db)['markets'];
         $features=json_decode((string)($s['plan_features_json']??$s['features_json']??'{}'),true) ?: [];
         return max(1,min($max,(int)($features['seo_markets']??$max)));
     }

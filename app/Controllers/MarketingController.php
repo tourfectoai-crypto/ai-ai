@@ -301,6 +301,25 @@ class MarketingController extends Controller
     // ================================================================== الأسعار
 
     /** GET /pricing */
+    /** مميزات كارت باقة السيو بلغة العميل (الأرقام من حدود الباقة نفسها) */
+    private function seoPlanItems(array $f, callable $n): array
+    {
+        $sites = (int) ($f['multiple_websites'] ?? 1);
+        $markets = (int) ($f['seo_markets'] ?? 1);
+        $cycles = (int) ($f['seo_cycles'] ?? 1);
+        return [
+            [true, $sites > 1 ? $this->t(['حتى ', 'Up to ']) . $n($sites) . ' ' . $this->t(['مواقع', 'websites']) : $this->t(['موقع واحد', 'One website'])],
+            [true, $markets > 1 ? $n($markets) . ' ' . $this->t(['أسواق ولغات (المحتوى بلغة كل سوق)', 'markets and languages (content in each market language)']) : $this->t(['سوق ولغة واحدة', 'One market and language'])],
+            [true, $cycles >= 4 ? $this->t(['فحص وتحسين تلقائي كل أسبوع', 'Automatic check and fixes every week']) : ($cycles >= 2 ? $this->t(['فحص وتحسين تلقائي كل أسبوعين', 'Automatic check and fixes every two weeks']) : $this->t(['فحص وتحسين تلقائي كل شهر', 'Automatic check and fixes every month']))],
+            [true, $this->t(['لحد ', 'Up to ']) . $n($f['seo_max_pages'] ?? 100) . ' ' . $this->t(['صفحة في كل فحص', 'pages per check'])],
+            [true, $n($f['articles'] ?? 0) . ' ' . $this->t(['مقالات في الشهر بلغة السوق', 'articles / month in the market language'])],
+            [true, $this->t(['قياس ظهورك في ChatGPT و Gemini و Perplexity', 'Visibility tracking in ChatGPT, Gemini and Perplexity']) . ' (' . $n($f['ai_visibility'] ?? 0) . ' ' . $this->t(['قياس شهريًا', 'checks / month']) . ')'],
+            [true, $this->t(['إرسال صفحاتك لجوجل و Bing و Yandex تلقائيًا', 'Pages sent to Google, Bing and Yandex automatically'])],
+            [true, $n($f['ai_analysis'] ?? 0) . ' ' . $this->t(['تقارير SEO/AEO/GEO كاملة مع المنافسين', 'full SEO/AEO/GEO reports with competitors'])],
+            [!empty($f['advanced_analytics']), $this->t(['تقارير متقدمة لإدارة أكتر من عميل', 'Advanced reporting for managing several clients'])],
+        ];
+    }
+
     public function pricing(array $params = []): array
     {
         $plans = class_exists('SubscriptionPlan') ? SubscriptionPlan::allAsLegacyArray() : [];
@@ -309,6 +328,10 @@ class MarketingController extends Controller
                 'body'=>PublicLayout::hero($this->t(['الباقات','Plans']),$this->t(['الباقات غير متاحة حاليًا','Plans are currently unavailable']),$this->t(['تواصل معنا لتأكيد السعر والحدود قبل الاشتراك.','Contact us to confirm prices and allowances before subscribing.']),'<a class="btn-primary" href="/contact">'.$this->te(['تواصل معنا','Contact us']).'</a>')]));
         }
 
+        // باقات خدمة السيو (seo-*) ليها قسم لوحدها؛ الكروت وجدول المقارنة الأساسي للباقات العامة بس
+        $seoPlans = array_filter($plans, static fn ($k) => str_starts_with((string) $k, 'seo-'), ARRAY_FILTER_USE_KEY);
+        $plans = array_diff_key($plans, $seoPlans);
+        $seoCards = '';
         $ck = self::check();
         $x = '<span class="ck"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 12h10"/></svg></span>';
         $loggedIn = $this->isAuthenticated();
@@ -322,7 +345,8 @@ class MarketingController extends Controller
         header('Vary: Cookie, Accept-Language'); // السعر بيختلف حسب عملة الزائر
         $isAr = $this->t(['ar', 'en']) === 'ar';
         $cards = '';
-        foreach ($plans as $key => $p) {
+        foreach ($plans + $seoPlans as $key => $p) {
+            $isSeo = isset($seoPlans[$key]);
             $f = $p['features'];
             $sym = $this->e($p['currency_symbol'] ?? '$');
             $m = (float) $p['price_monthly'];
@@ -349,6 +373,9 @@ class MarketingController extends Controller
                 [!empty($f['auto_pilot']), !empty($f['auto_pilot']) ? $this->t(['الطيار الآلي: ردود وإجراءات من غير موافقة', 'Autopilot: replies and actions without approval']) : $this->t(['الردود بتستنى موافقتك', 'Replies wait for your approval'])],
                 [!empty($f['advanced_analytics']), $this->t(['تحليلات متقدمة', 'Advanced analytics'])],
             ];
+            if ($isSeo) {
+                $items = $this->seoPlanItems($f, $n);
+            }
             $li = '';
             foreach ($items as [$on, $txt]) {
                 // النص فيه <bdi> بس - كل الباقي متعمله escape هنا
@@ -364,17 +391,26 @@ class MarketingController extends Controller
                 $msgM = $this->t(['أهلاً، عايز أشترك في ', 'Hi, I’d like to subscribe to ']) . $name;
                 $actions .= '<a href="https://wa.me/' . $this->e($wa) . '?text=' . rawurlencode($msgM) . '" target="_blank" rel="noopener" class="cta-ghost">' . $this->te(['اشترك عبر واتساب', 'Subscribe via WhatsApp']) . '</a>';
             }
-            $feat = $key === $featuredKey;
+            $feat = $key === ($isSeo ? 'seo-growth' : $featuredKey);
             // السعر بالجنيه جنب الدولار (شرط بنك الدفع)
             $egM = $viewCur === 'USD' ? CurrencyService::egpHint((float) $p['price_monthly'], $isAr) : '';
             $egY = $viewCur === 'USD' ? CurrencyService::egpHint((float) $p['price_yearly'], $isAr) : '';
-            $cards .= '<div class="plan' . ($feat ? ' featured' : '') . '" data-em="' . $this->e($egM) . '" data-ey="' . $this->e($egY) . '" data-m="' . $this->e(number_format($m, 0)) . '" data-y="' . $this->e(number_format($y, 0)) . '" data-ym="' . $this->e(number_format($y / 12, 0)) . '" data-save="' . $save . '">'
+            $cardHtml = '<div class="plan' . ($feat ? ' featured' : '') . '" data-em="' . $this->e($egM) . '" data-ey="' . $this->e($egY) . '" data-m="' . $this->e(number_format($m, 0)) . '" data-y="' . $this->e(number_format($y, 0)) . '" data-ym="' . $this->e(number_format($y / 12, 0)) . '" data-save="' . $save . '">'
                 . ($feat ? '<span class="badge">' . $this->te(['الأكثر اختيارًا', 'Most popular']) . '</span>' : '')
                 . '<h3>' . $this->e($name) . '</h3><p class="blurb">' . $this->e(MarketingContent::planBlurb($key)) . '</p>'
                 . '<div class="price"><b><span class="cur">' . $sym . '</span><span class="amt">' . $this->e(number_format($m, 0)) . '</span></b><small class="unit">' . $this->te(['/ شهر', '/ month']) . '</small></div>'
                 . ($egM !== '' ? '<div class="egp" style="font-size:12.5px;opacity:.7;margin-top:2px">≈ <bdi>' . $this->e($egM) . '</bdi></div>' : '')
                 . '<div class="per">&nbsp;</div><ul>' . $li . '</ul><div class="actions">' . $actions . '</div></div>';
+            if ($isSeo) {
+                $seoCards .= $cardHtml;
+            } else {
+                $cards .= $cardHtml;
+            }
         }
+        $seoSection = $seoCards === '' ? '' : '<section class="blk alt" id="seo"><div class="sec-head"><h2 class="sec-title">' . $this->te(['باقات السيو والظهور في الذكاء الاصطناعي', 'SEO and AI visibility plans']) . '</h2><p class="sec-sub">'
+            . $this->te(['المنصة بتفحص موقعك وتحسّنه لوحدها كل أسبوع، وبتقيس ظهورك في ChatGPT و Gemini و Perplexity. للي عايز خدمة السيو بس، من غير باقي المنصة.', 'The platform checks and improves your website on its own every week and measures your visibility in ChatGPT, Gemini and Perplexity. For companies that only want SEO, without the rest of the platform.'])
+            . '</p></div><div class="plans">' . $seoCards . '</div><p style="text-align:center;font-size:13px;opacity:.75;margin-top:14px">'
+            . $this->te(['بنفس سعر أداة تحليل واحدة، والفرق إن المنصة بتنفّذ التحسينات بنفسها. وأرخص بكتير من وكالة سيو.', 'For the price of a single analysis tool, except the platform applies the improvements itself, and far below an SEO agency retainer.']) . '</p></section>';
         if ($cards === '') {
             $cards = '<div class="empty-state" style="grid-column:1/-1"><b>' . $this->te(['الأسعار هتتعلن قريب', 'Pricing coming soon']) . '</b>' . $this->te(['كلمنا ونبعتلك العرض المناسب.', 'Contact us for a quote.']) . '</div>';
         }
@@ -439,6 +475,7 @@ class MarketingController extends Controller
             . '</div><script>document.getElementById("tfCur").addEventListener("change",function(e){fetch("/api/currency",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:e.target.value})}).then(function(){location.reload();});});</script>'
             . '<div class="plans">' . $cards . '</div></section>'
             . '<section class="blk"><div class="sec-head"><h2 class="sec-title">' . $this->te(['موجود في كل الباقات', 'Included in every plan']) . '</h2></div><div class="incl">' . $incl . '</div></section>'
+            . $seoSection
             . $cmp
             . '<section class="blk"><div class="sec-head"><h2 class="sec-title">' . $this->te(['أسئلة عن الأسعار', 'Pricing questions']) . '</h2></div><div class="faq-list">' . $faq . '</div></section>'
             . PublicLayout::ctaBand()

@@ -13,6 +13,7 @@ require_once __DIR__.'/SeoPublicationAudit.php';
 require_once __DIR__.'/SeoContentTargetSelector.php';
 require_once __DIR__.'/SeoRejectedContentDraft.php';
 require_once __DIR__.'/SeoKeywordMap.php';
+require_once __DIR__.'/SeoPlanLimits.php';
 require_once __DIR__.'/../BusinessHub/BusinessHubService.php';
 require_once __DIR__.'/../AutoFix/EdgeRules.php';
 /** Evidence-led site campaigns. The model drafts data; server code decides what may execute. */
@@ -45,6 +46,8 @@ class SeoExpertService
         $cycles=filter_var($input['max_cycles']??4,FILTER_VALIDATE_INT);if(!$cycles||$cycles<1||$cycles>4)throw new InvalidArgumentException('Choose one to four cycles per UTC calendar month');
         $cap=$input['max_cycle_price']??0;if(!is_numeric($cap)||!is_finite((float)$cap)||(float)$cap<0||(float)$cap>100)throw new InvalidArgumentException('Invalid cycle budget');
         $maxPages=(int)($input['max_pages']??100);if(!in_array($maxPages,[100,300,500],true))throw new InvalidArgumentException('Choose a crawl limit of 100, 300 or 500 pages.');
+        // الباقة بتحدد أقصى عدد فحوصات في الشهر وصفحات في كل فحص؛ الأكتر من كده بيتظبط على حد الباقة
+        $planLimits=SeoPlanLimits::forUser($uid,$this->db);$cycles=min($cycles,$planLimits['cycles']);$maxPages=min($maxPages,$planLimits['pages']);
         $policy=['max_cycles'=>$cycles,'max_cycle_price'=>round((float)$cap,2),'auto_missing_metadata'=>($input['auto_missing_metadata']??false)===true,'autopilot'=>($input['autopilot']??true)!==false,'max_pages'=>$maxPages,'frequency_days'=>7];
         return $this->db->transaction(function()use($uid,$wid,$brief,$policy,$input){
             $this->q('SELECT id FROM users WHERE id=? FOR UPDATE',[$uid]);
@@ -238,14 +241,14 @@ class SeoExpertService
             $qualityStatus=$this->q('SELECT source_key,title,page_url,pillar_url,pillar_title,seo_state,seo_error,brief_json FROM seo_content_quality WHERE website_id=? AND user_id=? ORDER BY id DESC LIMIT 50',[$wid,$uid])->fetchAll(PDO::FETCH_ASSOC);
             foreach ($qualityStatus as &$item) {$contentBrief=json_decode($item['brief_json'],true);$item['keyword']=$contentBrief['keyword']??'';unset($item['brief_json']);}unset($item);
         }
-        return ['content_quality'=>$qualityStatus,'content_refresh_tasks'=>$refreshTasks,'site'=>['id'=>$wid,'url'=>$site['main_url']],'config'=>$cfg?:null,'runs'=>$runs,'connections'=>$connections,'worker_ready'=>self::worker(),'quote'=>$this->quote($uid)];
+        return ['content_quality'=>$qualityStatus,'content_refresh_tasks'=>$refreshTasks,'site'=>['id'=>$wid,'url'=>$site['main_url']],'config'=>$cfg?:null,'runs'=>$runs,'connections'=>$connections,'worker_ready'=>self::worker(),'quote'=>$this->quote($uid),'plan_limits'=>SeoPlanLimits::forUser($uid,$this->db)];
     }
     private function enqueue(int $uid,int $wid,string $key,?string $hash=null,float $researchCap=0): int{
         $prior=$this->q('SELECT id,website_id FROM seo_expert_runs WHERE user_id=? AND request_key=?',[$uid,$key])->fetch(PDO::FETCH_ASSOC);if($prior){if((int)$prior['website_id']!==$wid)throw new InvalidArgumentException('Request key belongs to another website');return (int)$prior['id'];}
         if(!self::worker())throw new InvalidArgumentException('The hosting publishing worker must run every minute');
         return $this->db->transaction(function()use($uid,$wid,$key,$hash,$researchCap){
             $cfg=$this->config($uid,$wid,true);(new BusinessHubService($this->db))->assertRevision($uid,$wid,json_decode($cfg['brief_json'],true));$p=json_decode($cfg['policy_json'],true);$month=gmdate('Y-m');$used=$cfg['budget_month']===$month?(int)$cfg['cycles_used']:0;
-            if($used>=(int)$p['max_cycles'])throw new InvalidArgumentException('Monthly cycle budget reached');
+            if($used>=min((int)$p['max_cycles'],SeoPlanLimits::forUser($uid,$this->db)['cycles']))throw new InvalidArgumentException('Monthly cycle budget reached');
             if($this->q("SELECT id FROM seo_expert_runs WHERE website_id=? AND user_id=? AND status IN ('queued','scanning','scanned','planning','executing') LIMIT 1",[$wid,$uid])->fetchColumn())throw new InvalidArgumentException('A site cycle is already running');
             $q=$this->quote($uid);if(empty($q['ok'])||($q['source']==='wallet'&&(float)$q['price']>(float)$p['max_cycle_price'])||($hash!==null&&!hash_equals($q['hash'],$hash)))throw new InvalidArgumentException('Generation cost or balance changed; review the displayed budget');
             $token=ServiceUsageReservation::reserve($uid,'marketing_tool','marketing_tool');$held=$this->q('SELECT source,amount FROM service_usage_reservations WHERE token=?',[$token])->fetch(PDO::FETCH_ASSOC);
@@ -485,7 +488,7 @@ class SeoExpertService
             if($r['status']!=='scanned'){
                 $stage='crawl';$this->q("UPDATE seo_expert_runs SET status='scanning',updated_at=UTC_TIMESTAMP() WHERE id=?",[$id]);
                 $priorSnapshot=json_decode((string)$r['snapshot_json'],true)?:[];
-                $snapshot=$this->scan($site,$r['status']==='scanning'?$priorSnapshot:null,(int)($policy['max_pages']??100));
+                $snapshot=$this->scan($site,$r['status']==='scanning'?$priorSnapshot:null,min((int)($policy['max_pages']??100),SeoPlanLimits::forUser($uid,$this->db)['pages']));
                 $snapshot['generation_budget']=$priorSnapshot['generation_budget']??['research_wallet_cap'=>0,'brief_started'=>false];
                 $more=(!empty($snapshot['pending_urls'])||!empty($snapshot['discovery_pending']))&&count($snapshot['pages'])<(int)$snapshot['crawl_limit']&&empty($snapshot['attempt_limit_reached']);
                 $this->q('UPDATE seo_expert_runs SET status=?,snapshot_json=?,updated_at=UTC_TIMESTAMP() WHERE id=?',[$more?'scanning':'scanned',json_encode($snapshot,JSON_THROW_ON_ERROR),$id]);

@@ -1017,6 +1017,7 @@ JS;
         // تصحيح: بقت الباقات قابلة للتعديل من لوحة الأدمن بدل الثابت الجامد.
         $plans = SubscriptionPlan::allAsLegacyArray();
         $cardsHtml = '';
+        $seoCardsHtml = '';
         if (!$plans) $cardsHtml = '<div class="p-card"><p>الباقات غير متاحة حاليًا. تواصل مع الدعم لتأكيد السعر والحدود قبل الدفع.</p><a href="/contact">تواصل معنا</a></div>';
 
         foreach ($plans as $key => $plan) {
@@ -1033,7 +1034,17 @@ JS;
             $f = $plan['features'];
             $keySafe = htmlspecialchars($key, ENT_QUOTES, 'UTF-8');
 
-            $featureItems = [
+            $isSeo = str_starts_with((string) $key, 'seo-');
+            $cycles = (int) ($f['seo_cycles'] ?? 1);
+            $featureItems = $isSeo ? [
+                ((int) $f['multiple_websites'] > 1 ? "🌐 حتى {$f['multiple_websites']} مواقع" : '🌐 موقع واحد'),
+                ((int) ($f['seo_markets'] ?? 1) > 1 ? '🗺️ ' . (int) $f['seo_markets'] . ' أسواق ولغات' : '🗺️ سوق ولغة واحدة'),
+                $cycles >= 4 ? '🔁 فحص وتحسين تلقائي كل أسبوع' : ($cycles >= 2 ? '🔁 فحص وتحسين تلقائي كل أسبوعين' : '🔁 فحص وتحسين تلقائي كل شهر'),
+                '📄 لحد ' . (int) ($f['seo_max_pages'] ?? 100) . ' صفحة في كل فحص',
+                '✍️ ' . (int) ($f['articles'] ?? 0) . ' مقالات في الشهر بلغة السوق',
+                '🤖 قياس ظهورك في ChatGPT و Gemini و Perplexity (' . (int) ($f['ai_visibility'] ?? 0) . ' قياس)',
+                "📊 {$f['ai_analysis']} تقارير SEO/AEO/GEO كاملة",
+            ] : [
                 "🤖 {$f['ai_analysis']} تحليل AI شهريًا",
                 "🏁 {$f['competitor_analysis']} تحليل منافسين",
                 "💬 {$f['chat_credits']} رسالة شات",
@@ -1070,7 +1081,7 @@ JS;
                 }
             }
 
-            $cardsHtml .= <<<HTML
+            $cardHtml = <<<HTML
             <div class="p-card">
                 <div class="p-card-head"><h3>{$name}</h3></div>
 
@@ -1091,6 +1102,7 @@ JS;
                 </div>
             </div>
 HTML;
+            if ($isSeo) $seoCardsHtml .= $cardHtml; else $cardsHtml .= $cardHtml;
         }
 
         $isAuth = $this->isAuthenticated();
@@ -1101,6 +1113,9 @@ HTML;
         </div>
 HTML;
         $body = $billingToggleHtml . '<div class="p-grid cols-3">' . $cardsHtml . '</div>';
+        if ($seoCardsHtml !== '') {
+            $body .= '<h2 id="seo" style="margin:34px 0 6px;font-size:22px">باقات السيو والظهور في الذكاء الاصطناعي</h2><p style="margin:0 0 16px;color:var(--panel-text-muted)">للي عايز خدمة السيو بس: المنصة بتفحص موقعك وتحسّنه لوحدها، وبتقيس ظهورك في ChatGPT.</p><div class="p-grid cols-3">' . $seoCardsHtml . '</div>';
+        }
         if ($isAuth) {
             $body .= self::plansStudioBlock();
         }
