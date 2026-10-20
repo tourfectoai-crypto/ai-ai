@@ -37,3 +37,12 @@ CREATE TABLE IF NOT EXISTS `social_comments` (
     KEY `idx_user_status` (`user_id`, `status`, `commented_at`),
     KEY `idx_target` (`target_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 4) أعمدة مكتبة الوسائط اللي كود النشر بيعتمد عليها (deleted_at في كل استعلامات النشر، publish_version في روابط الوسائط الخاصة).
+--    مفيش ملف migration في المشروع بيعملها؛ لو موجودة على السيرفر الخطوة دي بتتخطى من غير ما تغيّر حاجة.
+SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'media_items' AND COLUMN_NAME = 'deleted_at');
+SET @q := IF(@has = 0, 'ALTER TABLE `media_items` ADD COLUMN `deleted_at` TIMESTAMP NULL DEFAULT NULL', 'SELECT 1');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'media_items' AND COLUMN_NAME = 'publish_version');
+SET @q := IF(@has = 0, 'ALTER TABLE `media_items` ADD COLUMN `publish_version` INT NOT NULL DEFAULT 0', 'SELECT 1');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;

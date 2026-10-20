@@ -470,7 +470,7 @@ class SocialMediaController extends Controller
                 $res = ['success' => false, 'error' => 'تعذر فك التوكن'];
             }
             if (!$res['success']) {
-                $errors[] = $res['friendly'] ?? $res['error'] ?? 'فشل التعديل';
+                $errors[] = SocialCommentInbox::readableError($res, 'تعذر الوصول لفيسبوك دلوقتي (عطل مؤقت أو مشكلة اتصال). النص ما اتغيّرش، جرّب تاني بعد شوية.');
             }
         }
         if ($errors) {
@@ -784,7 +784,7 @@ class SocialMediaController extends Controller
         $limit = max(10, min(100, (int) $this->get('limit', 50)));
 
         $posts = $this->db->query(
-            'SELECT sp.id, sp.content, sp.status, sp.media_item_id, sp.created_at, m.file_path AS media_path, m.type AS media_type, m.user_id AS media_owner, m.deleted_at AS media_deleted, m.status AS media_status
+            'SELECT sp.id, sp.content, sp.status, sp.media_item_id, sp.created_at, ' . (SocialPostService::proSchema() ? 'sp.post_format' : "'feed' AS post_format") . ', m.file_path AS media_path, m.type AS media_type, m.user_id AS media_owner, m.deleted_at AS media_deleted, m.status AS media_status
                FROM social_posts sp LEFT JOIN media_items m ON m.id = sp.media_item_id
               WHERE ' . implode(' AND ', $where) . ' ORDER BY sp.created_at DESC, sp.id DESC LIMIT ' . $limit,
             $args

@@ -86,7 +86,7 @@ check('youtube tags from hashtags', $tags === ['Shorts', 'RedSea', 'Diving']);
 // ---------- توصيات التقرير ----------
 $base = ['published' => 10, 'failed' => 2, 'likes' => 0, 'comments' => 0, 'shares' => 0, 'reach' => 0, 'measured' => 6, 'engagement' => 100, 'success_rate' => 83, 'avg_engagement' => 16.7, 'by_platform' => []];
 $prev = ['engagement' => 200] + $base;
-$ins = SocialReport::insights(['current' => $base, 'previous' => $prev, 'formats' => ['video' => ['avg_score' => 40.0, 'measured' => 3], 'photo' => ['avg_score' => 10.0, 'measured' => 3]], 'best_times' => [['dow' => 5, 'hour' => 19, 'avg' => 40, 'n' => 4]], 'comments' => ['total' => 10, 'replied' => 3, 'leads' => 4]]);
+$ins = SocialReport::insights(['current' => $base, 'previous' => $prev, 'formats' => ['video' => ['avg_score' => 40.0, 'measured' => 3], 'photo' => ['avg_score' => 10.0, 'measured' => 3]], 'best_times' => [['dow' => 5, 'hour' => 19, 'avg' => 40, 'n' => 4]], 'comments' => ['total' => 10, 'answerable' => 10, 'replied' => 3, 'leads' => 4]]);
 $all = implode(' | ', array_column($ins, 1));
 check('insight: engagement drop detected', str_contains($all, 'fell -50%'));
 check('insight: best format with ratio', str_contains($all, 'video/reels (×4'));

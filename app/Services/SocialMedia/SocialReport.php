@@ -69,7 +69,7 @@ final class SocialReport
         try {
             if ($db->query("SHOW TABLES LIKE 'social_comments'")) {
                 $c = $db->query(
-                    "SELECT COUNT(*) AS total, SUM(status = 'replied') AS replied, SUM(status = 'new') AS open,
+                    "SELECT COUNT(*) AS total, SUM(status = 'replied') AS replied, SUM(status = 'new') AS open, SUM(status IN ('new','replied') AND intent <> 'spam') AS answerable,
                             SUM(intent IN ('price','booking')) AS leads, AVG(CASE WHEN status = 'replied' AND replied_at IS NOT NULL AND commented_at IS NOT NULL THEN TIMESTAMPDIFF(MINUTE, commented_at, replied_at) END) AS avg_reply_min
                        FROM social_comments WHERE user_id = ? AND commented_at >= ? AND commented_at < ?",
                     [$userId, $start, $end]
@@ -174,7 +174,7 @@ final class SocialReport
         }
         $c = $d['comments'] ?? null;
         if ($c && ($c['total'] ?? 0) > 0) {
-            $rate = round(((float) $c['replied']) / max(1, (float) $c['total']) * 100);
+            $rate = round(((float) $c['replied']) / max(1, (float) ($c['answerable'] ?? $c['total'])) * 100);
             if ($rate < 80) {
                 $out[] = ["اترد على {$rate}% بس من التعليقات" . ((int) ($c['leads'] ?? 0) > 0 ? ' و' . (int) $c['leads'] . ' منهم بيسألوا عن سعر أو حجز' : '') . '. كل تعليق سعر من غير رد = حجز ضايع. استخدم صندوق التعليقات والرد المقترح.',
                           "Only {$rate}% of comments were answered" . ((int) ($c['leads'] ?? 0) > 0 ? ', and ' . (int) $c['leads'] . ' asked about price or booking' : '') . '. Every unanswered price question is a lost booking — use the comments inbox.'];
@@ -240,7 +240,7 @@ final class SocialReport
         $c = $d['comments'];
         $commentsHtml = '';
         if ($c && ($c['total'] ?? 0) > 0) {
-            $rate = round(((float) $c['replied']) / max(1, (float) $c['total']) * 100);
+            $rate = round(((float) $c['replied']) / max(1, (float) ($c['answerable'] ?? $c['total'])) * 100);
             $commentsHtml = '<section><h2>' . $t('التعليقات وخدمة العملاء', 'Comments & customer care') . '</h2><div class="kpis">'
                 . $kpi($t('تعليقات الجمهور', 'Audience comments'), $nf((int) $c['total']))
                 . $kpi($t('نسبة الرد', 'Reply rate'), $rate . '%')

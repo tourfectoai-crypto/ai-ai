@@ -127,7 +127,7 @@ final class SocialCommentInbox
                 if (in_array($cat, [MetaApiError::PERMISSION, MetaApiError::TOKEN], true)) {
                     $out['needs_permission'] = true;
                 }
-                $out['errors'][$platform] = (string) ($res['friendly'] ?? $res['error'] ?? 'تعذر قراءة التعليقات');
+                $out['errors'][$platform] = self::readableError($res, 'تعذر قراءة التعليقات من Meta دلوقتي (عطل مؤقت أو مشكلة اتصال). هنحاول تاني تلقائيًا.');
                 continue;
             }
             foreach ($res['comments'] as $c) {
@@ -313,9 +313,22 @@ final class SocialCommentInbox
         return self::$apiFactory ? (self::$apiFactory)($token) : new MetaSocialAPI($token);
     }
 
+    /**
+     * رسالة مفهومة لخطأ Meta في سياق التعليقات/التعديل. نص Meta الجاهز للعطل المؤقت مكتوب عن "النشر"
+     * (ممكن يكون المنشور اتنشر)، فبنستبدله برسالة السياق نفسه.
+     */
+    public static function readableError(array $res, string $transientMessage): string
+    {
+        $cat = (string) ($res['category'] ?? '');
+        if (in_array($cat, [MetaApiError::TRANSIENT, MetaApiError::UNKNOWN, ''], true) || !empty($res['not_sent'])) {
+            return $transientMessage;
+        }
+        return (string) ($res['friendly'] ?? $res['error'] ?? $transientMessage);
+    }
+
     private static function permissionHint(array $res): string
     {
-        $msg = (string) ($res['friendly'] ?? $res['error'] ?? 'Meta رفضت الطلب');
+        $msg = self::readableError($res, 'تعذر الوصول لـ Meta دلوقتي (عطل مؤقت أو مشكلة اتصال). جرّب تاني بعد شوية.');
         if (in_array((string) ($res['category'] ?? ''), [MetaApiError::PERMISSION, MetaApiError::TOKEN], true)) {
             $msg .= ' — محتاج صلاحية إدارة التعليقات: اربط فيسبوك وإنستجرام تاني ووافق على كل الصلاحيات.';
         }

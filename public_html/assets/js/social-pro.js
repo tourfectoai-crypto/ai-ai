@@ -17,6 +17,8 @@
     const spLocal = s => (P.formatDate ? P.formatDate(s) : (s || '-'));
     const utc = s => new Date(String(s).replace(' ', 'T') + 'Z');
     const isVid = p => /\.(mp4|mov)$/i.test(p || '');
+    // روابط جاية من المنصات: https بس (ما نحطش javascript: أو روابط غريبة في href)
+    const safeUrl = u => (/^https:\/\//i.test(String(u || '')) ? String(u) : '');
 
     const PF = { facebook: '📘', instagram: '📸', tiktok: '🎵', youtube: '▶️' };
     const PN = { facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
@@ -376,6 +378,7 @@
         P.toast(!targets.length ? T('اتحفظ كمسودة', 'Saved as draft') : (later ? T('اتجدول ✔', 'Scheduled ✔') : st === 'published' ? T('اتنشر ✔', 'Published ✔') : st === 'failed' ? T('النشر فشل - شوف السبب في جدول المنشورات', 'Publishing failed — see the reason in Posts') : T('بيتنشر… هتلاقي النتيجة في جدول المنشورات', 'Publishing… check the result in Posts')), st === 'failed' ? 'error' : 'success');
         ['contentInput', 'topicInput', 'hashtagsInput', 'firstCommentInput'].forEach(id => { $(id).value = ''; });
         $('aiVariants').hidden = true; variants = [];
+        $('spLib').hidden = true; libLoaded = false;
         clearMedia();
         loaded.posts = false; loadStats();
         if (!document.querySelector('.sp-panel[data-panel="posts"]').hidden) { load(); loadCalendar(); }
@@ -397,7 +400,7 @@
         const t = p.targets || [];
         if (!t.length) return '<span class="p-cell-muted">' + T('مسودة', 'Draft') + '</span>';
         return t.map(x => '<div><span class="sp-tgt">' + (PF[x.platform] || '•') + ' ' + esc(x.name || x.platform) + ' ' + pill(x.status)
-            + (x.status === 'published' && x.permalink ? ' <a href="' + esc(x.permalink) + '" target="_blank" rel="noopener">' + T('افتح ↗', 'Open ↗') + '</a>' : '')
+            + (x.status === 'published' && safeUrl(x.permalink) ? ' <a href="' + esc(safeUrl(x.permalink)) + '" target="_blank" rel="noopener">' + T('افتح ↗', 'Open ↗') + '</a>' : '')
             + (x.scheduled_at && x.status !== 'published' ? ' <span class="p-cell-muted">' + esc(spLocal(x.scheduled_at)) + '</span>' : '')
             + '</span>' + ((['failed', 'uncertain'].includes(x.status) || x.next_retry_at) && x.last_error ? '<div class="sp-err">' + esc(x.last_error) + '</div>' : '') + '</div>').join('');
     }
@@ -419,9 +422,10 @@
                 postsById[p.id] = p;
                 const ts = p.targets || [];
                 const failed = ts.some(x => x.status === 'failed'), uncertain = ts.some(x => x.status === 'uncertain'), busy = ts.some(x => x.status === 'publishing');
-                const editable = (['draft', 'scheduled', 'failed'].includes(p.status) && !busy) || ts.some(x => x.status === 'published' && x.platform === 'facebook');
+                const story = p.post_format === 'story';
+                const editable = !story && ((['draft', 'scheduled', 'failed'].includes(p.status) && !busy) || ts.some(x => x.status === 'published' && x.platform === 'facebook'));
                 const thumb = p.media_path ? ((p.media_type === 'short_video' || isVid(p.media_path)) ? '🎬 ' : '<img src="' + esc(p.media_path) + '" alt="" class="sp-thumb">') : '';
-                return '<tr><td>' + thumb + esc((p.content || '').slice(0, 90)) + '</td><td>' + targetsCell(p) + '</td><td>' + engCell(p) + '</td><td>' + pill(p.status) + '</td><td class="p-cell-muted">' + esc(spLocal(p.created_at)) + '</td><td class="sp-actions">'
+                return '<tr><td>' + thumb + (story ? '<span class="pill">◎ ' + T('ستوري', 'Story') + '</span>' : esc((p.content || '').slice(0, 90))) + '</td><td>' + targetsCell(p) + '</td><td>' + engCell(p) + '</td><td>' + pill(p.status) + '</td><td class="p-cell-muted">' + esc(spLocal(p.created_at)) + '</td><td class="sp-actions">'
                     + (failed ? '<button class="p-btn outline xs" onclick="retryPost(' + p.id + ', this)">↻ ' + T('إعادة', 'Retry') + '</button> ' : '')
                     + (uncertain ? '<button class="p-btn outline xs" onclick="reconcilePost(' + p.id + ', this)" title="' + T('نسأل المنصة: المنشور اتنشر فعلًا؟', 'Ask the platform whether it was published') + '">🔍 ' + T('تحقق', 'Verify') + '</button> <button class="p-btn ghost xs" onclick="resolvePost(' + p.id + ')" title="' + T('حسم يدوي', 'Resolve manually') + '">✋</button> ' : '')
                     + (editable ? '<button class="p-btn ghost xs" onclick="editPost(' + p.id + ')" title="' + T('تعديل', 'Edit') + '">✏️</button>' : '')
@@ -645,7 +649,7 @@
             return '<article class="ib-item ' + (done ? 'done' : '') + '" data-id="' + c.id + '">'
                 + '<div class="ib-head"><span class="ib-tag ' + it[2] + '">' + it[0] + ' ' + it[1] + '</span><b>' + esc(c.author_name || T('مستخدم', 'User')) + '</b><span class="p-cell-muted">' + (PF[c.platform] || '') + ' ' + esc(c.page_name || '') + ' · ' + esc(c.commented_at ? spLocal(c.commented_at) : '') + '</span>' + (c.like_count ? '<span class="p-cell-muted">👍 ' + nf(c.like_count) + '</span>' : '') + '</div>'
                 + '<div class="ib-msg">' + esc(c.message) + '</div>'
-                + (c.post_content ? '<div class="ib-post p-cell-muted">↳ ' + esc(c.post_content) + (c.permalink ? ' <a href="' + esc(c.permalink) + '" target="_blank" rel="noopener">' + T('افتح المنشور ↗', 'Open post ↗') + '</a>' : '') + '</div>' : '')
+                + (c.post_content ? '<div class="ib-post p-cell-muted">↳ ' + esc(c.post_content) + (safeUrl(c.permalink) ? ' <a href="' + esc(safeUrl(c.permalink)) + '" target="_blank" rel="noopener">' + T('افتح المنشور ↗', 'Open post ↗') + '</a>' : '') + '</div>' : '')
                 + (c.status === 'replied' && c.reply_text ? '<div class="ib-reply-done">✔ ' + T('ردّك: ', 'Your reply: ') + esc(c.reply_text) + '</div>' : '')
                 + (c.status === 'new' ? '<div class="ib-compose"><textarea class="p-select" rows="2" maxlength="2000" placeholder="' + T('اكتب ردك…', 'Write your reply…') + '">' + esc(c.ai_suggestion || '') + '</textarea><div class="sp-row">'
                     + '<button type="button" class="p-btn outline xs" data-ib="suggest">✨ ' + T('اقترح رد', 'Suggest reply') + '</button>'
