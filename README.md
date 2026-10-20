@@ -97,3 +97,4 @@ define('SESSION_LIFETIME', getenv('SESSION_LIFETIME') ?: 3600);
 ⚠️ **مهم:** احذف أي سكريبت تشخيص من السيرفر فور ما تخلص، لأنه بيكشف مسارات وتفاصيل حساسة."# ai-ai" 
 "# ai-ai" 
 "# ai-ai" 
+"# tourfecto" 
