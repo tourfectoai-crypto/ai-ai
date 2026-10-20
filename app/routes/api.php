@@ -720,6 +720,23 @@ $router->get('/api/social/stats', 'SocialMediaController', 'stats', ['AuthMiddle
 $router->post('/api/social/metrics/refresh', 'SocialMediaController', 'refreshMetrics', ['AuthMiddleware']);
 $router->post('/api/social/posts/{id}/duplicate', 'SocialMediaController', 'duplicatePost', ['AuthMiddleware']);
 $router->post('/api/social/posts/{id}/update', 'SocialMediaController', 'updatePost', ['AuthMiddleware']);
+// النشر الاجتماعي v2: المصالحة والحسم اليدوي وتعديل المنشور بعد النشر ولوحة صحة النشر (الواجهة بتناديهم)
+$router->post('/api/social/posts/{id}/reconcile', 'SocialMediaController', 'reconcilePost', ['AuthMiddleware']);
+$router->post('/api/social/posts/{id}/resolve', 'SocialMediaController', 'resolvePost', ['AuthMiddleware']);
+$router->post('/api/social/posts/{id}/edit-published', 'SocialMediaController', 'editPublishedPost', ['AuthMiddleware']);
+$router->get('/api/social/health', 'SocialMediaController', 'publishHealth', ['AuthMiddleware']);
+// صندوق التعليقات: تعليقات منشوراتنا على فيسبوك/إنستجرام + رد بالذكاء الاصطناعي
+$router->get('/api/social/inbox', 'SocialMediaController', 'inboxList', ['AuthMiddleware']);
+$router->post('/api/social/inbox/sync', 'SocialMediaController', 'inboxSync', ['AuthMiddleware']);
+$router->post('/api/social/inbox/{id}/suggest', 'SocialMediaController', 'inboxSuggest', ['AuthMiddleware', 'PlanGateMiddleware:ai_tool']);
+$router->post('/api/social/inbox/{id}/reply', 'SocialMediaController', 'inboxReply', ['AuthMiddleware']);
+$router->post('/api/social/inbox/{id}/hide', 'SocialMediaController', 'inboxHide', ['AuthMiddleware']);
+$router->post('/api/social/inbox/{id}/done', 'SocialMediaController', 'inboxDone', ['AuthMiddleware']);
+// تقرير الأداء الشهري (للطباعة / PDF من المتصفح) وأفضل مواعيد النشر لكل صفحة
+$router->get('/api/social/best-times', 'SocialMediaController', 'bestTimes', ['AuthMiddleware']);
+// callbacks الخصوصية من Meta (عامة: من غير login/CSRF - الأمان من توقيع signed_request). مطلوبة في App Review.
+$router->post('/api/meta/deauthorize', 'MetaDataCallbackController', 'deauthorize');
+$router->post('/api/meta/data-deletion', 'MetaDataCallbackController', 'dataDeletion');
 
 // Creative Studio
 $router->get('/api/creative-studio/folders', 'CreativeStudioController', 'libraryFolders', ['AuthMiddleware']);

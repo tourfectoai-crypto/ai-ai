@@ -115,6 +115,7 @@ $router->get('/social/connect/tiktok', 'SocialMediaController', 'connectTikTok',
 $router->get('/social/connect/tiktok/callback', 'SocialMediaController', 'tikTokOAuthCallback', ['AuthMiddleware']);
 $router->get('/social/connect/youtube', 'SocialMediaController', 'connectYouTube', ['AuthMiddleware']);
 $router->get('/social/connect/youtube/callback', 'SocialMediaController', 'youTubeOAuthCallback', ['AuthMiddleware']);
+$router->get('/social/report', 'SocialMediaController', 'report', ['AuthMiddleware']);
 $router->get('/creative-studio', 'CreativeStudioController', 'index', ['AuthMiddleware']);
 $router->get('/marketing-assistant', 'MarketingAssistantController', 'index', ['AuthMiddleware']);
 $router->get('/agency', 'AgencyController', 'index', ['AuthMiddleware']);
@@ -307,6 +308,7 @@ $router->get('/privacy', 'LegalController', 'privacy');
 $router->get('/cookies', 'LegalController', 'cookies');
 $router->get('/gdpr', 'LegalController', 'gdpr');
 $router->get('/data-deletion', 'LegalController', 'dataDeletion');
+$router->get('/meta/data-deletion-status', 'MetaDataCallbackController', 'status');
 
 // ============================================
 // مسارات إدارية (Admin Web)

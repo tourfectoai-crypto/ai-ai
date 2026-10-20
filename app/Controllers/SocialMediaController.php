@@ -7,6 +7,11 @@ require_once __DIR__ . '/../Services/SocialMedia/SocialPostReconciler.php';
 require_once __DIR__ . '/../Services/SocialMedia/PublishHealthReport.php';
 require_once __DIR__ . '/../Services/SocialMedia/MediaPreflight.php';
 require_once __DIR__ . '/../Services/SocialMedia/MetaSocialAPI.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialLinkTracker.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialCommentInbox.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialBestTimes.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialReport.php';
+require_once __DIR__ . '/../Jobs/SyncSocialCommentsJob.php';
 require_once __DIR__ . '/../Jobs/ReconcileUncertainPostsJob.php';
 require_once __DIR__ . '/../Jobs/CheckSocialConnectionsHealthJob.php';
 
@@ -34,664 +39,35 @@ class SocialMediaController extends Controller
         try {
             ReconcileUncertainPostsJob::ensureScheduled();
             CheckSocialConnectionsHealthJob::ensureScheduled();
+            SyncSocialCommentsJob::ensureScheduled();
         } catch (Throwable $e) {
         }
-        $body = <<<HTML
-        <style>
-            .sp-media{border:1px dashed var(--panel-border);border-radius:12px;padding:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-            .sp-media .sp-prev{width:96px;height:96px;border-radius:10px;background:var(--panel-card-bg-2,rgba(127,127,127,.12));display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:28px;flex:none}
-            .sp-media .sp-prev img,.sp-media .sp-prev video{width:100%;height:100%;object-fit:cover}
-            .sp-lib{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin-top:10px;max-height:220px;overflow:auto}
-            .sp-lib button{border:2px solid transparent;border-radius:10px;padding:0;background:none;cursor:pointer;aspect-ratio:1;overflow:hidden}
-            .sp-lib button img,.sp-lib button video{width:100%;height:100%;object-fit:cover;display:block}
-            .sp-lib button.on{border-color:var(--panel-accent)}
-            .sp-media .sp-prev{position:relative}
-            .sp-count{position:absolute;bottom:4px;inset-inline-end:4px;background:rgba(0,0,0,.7);color:#fff;font-size:11px;border-radius:8px;padding:1px 6px}
-            #spAlbumStrip{display:none;gap:6px;flex-wrap:wrap;margin-top:8px}
-            .sp-alb{position:relative;width:52px;height:52px;border-radius:8px;overflow:hidden;flex:none}
-            .sp-alb img{width:100%;height:100%;object-fit:cover}
-            .sp-alb b{position:absolute;top:2px;inset-inline-start:3px;background:rgba(0,0,0,.65);color:#fff;font-size:10px;border-radius:6px;padding:0 4px}
-            .sp-alb i{position:absolute;top:2px;inset-inline-end:3px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;border-radius:50%;width:16px;height:16px;line-height:16px;text-align:center;cursor:pointer;font-style:normal}
-            #spAlbumBtn.on{border-color:var(--panel-accent);font-weight:700}
-            .sp-tgt{display:inline-flex;align-items:center;gap:4px;margin:2px 0 2px 6px;font-size:12px;white-space:nowrap}
-            .sp-err{font-size:11.5px;color:var(--panel-danger);margin-top:3px;max-width:420px;white-space:normal}
-            .sp-bars{display:flex;align-items:flex-end;gap:2px;height:110px;padding-top:6px}
-            .sp-bars i{flex:1;background:var(--panel-accent);border-radius:3px 3px 0 0;min-height:2px;opacity:.85;cursor:default}
-            .sp-bars i.z{opacity:.2}
-            .sp-axis{display:flex;justify-content:space-between;font-size:11px;margin-top:4px}
-            .sp-prow{display:flex;align-items:center;gap:10px;margin:9px 0;font-size:13px}
-            .sp-prow .nm{width:92px;flex:none}
-            .sp-meter{flex:1;height:8px;border-radius:6px;background:rgba(127,127,127,.18);overflow:hidden;display:flex}
-            .sp-meter b{display:block;height:100%}
-            .sp-eng{font-size:12px;white-space:nowrap;line-height:1.9}
-            .sp-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--panel-border);border-radius:999px;padding:4px 11px;font-size:12.5px;margin:3px}
-            .sp-chip.off{border-color:var(--panel-danger);color:var(--panel-danger)}
-            .sp-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;padding:12px 16px 16px}
-            .sp-cal .h{font-size:11.5px;text-align:center;padding:4px 0;color:var(--panel-muted,#888)}
-            .sp-cal .d{min-height:74px;border:1px solid var(--panel-border);border-radius:8px;padding:4px;font-size:11px;overflow:hidden}
-            .sp-cal .d.today{border-color:var(--panel-accent)}
-            .sp-cal .d.out{opacity:.45}
-            .sp-cal .d .n{font-weight:700;margin-bottom:2px}
-            .sp-cal .e{display:block;border-radius:5px;padding:1px 4px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(127,127,127,.18)}
-            .sp-cal .e.published{background:rgba(34,197,94,.22)}
-            .sp-cal .e.failed{background:rgba(239,68,68,.22)}
-            .sp-cal .e.scheduled,.sp-cal .e.pending{background:rgba(99,102,241,.25)}
-            @media (max-width:700px){.sp-cal .d{min-height:54px}.sp-cal .e{font-size:0;padding:3px}}
-            .sp-hrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 0;border-top:1px solid var(--panel-border);font-size:13px}
-            .sp-hrow.alert{background:rgba(239,68,68,.07);margin:0 -16px;padding-inline:16px}
-            .sp-hrow .nm{min-width:150px;font-weight:600}
-            .sp-hp{display:inline-block;border-radius:999px;padding:1px 9px;font-size:12px;background:rgba(127,127,127,.18)}
-            .sp-hp.ok{background:rgba(34,197,94,.2)}.sp-hp.warn{background:rgba(245,158,11,.25)}.sp-hp.bad{background:rgba(239,68,68,.22)}
-            .tt-panel{border:1px solid var(--panel-border);border-radius:12px;padding:14px;margin-top:12px}
-            .tt-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.tt-head img{width:40px;height:40px;border-radius:50%;object-fit:cover}
-            .tt-row{display:flex;gap:14px;flex-wrap:wrap;margin:8px 0}.tt-row label{display:flex;gap:6px;align-items:center;font-size:13px}
-            .tt-row label.off{opacity:.45}.tt-note{font-size:12px;line-height:1.7;margin-top:8px}.tt-sub{margin:6px 0 0 22px}
-        </style>
-        <div class="p-toolbar" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <button class="p-btn primary" onclick="openNewPost()">+ New post</button>
-                <select id="spDays" class="p-select" style="max-width:150px"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select>
-                <button class="p-btn outline" id="spMetricsBtn" onclick="refreshMetrics(true)">↻ Update Engagement of Meta</button>
-            </div>
-            <span class="p-cell-muted" id="spMetricsNote" style="font-size:12px">إنستجرام لازم صورة أو فيديو. الفيسبوك ينفع نص بس.</span>
-        </div>
-
-        <div class="p-grid cols-4" id="spStats">
-            <div class="p-card stat-tile"><div class="stat-icon blue">📝</div><div class="stat-info"><div class="stat-value" id="stTotal">-</div><div class="stat-label">إجمالي المنشورات</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon green">✅</div><div class="stat-info"><div class="stat-value" id="stPub">-</div><div class="stat-label">Published <span id="stRate" class="p-cell-muted"></span></div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon purple">🗓️</div><div class="stat-info"><div class="stat-value" id="stSched">-</div><div class="stat-label">مجدول / مسودات</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon orange">⚠️</div><div class="stat-info"><div class="stat-value" id="stFail">-</div><div class="stat-label">Failed</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon blue">👁</div><div class="stat-info"><div class="stat-value" id="stReach">-</div><div class="stat-label">الوصول</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon green">👍</div><div class="stat-info"><div class="stat-value" id="stLikes">-</div><div class="stat-label">لايكات</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon purple">💬</div><div class="stat-info"><div class="stat-value" id="stComments">-</div><div class="stat-label">تعليقات</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon orange">🔁</div><div class="stat-info"><div class="stat-value" id="stShares">-</div><div class="stat-label">مشاركات</div></div></div>
-        </div>
-        <div class="p-card" id="spHealth" style="display:none;margin-top:14px"></div>
-
-        <div class="p-grid cols-2" style="margin-top:14px">
-            <div class="p-card"><div class="p-card-head"><h3>📈 النشر اليومي</h3><span class="p-card-sub" id="spDailySub"></span></div><div class="sp-bars" id="spDaily"></div><div class="sp-axis p-cell-muted" id="spDailyAxis"></div></div>
-            <div class="p-card"><div class="p-card-head"><h3>📊 حسب المنصة</h3></div><div id="spPlat" class="p-cell-muted">Loading...</div></div>
-        </div>
-        <div class="p-grid cols-2" style="margin-top:14px">
-            <div class="p-card"><div class="p-card-head"><h3>⏰ أفضل أوقات النشر</h3><span class="p-card-sub" id="spBestSub"></span></div><div id="spBest" class="p-cell-muted">Loading...</div></div>
-            <div class="p-card"><div class="p-card-head"><h3>🏆 أفضل المنشورات تفاعلًا</h3></div><div id="spTop" class="p-cell-muted">Loading...</div></div>
-        </div>
-        <div class="p-card" style="margin:14px 0 18px"><div class="p-card-head"><h3>🔗 الحسابات المربوطة</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><a class="p-btn outline sm" href="/ads/connect/meta?for=social">+ Facebook / Instagram</a><a class="p-btn outline sm" href="/social/connect/tiktok">🎵 + TikTok</a></div></div><div id="spAccounts" class="p-cell-muted">Loading...</div></div>
-        <div class="p-card no-pad">
-            <div class="p-toolbar" style="padding:14px 16px 0;gap:8px;flex-wrap:wrap">
-                <input type="search" id="spQ" class="p-select" style="max-width:240px" placeholder="🔎 ابحث في النصوص...">
-                <select id="spFStatus" class="p-select" style="max-width:150px"><option value="">All statuses</option><option value="published">Published</option><option value="scheduled">Scheduled</option><option value="draft">Draft</option><option value="failed">Failed</option><option value="partial">Partially completed</option><option value="uncertain">Needs review</option></select>
-                <select id="spFPlat" class="p-select" style="max-width:150px"><option value="">All platforms</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="youtube">YouTube</option></select>
-            </div>
-            <div class="p-table-scroll"><table class="p-table" id="postsTable">
-                <thead><tr><th>Content</th><th>Published on</th><th>Engagement</th><th>Status</th><th>Date</th><th></th></tr></thead>
-                <tbody><tr class="p-loading-row"><td colspan="6">Loading...</td></tr></tbody>
-            </table></div>
-        </div>
-
-        <div class="p-card no-pad" style="margin-top:18px;">
-            <div class="p-card-head" style="padding:18px 20px 0;"><h3>📅 Content calendar</h3><span class="p-card-sub">Last week + next month</span></div>
-            <div class="sp-cal" id="calendarGrid"><span class="p-cell-muted">Loading...</span></div>
-        </div>
-
-        <div class="p-modal-overlay" id="newPostModal">
-            <div class="p-modal wide">
-                <div class="p-modal-head"><h3>New post</h3><button class="p-modal-close" onclick="document.getElementById('newPostModal').classList.remove('open')">×</button></div>
-                <div class="p-modal-body">
-                    <label>Topic (to generate text with AI)</label>
-                    <input type="text" id="topicInput" class="p-select" style="width:100%;margin-bottom:10px;" placeholder="Example: special offer for Hurghada trips">
-                    <button class="p-btn outline" id="aiCapBtn" onclick="generateCaption()">✨ Generate text with AI</button>
-                    <label style="margin-top:14px;display:block;">Post text</label>
-                    <textarea id="contentInput" rows="5" style="width:100%;" class="p-select"></textarea>
-
-                    <label style="margin-top:14px;display:block;">Image or video</label>
-                    <div class="sp-media">
-                        <div class="sp-prev" id="spPrev">&#128444;&#65039;</div>
-                        <div style="flex:1;min-width:200px">
-                            <div style="display:flex;gap:8px;flex-wrap:wrap">
-                                <label class="p-btn outline" style="margin:0;cursor:pointer">⬆️ ارفع من جهازك<input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" style="display:none"></label>
-                                <button type="button" class="p-btn outline" onclick="toggleLib()">🎨 من المكتبة</button>
-                                <button type="button" class="p-btn outline" id="spAlbumBtn" onclick="toggleAlbumMode()" title="اختار من 2 لـ 10 صور (ألبوم فيسبوك / كاروسيل إنستجرام)">🖼️ صور متعددة</button>
-                                <a class="p-btn outline" href="/creative-studio" target="_blank" rel="noopener">✨ Generate image or video AI ↗</a>
-                                <button type="button" class="p-btn ghost" id="spClear" style="display:none" onclick="clearMedia()">Remove</button>
-                            </div>
-                            <div id="spAlbumStrip"></div>
-                            <div class="p-cell-muted" id="spMediaNote" style="font-size:12px;margin-top:6px">صورة JPG/PNG/WEBP لحد 10 ميجا، أو فيديو MP4 لحد 100 ميجا. مقاس الصورة بيتظبط لإنستجرام تلقائي.</div>
-                        </div>
-                    </div>
-                    <div class="sp-lib" id="spLib" style="display:none"></div>
-
-                    <label style="margin-top:14px;display:block;">Publish on</label>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><button type="button" class="p-btn outline sm" onclick="refreshSocialTargets()">↻ تحديث الحسابات والصفحات</button><a class="p-btn outline sm" href="/ads/connect/meta?for=social">+ ربط صفحات Meta</a></div>
-                    <div id="targetsList" class="p-cell-muted">Loading connected pages...</div>
-                    <div id="ttPanel" class="tt-panel" hidden></div>
-                    <label style="margin-top:14px;display:block;">When?</label>
-                    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
-                        <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="spWhen" value="now" checked> Now</label>
-                        <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="spWhen" value="later"> Schedule</label>
-                        <input type="datetime-local" id="spAt" class="p-select" style="display:none;max-width:240px">
-                    </div>
-                    <div class="p-cell-muted" style="font-size:12px;margin-top:6px">If you don't choose a page, the post will be saved as a draft.</div>
-                </div>
-                <div class="p-modal-foot">
-                    <button class="p-btn outline" onclick="document.getElementById('newPostModal').classList.remove('open')">Cancel</button>
-                    <button class="p-btn primary" id="spSubmit" onclick="createPost()">Publish</button>
-                </div>
-            </div>
-        </div>
-
-        <div class="p-modal-overlay" id="editPostModal">
-            <div class="p-modal">
-                <div class="p-modal-head"><h3>تعديل المنشور</h3><button class="p-modal-close" onclick="document.getElementById('editPostModal').classList.remove('open')">×</button></div>
-                <div class="p-modal-body">
-                    <label>Post text</label>
-                    <textarea id="editContent" rows="6" style="width:100%;" class="p-select"></textarea>
-                    <div id="editWhenBox" style="display:none;margin-top:14px">
-                        <label style="display:block">موعد جديد (اختياري)</label>
-                        <input type="datetime-local" id="editAt" class="p-select" style="max-width:260px">
-                    </div>
-                    <div class="p-cell-muted" style="font-size:12px;margin-top:8px">التعديل بيغيّر النص جوه المنصة بس، ومينفعش بعد ما المنشور يتنشر.</div>
-                </div>
-                <div class="p-modal-foot">
-                    <button class="p-btn outline" onclick="document.getElementById('editPostModal').classList.remove('open')">Cancel</button>
-                    <button class="p-btn primary" id="editSubmit" onclick="saveEdit()">Save</button>
-                </div>
-            </div>
-        </div>
-HTML;
-
-        $monthlyCss = htmlspecialchars(asset_v('/assets/css/social-monthly-plans.css'), ENT_QUOTES, 'UTF-8');
-        $monthlyJs = htmlspecialchars(asset_v('/assets/js/social-monthly-plans.js'), ENT_QUOTES, 'UTF-8');
-        $monthlyUid = (int)($this->user['id']??0);
-        $body = '<link rel="stylesheet" href="'.$monthlyCss.'"><section id="monthlySocialRoot" class="smp-root p-card" data-user-id="'.$monthlyUid.'" aria-label="Monthly social media plan"><p>Loading monthly plans… / جارِ تحميل الخطط الشهرية…</p></section><script defer src="'.htmlspecialchars(asset_v('/assets/js/site-photo-picker.js'), ENT_QUOTES, 'UTF-8').'"></script><script defer src="'.$monthlyJs.'"></script>'.$body;
-
-        $script = <<<'JS'
-(function () {
-    const P = window.Panel;
-    const esc = P.esc, fetchJSON = P.fetchJSON;
-    let media = null;      // {id, file_path, is_video}
-    let libLoaded = false;
-
-    const SP_ST = { draft: '<span class="pill">Draft</span>', scheduled: '<span class="pill">Scheduled</span>', pending: '<span class="pill">Scheduled</span>', publishing: '<span class="pill orange">Publishing</span>', partial:'<span class="pill orange">Partially completed</span>',uncertain:'<span class="pill orange">Outcome needs review</span>',published: '<span class="pill green">✔ Published</span>', failed: '<span class="pill red">Failed</span>' };
-    const PF = { facebook: '📘', instagram: '📸', tiktok: '🎵', youtube: '▶️' };
-    // التواريخ في الداتابيز UTC - بنعرضها بتوقيت جهاز العميل
-    const spLocal = s => window.Panel.formatDate ? window.Panel.formatDate(s) : (s || '-');
-    const isVid = p => /\.(mp4|mov)$/i.test(p || '');
-
-    function submitLabel() {
-        const later = (document.querySelector('input[name=spWhen]:checked') || {}).value === 'later';
-        const any = document.querySelectorAll('.targetCheckbox:checked').length > 0;
-        document.getElementById('spSubmit').textContent = !any ? 'Save as draft' : (later ? 'Schedule' : 'Publish Now');
-    }
-    document.addEventListener('change', e => {
-        if (!e.target) return;
-        if (e.target.name === 'spWhen') { const at = document.getElementById('spAt'); at.style.display = e.target.value === 'later' ? 'block' : 'none'; if (!at.value) { const d = new Date(Date.now() + 3600e3); d.setMinutes(0, 0, 0); at.value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } }
-        if (e.target.name === 'spWhen' || e.target.classList.contains('targetCheckbox')) submitLabel();
-    });
-
-    window.openNewPost = function () { document.getElementById('newPostModal').classList.add('open'); submitLabel(); loadTargets(); };
-    window.refreshSocialTargets = async function () { await loadTargets(); P.toast('تم تحديث قائمة الحسابات', 'success'); };
-
-    // ALBUM-UI-BEGIN
-    // وضع الصور المتعددة: album = [{id,file_path,is_video}] بالترتيب، و media = الغلاف (أول صورة) للتوافق مع باقي الشاشة
-    let albumMode = false, album = [];
-    function paintMedia() {
-        const prev = document.getElementById('spPrev');
-        prev.innerHTML = (!media ? '&#128444;&#65039;' : (media.is_video ? '<video src="' + esc(media.file_path) + '" muted playsinline></video>' : '<img src="' + esc(media.file_path) + '" alt="">'))
-            + (album.length > 1 ? '<span class="sp-count">' + album.length + '</span>' : '');
-        const strip = document.getElementById('spAlbumStrip');
-        strip.innerHTML = album.map((m, i) => '<span class="sp-alb"><img src="' + esc(m.file_path) + '" alt=""><b>' + (i + 1) + '</b><i data-i="' + i + '" title="شيل">×</i></span>').join('');
-        strip.style.display = album.length ? 'flex' : 'none';
-        document.getElementById('spClear').style.display = (media || album.length) ? '' : 'none';
-        document.getElementById('spAlbumBtn').classList.toggle('on', albumMode);
-        document.querySelectorAll('#spLib button').forEach(b => b.classList.toggle('on', album.length ? album.some(a => a.id === +b.dataset.id) : (!!media && +b.dataset.id === media.id)));
-    }
-    function setMedia(m) { media = m; album = []; paintMedia(); }
-    function setAlbum(list) { album = list.slice(0, 10); media = album[0] || null; paintMedia(); }
-    window.toggleAlbumItem = function (item) {
-        if (item.is_video) { P.toast('الصور المتعددة للصور بس - الفيديو بيتنشر لوحده', 'error'); return; }
-        const i = album.findIndex(a => a.id === item.id);
-        if (i >= 0) setAlbum(album.filter((_, k) => k !== i));
-        else if (album.length >= 10) P.toast('الحد الأقصى 10 صور', 'error');
-        else setAlbum(album.concat([item]));
-    };
-    window.toggleAlbumMode = function () {
-        albumMode = !albumMode;
-        if (albumMode) { album = media && !media.is_video ? [media] : []; media = album[0] || null; }
-        else { media = album[0] || media; album = []; }
-        paintMedia();
-        if (albumMode && document.getElementById('spLib').style.display === 'none') window.toggleLib();
-    };
-    window.clearMedia = function () { albumMode = false; setMedia(null); document.getElementById('spFile').value = ''; };
-    document.addEventListener('click', e => {
-        const x = e.target && e.target.closest ? e.target.closest('#spAlbumStrip i') : null;
-        if (x) setAlbum(album.filter((_, k) => k !== +x.dataset.i));
-    });
-    // ALBUM-UI-END
-
-    document.getElementById('spFile').addEventListener('change', async e => {
-        const f = e.target.files && e.target.files[0];
-        if (!f) return;
-        const note = document.getElementById('spMediaNote');
-        const old = note.textContent;
-        note.textContent = 'جارِ الرفع...';
-        const fd = new FormData(); fd.append('file', f);
-        const res = await fetchJSON('/api/social/media', { method: 'POST', body: fd });
-        note.textContent = old;
-        if (res.success) { const it = res.data.item; (albumMode && !it.is_video) ? toggleAlbumItem(it) : setMedia(it); P.toast('اترفعت ✓', 'success'); libLoaded = false; }
-        else P.toast(res.error || 'Upload failed', 'error');
-    });
-
-    window.toggleLib = async function () {
-        const box = document.getElementById('spLib');
-        if (box.style.display !== 'none') { box.style.display = 'none'; return; }
-        box.style.display = 'grid';
-        if (libLoaded) return;
-        box.innerHTML = '<span class="p-cell-muted">Loading...</span>';
-        const res = await fetchJSON('/api/creative-studio/media');
-        const items = ((res.success && res.data.items) || []).filter(i => i.status === 'completed' && i.file_path);
-        libLoaded = true;
-        box.innerHTML = items.length ? items.map(i => '<button type="button" data-id="' + i.id + '" data-path="' + esc(i.file_path) + '" title="' + esc(i.prompt || '') + '">' + (isVid(i.file_path) || i.type === 'short_video' ? '<video src="' + esc(i.file_path) + '" muted></video>' : '<img loading="lazy" src="' + esc(i.thumbnail_path || i.file_path) + '" alt="">') + '</button>').join('')
-            : '<span class="p-cell-muted">مفيش صور في المكتبة لسه. <a href="/creative-studio">ولّد صورة من Creative Studio</a> أو ارفع من جهازك.</span>';
-        box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { const it = { id: +b.dataset.id, file_path: b.dataset.path, is_video: isVid(b.dataset.path) || !!b.querySelector('video') }; albumMode ? toggleAlbumItem(it) : setMedia(it); }));
-        paintMedia();
-    };
-
-    async function loadTargets() {
-        const box = document.getElementById('targetsList');
-        box.textContent = 'جارِ تحديث الصفحات المرتبطة...';
-        const res = await fetchJSON('/api/social/connections?_=' + Date.now(), { cache: 'no-store' });
-        if (!res.success) { box.innerHTML = '<div class="alert alert-danger">تعذر تحميل الصفحات: ' + esc(res.error || '') + ' <a href="#" onclick="location.reload();return false">حدّث الصفحة</a></div>'; return; }
-        const off = (res.data.disconnected || []);
-        const offHtml = off.length ? '<div class="alert alert-warning" style="margin-top:8px;font-size:12.5px">⚠️ صفحات محتاجة إعادة ربط: ' + off.map(c => (PF[c.platform] || '') + ' <b>' + esc(c.name || c.platform) + '</b>' + (c.last_error ? ' <span class="p-cell-muted">(' + esc(c.last_error) + ')</span>' : '')).join(', ') + ' — <a href="/ads/connect/meta?for=social">اربط تاني</a></div>' : '';
-        if (res.data.connections && res.data.connections.length) {
-            const miss = res.data.missing_features || [];
-            box.innerHTML = (miss.length ? '<div class="alert alert-warning" style="margin-bottom:10px;">⚠️ النشر مش هيشتغل على: <b>' + miss.map(esc).join(', ') + '</b> - صلاحيات ناقصة من Meta. <a href="/ads/connect/meta?for=social&rerequest=1">اربط تاني ووافق على كل الصلاحيات</a></div>' : '')
-                + res.data.connections.map(c => `
-                <label style="display:flex;align-items:center;gap:8px;margin:6px 0;color:var(--panel-text)">
-                    <input type="checkbox" class="targetCheckbox" value="${c.id}" data-platform="${esc(c.platform)}">
-                    ${PF[c.platform] || '•'} ${esc(c.name)} <span class="p-cell-muted" style="font-size:11.5px">(${c.platform === 'instagram' ? 'Instagram' : c.platform === 'facebook' ? 'Page Facebook' : esc(c.platform)})</span>${(c.missing || []).length ? ' <span class="p-cell-muted" title="' + esc(c.missing.join(', ')) + '">⚠️ صلاحية ناقصة</span>' : ''}
-                </label>`).join('')
-                + '<div style="margin-top:6px"><a class="p-cell-muted" style="font-size:12px" href="/ads/connect/meta?for=social">صفحة ناقصة؟ اربط تاني واختار كل الصفحات</a></div>' + offHtml;
-        } else {
-            const lc = res.data.last_connect;
-            const diag = lc ? '<div class="p-cell-muted" style="font-size:12px;margin-top:8px">آخر ربط (' + esc(lc.at || '') + '): Meta رجّعت ' + (lc.pages || 0) + ' Page' + (lc.names && lc.names.length ? ' (' + lc.names.map(esc).join(', ') + ')' : '') + (lc.error ? ' — Error: ' + esc(lc.error) : '') + (lc.skipped ? ' — صفحات من غير صلاحية: ' + lc.skipped : '') + '</div>' : '';
-            box.innerHTML = (off.length ? '' : '<div class="alert alert-warning">لم يتم العثور على صفحات قابلة للنشر. ربط حساب Meta لا يعني بالضرورة منح صلاحية إدارة الصفحات. تأكد من امتلاك صلاحية الصفحة، ثم أعد الربط مع اختيار الصفحات والموافقة على الأذونات.</div>') + '<a class="p-btn primary sm" href="/ads/connect/meta?for=social">اربط فيسبوك وإنستجرام</a>' + offHtml + diag;
-        }
-        if (new URLSearchParams(location.search).get('meta') === 'connected' && res.data.connections && res.data.connections.length) P.toast('تم العثور على صفحات النشر المرتبطة ✓', 'success');
-    }
-
-    const nf = n => Number(n || 0).toLocaleString((document.documentElement.lang || 'ar').slice(0, 2) === 'ar' ? 'ar-EG' : 'en-GB');
-    const PN = { facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
-    const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const utc = s => new Date(String(s).replace(' ', 'T') + 'Z');
-    let postsById = {};
-    let autoRefreshed = false;
-
-    function engCell(p) {
-        const t = (p.targets || []).filter(x => x.status === 'published');
-        if (!t.length) return '<span class="p-cell-muted">-</span>';
-        return '<div class="sp-eng">' + t.map(x => {
-            if (x.metrics_state === 'ok') return (PF[x.platform] || '•') + ' 👍 ' + nf(x.likes) + ' · 💬 ' + nf(x.comments) + ' · 🔁 ' + nf(x.shares) + (x.reach !== null && x.reach !== undefined ? ' · 👁 ' + nf(x.reach) + ' <span class="p-cell-muted">مشاهد فريد</span>' : (x.insights_note ? ' · <span class="p-cell-muted" title="' + esc(x.insights_note) + '">👁 غير متاح</span>' : ''));
-            if (x.metrics_state === 'unavailable') return (PF[x.platform] || '•') + ' <span class="p-cell-muted" title="' + esc(x.metrics_note || '') + '">Unavailable</span>';
-            return (PF[x.platform] || '•') + ' <span class="p-cell-muted">' + (x.platform === 'facebook' || x.platform === 'instagram' ? 'بيتحدّث...' : '-') + '</span>';
-        }).join('<br>') + '</div>';
-    }
-
-    function targetsCell(p) {
-        const t = p.targets || [];
-        if (!t.length) return '<span class="p-cell-muted">-</span>';
-        return t.map(x => '<div><span class="sp-tgt">' + (PF[x.platform] || '•') + ' ' + esc(x.name || x.platform) + ' ' + (SP_ST[x.status] || esc(x.status))
-            + (x.status === 'published' && x.permalink ? ' <a href="' + esc(x.permalink) + '" target="_blank" rel="noopener">Open ↗</a>' : '')
-            + (x.scheduled_at && x.status !== 'published' ? ' <span class="p-cell-muted">' + esc(spLocal(x.scheduled_at)) + '</span>' : '')
-            + '</span>' + ((['failed','uncertain'].includes(x.status) || x.next_retry_at) && x.last_error ? '<div class="sp-err">' + esc(x.last_error) + '</div>' : '') + '</div>').join('');
-    }
-
-    function filterQS() {
-        const q = new URLSearchParams();
-        const v = id => (document.getElementById(id) || {}).value || '';
-        if (v('spQ').trim()) q.set('q', v('spQ').trim());
-        if (v('spFStatus')) q.set('status', v('spFStatus'));
-        if (v('spFPlat')) q.set('platform', v('spFPlat'));
-        return q.toString();
-    }
-
-    let loadTimer = null;
-    async function load() {
-        clearTimeout(loadTimer);
-        const res = await fetchJSON('/api/social/posts?' + filterQS());
-        const tbody = document.querySelector('#postsTable tbody');
-        if (res.success && res.data.posts && res.data.posts.length) {
-            postsById = {};
-            tbody.innerHTML = res.data.posts.map(p => {
-                postsById[p.id] = p;
-                const failed = (p.targets || []).some(x => x.status === 'failed');
-                const uncertain = (p.targets || []).some(x => x.status === 'uncertain');
-                const busy = (p.targets || []).some(x => x.status === 'publishing');
-                const editable = ['draft', 'scheduled', 'failed'].includes(p.status) && !busy;
-                return `<tr>
-                    <td>${p.media_path ? ((p.media_type === 'short_video' || isVid(p.media_path)) ? '🎬 ' : '<img src="' + esc(p.media_path) + '" alt="" style="width:38px;height:38px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-inline-end:6px">') : ''}${esc((p.content || '').slice(0, 80))}</td>
-                    <td>${targetsCell(p)}</td>
-                    <td>${engCell(p)}</td>
-                    <td>${SP_ST[p.status] || esc(p.status)}</td>
-                    <td class="p-cell-muted">${esc(spLocal(p.created_at))}</td>
-                    <td style="white-space:nowrap">${failed ? '<button class="p-btn outline xs" onclick="retryPost(' + p.id + ', this)">↻ Retry</button> ' : ''}${uncertain ? '<button class="p-btn outline xs" onclick="reconcilePost(' + p.id + ', this)" title="نسأل فيسبوك/إنستجرام: المنشور اتنشر فعلًا؟">🔍 تحقق</button> <button class="p-btn ghost xs" onclick="resolvePost(' + p.id + ')" title="حسم يدوي">✋</button> ' : ''}${editable ? '<button class="p-btn ghost xs" onclick="editPost(' + p.id + ')" title="Edit">✏️</button>' : ''}<button class="p-btn ghost xs" onclick="duplicatePost(' + p.id + ')" title="نسخة كمسودة">📄</button>${!busy ? '<button class="p-btn ghost xs" onclick="deletePost(' + p.id + ')" title="مسح المنشور">🗑</button>' : ''}</td>
-                </tr>`;
-            }).join('');
-            if (res.data.posts.some(p => p.status === 'publishing')) loadTimer = setTimeout(load, 8000);
-            // أول مرة: لو فيه منشورات منشورة لسه مالهاش إحصائيات نسحبها تلقائي (بدون إزعاج)
-            const needs = res.data.posts.some(p => (p.targets || []).some(x => x.status === 'published' && (x.platform === 'facebook' || x.platform === 'instagram') && !x.metrics_at));
-            if (needs && !autoRefreshed) { autoRefreshed = true; refreshMetrics(false); }
-        } else {
-            tbody.innerHTML = '<tr><td colspan="6" class="p-empty">' + (filterQS() ? 'مفيش نتايج بالفلتر ده' : 'No posts yet') + '</td></tr>';
-        }
-    }
-
-    // ---------- الإحصائيات ----------
-    function bestTimes(samples) {
-        if (!samples || samples.length < 3) return null;
-        const hasScore = samples.some(s => +s.score > 0);
-        const m = {};
-        samples.forEach(s => {
-            const d = utc(s.at); if (isNaN(d)) return;
-            const k = d.getDay() + '-' + d.getHours();
-            m[k] = m[k] || { dow: d.getDay(), h: d.getHours(), n: 0, sc: 0 };
-            m[k].n++; m[k].sc += +s.score || 0;
-        });
-        return Object.values(m).sort((a, b) => hasScore ? (b.sc / b.n) - (a.sc / a.n) || b.n - a.n : b.n - a.n).slice(0, 3).map(x => ({ ...x, hasScore }));
-    }
-    const hLabel = h => (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? ' ص' : ' م');
-
-    // HEALTH-UI-BEGIN
-    // لوحة صحة النشر: بتعرض نسبة النجاح لكل صفحة + حالة الربط + أكتر الأخطاء. الصفحات اللي فيها مشكلة بتظهر الأول.
-    const HP_ERR = { token: 'ربط/توكن', permission: 'صلاحيات', rate_limit: 'حد استخدام', blocked: 'حظر مؤقت', media: 'وسائط', param: 'بيانات المنشور', transient: 'عطل مؤقت', unknown: 'غير معروف' };
-    const HP_PLAT = { facebook: 'فيسبوك', instagram: 'إنستجرام', tiktok: 'تيك توك', youtube: 'يوتيوب' };
-    function healthHtml(pages) {
-        if (!pages || !pages.length) return '';
-        const relink = ' <a href="/ads/connect/meta?for=social">اربط تاني</a>';
-        const rows = pages.map(p => {
-            const h = p.connection_health || {};
-            const rate = p.success_rate;
-            const cls = rate === null || rate === undefined ? '' : (rate >= 95 ? 'ok' : (rate >= 80 ? 'warn' : 'bad'));
-            let conn = '';
-            if (h.state === 'expired' || h.state === 'invalid') conn = '<span class="sp-hp bad">❌ محتاج إعادة ربط</span>' + relink;
-            else if (h.state === 'missing_permissions') conn = '<span class="sp-hp bad">⚠️ صلاحيات ناقصة: ' + esc(h.missing_scopes || '') + '</span>' + relink;
-            else if (h.state === 'expiring') conn = '<span class="sp-hp warn">⏳ الربط قرّب ينتهي</span>' + relink;
-            else if (h.state === 'ok') conn = '<span class="sp-hp ok">✅ الربط سليم</span>';
-            const errs = Object.entries(p.top_errors || {}).slice(0, 3).map(([k, v]) => esc(HP_ERR[k] || k) + ' ×' + (+v)).join('، ');
-            const stats = p.attempts > 0
-                ? '<span class="sp-hp ' + cls + '">' + rate + '% نجاح</span> <span class="p-cell-muted">(' + (+p.attempts) + ' محاولة' + (p.avg_publish_ms ? ' · متوسط ' + (p.avg_publish_ms / 1000).toFixed(1) + ' ث' : '') + ')</span>'
-                : '<span class="p-cell-muted">مفيش محاولات نشر في الفترة دي</span>';
-            return '<div class="sp-hrow' + (p.alert ? ' alert' : '') + '"><span class="nm">' + (p.alert ? '🚨 ' : '') + esc(HP_PLAT[p.platform] || p.platform || '') + ' · ' + esc(p.name || '') + '</span>'
-                + stats + (errs ? ' <span class="p-cell-muted">أخطاء: ' + errs + '</span>' : '') + (conn ? ' ' + conn : '') + '</div>';
-        }).join('');
-        return '<div style="padding:14px 16px"><b>🩺 صحة النشر</b>' + rows + '</div>';
-    }
-    // HEALTH-UI-END
-
-    async function loadHealth() {
-        const box = document.getElementById('spHealth');
-        if (!box) return;
-        try {
-            const days = +document.getElementById('spDays').value || 30;
-            const res = await fetchJSON('/api/social/health?days=' + days);
-            const html = res.success ? healthHtml(res.data.pages) : ''; // لو الـ migration لسه ما اتشغّلتش بنخفي اللوحة بهدوء
-            box.innerHTML = html; box.style.display = html ? '' : 'none';
-        } catch (e) { box.style.display = 'none'; }
-    }
-
-    async function loadStats() {
-        loadHealth();
-        const days = +document.getElementById('spDays').value || 30;
-        const res = await fetchJSON('/api/social/stats?days=' + days);
-        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-        if (!res.success) {
-            ['stTotal', 'stPub', 'stSched', 'stFail', 'stReach', 'stLikes', 'stComments', 'stShares'].forEach(i => set(i, '-'));
-            document.getElementById('spPlat').innerHTML = '<span class="p-cell-muted">' + esc(res.error || 'تعذر تحميل الإحصائيات') + '</span>';
-            document.getElementById('spBest').innerHTML = document.getElementById('spTop').innerHTML = '';
-            return;
-        }
-        const d = res.data, st = d.by_status || {}, e = d.engagement || {};
-        set('stTotal', nf(d.total_posts)); set('stPub', nf(st.published)); set('stRate', d.success_rate !== null ? '(' + nf(d.success_rate) + '% Success)' : '');
-        set('stSched', nf((st.scheduled || 0) + (st.publishing || 0)) + ' / ' + nf(st.draft)); set('stFail', nf(st.failed));
-        const hasM = (e.measured || 0) > 0;
-        set('stReach', hasM ? nf(e.reach) : '-'); set('stLikes', hasM ? nf(e.likes) : '-'); set('stComments', hasM ? nf(e.comments) : '-'); set('stShares', hasM ? nf(e.shares) : '-');
-        if (e.last_fetch) document.getElementById('spMetricsNote').textContent = 'Last updated للتفاعل: ' + spLocal(e.last_fetch);
-
-        // النشر اليومي
-        const ser = d.daily || [], max = Math.max(1, ...ser.map(x => x.count));
-        document.getElementById('spDaily').innerHTML = ser.map(x => '<i class="' + (x.count ? '' : 'z') + '" style="height:' + Math.max(2, Math.round(x.count / max * 100)) + '%" title="' + esc(x.date) + ': ' + x.count + '"></i>').join('');
-        document.getElementById('spDailyAxis').innerHTML = ser.length ? '<span>' + esc(ser[0].date.slice(5)) + '</span><span>' + esc(ser[ser.length - 1].date.slice(5)) + '</span>' : '';
-        document.getElementById('spDailySub').textContent = nf(ser.reduce((a, x) => a + x.count, 0)) + ' Publish';
-
-        // حسب المنصة
-        const pl = Object.entries(d.by_platform || {});
-        document.getElementById('spPlat').innerHTML = pl.length ? pl.map(([k, v]) => {
-            const tot = Math.max(1, v.total);
-            return '<div class="sp-prow"><span class="nm">' + (PF[k] || '•') + ' ' + esc(PN[k] || k) + '</span><div class="sp-meter" title="Published ' + v.published + ' · Failed ' + v.failed + ' · Scheduled ' + v.scheduled + '"><b style="width:' + v.published / tot * 100 + '%;background:#22c55e"></b><b style="width:' + v.scheduled / tot * 100 + '%;background:#6366f1"></b><b style="width:' + v.failed / tot * 100 + '%;background:#ef4444"></b></div><span style="width:34px;text-align:end">' + nf(v.total) + '</span></div>';
-        }).join('') + '<div class="p-cell-muted" style="font-size:11.5px">🟢 Published &nbsp;🟣 Scheduled &nbsp;🔴 Failed</div>' : '<span class="p-cell-muted">مفيش بيانات في الفترة دي</span>';
-
-        // أفضل الأوقات (بتوقيت جهازك)
-        const bt = bestTimes(d.samples);
-        document.getElementById('spBestSub').textContent = bt ? (bt[0].hasScore ? 'حسب متوسط التفاعل' : 'حسب عدد مرات النشر') : '';
-        document.getElementById('spBest').innerHTML = bt ? bt.map((x, i) => '<div class="sp-prow"><span style="font-size:18px">' + ['🥇', '🥈', '🥉'][i] + '</span><b>' + DAYS[x.dow] + '</b><span>' + hLabel(x.h) + '</span><span class="p-cell-muted" style="margin-inline-start:auto">' + nf(x.n) + ' Post</span></div>').join('') : '<span class="p-cell-muted">محتاج 3 منشورات منشورة على الأقل عشان نقترح أفضل ميعاد.</span>';
-
-        // أفضل المنشورات
-        const top = d.top_posts || [];
-        document.getElementById('spTop').innerHTML = top.length ? top.map(x => '<div class="sp-prow"><span>' + (PF[x.platform] || '•') + '</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x.content) + '</span><span class="sp-eng">👍 ' + nf(x.likes) + ' · 💬 ' + nf(x.comments) + ' · 🔁 ' + nf(x.shares) + '</span></div>').join('') : '<span class="p-cell-muted">لسه مفيش بيانات تفاعل. اضغط «تحديث التفاعل من Meta».</span>';
-    }
-
-    window.refreshMetrics = async function (manual) {
-        const btn = document.getElementById('spMetricsBtn');
-        if (manual) { btn.disabled = true; btn.textContent = 'جارِ السحب من Meta...'; }
-        const res = await fetchJSON('/api/social/metrics/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: manual ? 1 : 0 }) });
-        btn.disabled = false; btn.textContent = '↻ Update Engagement of Meta';
-        if (res.success) {
-            if (manual) P.toast(res.data.checked ? 'Updated Engagement for ' + res.data.updated + ' Post' + (res.data.unavailable ? ' (' + res.data.unavailable + ' غير متاح - غالبًا صلاحية read_insights ناقصة)' : '') : 'مفيش منشورات منشورة على فيسبوك/إنستجرام للتحديث', res.data.unavailable ? 'error' : 'success');
-            loadStats(); load();
-        } else if (manual) P.toast(res.error || 'Could not update', 'error');
-    };
-
-    // ---------- الحسابات ----------
-    async function loadAccounts() {
-        const box = document.getElementById('spAccounts');
-        const res = await fetchJSON('/api/social/connections?_=' + Date.now(), { cache: 'no-store' });
-        if (!res.success) { box.textContent = res.error || 'Could not load'; return; }
-        const on = res.data.connections || [], off = res.data.disconnected || [];
-        box.innerHTML = (on.length ? on.map(c => '<span class="sp-chip">' + (PF[c.platform] || '•') + ' ' + esc(c.name || c.platform) + ' <span style="color:#22c55e">●</span></span>').join('') : '<span class="p-cell-muted">مفيش حسابات متصلة. اربط فيسبوك/إنستجرام من الزرار فوق.</span>')
-            + off.map(c => '<span class="sp-chip off" title="' + esc(c.last_error || '') + '">' + (PF[c.platform] || '•') + ' ' + esc(c.name || c.platform) + ' — محتاج إعادة ربط</span>').join('');
-    }
-
-    // ---------- التقويم (شبكة شهرية) ----------
-    async function loadCalendar() {
-        const res = await fetchJSON('/api/social/calendar');
-        const box = document.getElementById('calendarGrid');
-        const rows = (res.success && res.data.items) || [];
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        const start = new Date(today); start.setDate(start.getDate() - 7);
-        start.setDate(start.getDate() - ((start.getDay() + 1) % 7)); // الأسبوع يبدأ السبت
-        const key = d => d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
-        const byDay = {};
-        rows.forEach(r => { const d = utc(r.scheduled_at); if (!isNaN(d)) (byDay[key(d)] = byDay[key(d)] || []).push({ d, r }); });
-        let html = ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(n => '<div class="h">' + n + '</div>').join('');
-        for (let i = 0; i < 42; i++) {
-            const d = new Date(start); d.setDate(start.getDate() + i);
-            const ev = (byDay[key(d)] || []).sort((a, b) => a.d - b.d);
-            html += '<div class="d' + (+d === +today ? ' today' : '') + (d < today ? ' out' : '') + '"><div class="n">' + d.getDate() + (d.getDate() === 1 ? ' / ' + (d.getMonth() + 1) : '') + '</div>'
-                + ev.slice(0, 3).map(x => '<span class="e ' + esc(x.r.status) + '" title="' + esc((x.r.content || '').slice(0, 120)) + '">' + (PF[x.r.platform] || '•') + ' ' + x.d.toLocaleTimeString((document.documentElement.lang || 'ar').slice(0, 2) === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB', { hour: 'numeric', minute: '2-digit' }) + ' ' + esc((x.r.content || '').slice(0, 14)) + '</span>').join('')
-                + (ev.length > 3 ? '<span class="p-cell-muted">+' + (ev.length - 3) + '</span>' : '') + '</div>';
-        }
-        box.innerHTML = html;
-    }
-
-    // ---------- Edit / Copy ----------
-    let editId = null;
-    window.editPost = function (id) {
-        const p = postsById[id]; if (!p) return;
-        editId = id;
-        document.getElementById('editContent').value = p.content || '';
-        document.getElementById('editAt').value = '';
-        document.getElementById('editWhenBox').style.display = (p.targets || []).some(x => x.status === 'scheduled') ? 'block' : 'none';
-        document.getElementById('editPostModal').classList.add('open');
-    };
-    window.saveEdit = async function () {
-        const content = document.getElementById('editContent').value.trim();
-        if (!content) { P.toast('Write Post text', 'error'); return; }
-        const atVal = document.getElementById('editAt').value;
-        const btn = document.getElementById('editSubmit'); btn.disabled = true;
-        const res = await fetchJSON('/api/social/posts/' + editId + '/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, scheduled_at: atVal || '' }) });
-        btn.disabled = false;
-        if (res.success) { document.getElementById('editPostModal').classList.remove('open'); P.toast('اتحفظ التعديل ✔', 'success'); load(); loadCalendar(); }
-        else P.toast(res.error || 'Could not save', 'error');
-    };
-    window.duplicatePost = async function (id) {
-        const res = await fetchJSON('/api/social/posts/' + id + '/duplicate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        if (res.success) { P.toast('اتعملت نسخة كمسودة - عدّلها وانشرها', 'success'); load(); loadStats(); } else P.toast(res.error || 'Could not', 'error');
-    };
-
-    window.generateCaption = async function () {
-        const topic = document.getElementById('topicInput').value.trim();
-        if (!topic) { P.toast('اكتب الموضوع الأول', 'error'); return; }
-        const btn = document.getElementById('aiCapBtn'); btn.disabled = true;
-        const res = await fetchJSON('/api/social/generate-caption', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, platform: 'instagram', website_id: P.getCurrentWebsiteId ? P.getCurrentWebsiteId() : null }) });
-        btn.disabled = false;
-        if (res.success) document.getElementById('contentInput').value = res.data.content;
-        else P.toast(res.error || 'Generation failed', 'error');
-    };
-
-    // ---- شاشة النشر على تيك توك (شروط TikTok Content Posting API)
-    let tt = null; // بيانات الحساب من تيك توك
-    const TT_PRIV = { PUBLIC_TO_EVERYONE: 'الكل (Public)', MUTUAL_FOLLOW_FRIENDS: 'الأصدقاء', FOLLOWER_OF_CREATOR: 'المتابعين', SELF_ONLY: 'أنا بس (Private)' };
-    async function renderTikTok() {
-        const panel = document.getElementById('ttPanel');
-        const cb = document.querySelector('.targetCheckbox[data-platform="tiktok"]:checked');
-        if (!cb) { panel.hidden = true; tt = null; return; }
-        panel.hidden = false;
-        if (tt && tt.cid === cb.value) return;
-        panel.innerHTML = '<span class="p-cell-muted">بنجيب بيانات حساب تيك توك...</span>';
-        const res = await fetchJSON('/api/social/tiktok/creator-info?connection_id=' + encodeURIComponent(cb.value));
-        if (!res.success) { panel.innerHTML = '<div class="alert alert-danger">' + esc(res.error || 'تعذر الوصول لتيك توك') + ' <a href="/social/connect/tiktok">اربط تيك توك تاني</a></div>'; tt = null; return; }
-        tt = Object.assign({ cid: cb.value }, res.data);
-        const opt = (k, label, disabled) => '<label class="' + (disabled ? 'off' : '') + '"><input type="checkbox" id="tt_' + k + '"' + (disabled ? ' disabled' : '') + '> ' + label + (disabled ? ' <span class="p-cell-muted">(مقفولة من إعدادات حسابك)</span>' : '') + '</label>';
-        panel.innerHTML = '<div class="tt-head">' + (tt.avatar ? '<img src="' + esc(tt.avatar) + '" alt="" referrerpolicy="no-referrer">' : '🎵') + '<div><b>هيتنشر على تيك توك: ' + esc(tt.nickname) + '</b>' + (tt.username ? '<div class="p-cell-muted" dir="ltr">@' + esc(tt.username) + '</div>' : '') + '</div></div>'
-            + '<label style="display:block;font-size:13px">مين يقدر يشوف الفيديو؟ <select id="tt_privacy" class="p-select" style="max-width:260px;margin-top:4px;display:block"><option value="">اختار...</option>' + tt.privacy_level_options.map(o => '<option value="' + esc(o) + '">' + esc(TT_PRIV[o] || o) + '</option>').join('') + '</select></label>'
-            + '<div class="tt-row">' + opt('comment', 'السماح بالتعليقات', tt.comment_disabled) + opt('duet', 'السماح بالـ Duet', tt.duet_disabled) + opt('stitch', 'السماح بالـ Stitch', tt.stitch_disabled) + '</div>'
-            + '<label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:6px"><input type="checkbox" id="tt_commercial"> الفيديو ده بيروّج لبراند أو منتج أو خدمة (Disclose commercial content)</label>'
-            + '<div id="tt_comm_box" class="tt-sub" hidden><label style="display:flex;gap:6px;font-size:13px"><input type="checkbox" id="tt_brand_organic"> علامتك التجارية (Your brand) — هيظهر عليه "Promotional content"</label><label style="display:flex;gap:6px;font-size:13px;margin-top:4px"><input type="checkbox" id="tt_brand_content"> محتوى مدفوع لبراند تاني (Branded content) — هيظهر عليه "Paid partnership"</label></div>'
-            + '<div class="tt-note p-cell-muted" id="tt_consent"></div>'
-            + (tt.max_video_post_duration_sec ? '<div class="tt-note p-cell-muted">أقصى مدة للفيديو على حسابك: ' + Math.floor(tt.max_video_post_duration_sec / 60) + ' دقيقة. تيك توك بيقبل فيديو بس، وممكن ياخد كام دقيقة لحد ما يظهر على البروفايل.</div>' : '');
-        ttConsent();
-    }
-    function ttConsent() {
-        const box = document.getElementById('tt_consent'); if (!box) return;
-        const bc = document.getElementById('tt_brand_content')?.checked;
-        box.innerHTML = 'بالنشر انت موافق على ' + (bc ? '<a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener">Branded Content Policy</a> و' : '') + '<a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a> الخاصة بتيك توك.'
-            + '<br><span dir="ltr">By posting, you agree to TikTok\'s ' + (bc ? 'Branded Content Policy and ' : '') + 'Music Usage Confirmation.</span>';
-        const priv = document.getElementById('tt_privacy');
-        if (priv) { const self = [...priv.options].find(o => o.value === 'SELF_ONLY'); if (self) { self.disabled = !!bc; self.textContent = TT_PRIV.SELF_ONLY + (bc ? ' — مش متاح مع المحتوى المدفوع' : ''); if (bc && priv.value === 'SELF_ONLY') priv.value = ''; } }
-    }
-    document.addEventListener('change', e => {
-        if (!e.target) return;
-        if (e.target.classList.contains('targetCheckbox')) renderTikTok();
-        if (e.target.id === 'tt_commercial') { document.getElementById('tt_comm_box').hidden = !e.target.checked; if (!e.target.checked) { document.getElementById('tt_brand_organic').checked = false; document.getElementById('tt_brand_content').checked = false; } ttConsent(); }
-        if (e.target.id === 'tt_brand_content' || e.target.id === 'tt_brand_organic') ttConsent();
-    });
-    function tikTokOptions() {
-        if (!document.querySelector('.targetCheckbox[data-platform="tiktok"]:checked')) return { ok: true, value: null };
-        if (!tt) return { ok: false, error: 'استنى لحد ما بيانات حساب تيك توك تظهر' };
-        if (!media || !media.is_video) return { ok: false, error: 'تيك توك بيقبل فيديو بس - اختار فيديو' };
-        const v = id => document.getElementById(id);
-        if (!v('tt_privacy').value) return { ok: false, error: 'اختار مين يقدر يشوف الفيديو على تيك توك' };
-        const commercial = v('tt_commercial').checked;
-        if (commercial && !v('tt_brand_organic').checked && !v('tt_brand_content').checked) return { ok: false, error: 'حدد نوع المحتوى التجاري، أو شيل علامة "بيروّج لبراند"' };
-        const prev = document.querySelector('#spPrev video');
-        if (prev && tt.max_video_post_duration_sec && prev.duration && prev.duration > tt.max_video_post_duration_sec) return { ok: false, error: 'الفيديو أطول من المسموح على حسابك في تيك توك' };
-        return { ok: true, value: { privacy_level: v('tt_privacy').value, allow_comment: !!v('tt_comment')?.checked, allow_duet: !!v('tt_duet')?.checked, allow_stitch: !!v('tt_stitch')?.checked, commercial, brand_organic: v('tt_brand_organic').checked, brand_content: v('tt_brand_content').checked } };
-    }
-
-    window.createPost = async function () {
-        const content = document.getElementById('contentInput').value.trim();
-        if (!content) { P.toast('Write Post text', 'error'); return; }
-        const later = (document.querySelector('input[name=spWhen]:checked') || {}).value === 'later';
-        const atVal = document.getElementById('spAt').value;
-        if (later && !atVal) { P.toast('Pick a publish time', 'error'); return; }
-        const checked = Array.from(document.querySelectorAll('.targetCheckbox:checked'));
-        const albumIds = album.length >= 2 ? album.map(a => a.id) : null;
-        if (albumIds && checked.some(cb => ['tiktok', 'youtube'].includes(cb.dataset.platform))) { P.toast('الصور المتعددة لفيسبوك وإنستجرام بس - شيل تيك توك/يوتيوب أو اختار صورة واحدة', 'error'); return; }
-        if (!media && checked.some(cb => cb.dataset.platform === 'instagram')) { P.toast('إنستجرام محتاج صورة أو فيديو - ارفع صورة الأول', 'error'); return; }
-        const ttOpts = tikTokOptions();
-        if (!ttOpts.ok) { P.toast(ttOpts.error, 'error'); return; }
-        const scheduledAt = later ? atVal : null; // UTC
-        const targets = checked.map(cb => ({ platform_connection_id: parseInt(cb.value, 10), scheduled_at: scheduledAt }));
-        const btn = document.getElementById('spSubmit'); btn.disabled = true; const lbl = btn.textContent; btn.textContent = targets.length && !later ? 'Publishing...' : 'Saving...';
-        const res = await fetchJSON('/api/social/posts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, targets, media_item_id: media ? media.id : null, media_item_ids: albumIds, tiktok: ttOpts.value }) });
-        btn.disabled = false; btn.textContent = lbl;
-        if (res.success) {
-            document.getElementById('newPostModal').classList.remove('open');
-            const st = res.data.post && res.data.post.status;
-            P.toast(!targets.length ? 'Saved as draft' : (later ? 'Scheduled ✔' : st === 'published' ? 'Published ✔' : st === 'failed' ? 'النشر فشل - شوف السبب في الجدول' : (ttOpts.value ? 'اتبعت لتيك توك ✔ الفيديو ممكن ياخد كام دقيقة لحد ما يظهر على البروفايل' : 'Publishing...')), st === 'failed' ? 'error' : 'success');
-            document.getElementById('contentInput').value = ''; document.getElementById('topicInput').value = ''; clearMedia();
-            load(); loadCalendar(); loadStats();
-        } else {
-            P.toast(res.error || 'Save failed', 'error');
-        }
-    };
-
-    window.retryPost = async function (id, btn) {
-        if (btn) { btn.disabled = true; btn.textContent = 'Publishing...'; }
-        const res = await fetchJSON('/api/social/posts/' + id + '/retry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        if (res.success) P.toast(res.data.status === 'published' ? 'Published ✔' : res.data.status === 'failed' ? 'لسه فاشل - شوف السبب' : 'Publishing...', res.data.status === 'failed' ? 'error' : 'success');
-        else P.toast(res.error || 'Could not', 'error');
-        load();
-    };
-
-    window.deletePost = async function (id) {
-        const p = postsById[id] || {};
-        const onFb = (p.targets || []).some(x => x.status === 'published' && x.platform === 'facebook');
-        let remote = false;
-        if (onFb) {
-            // OK = يتمسح من فيسبوك كمان | Cancel = نسأل تاني (مسح من المنصة بس أو إلغاء)
-            remote = confirm('المنشور منشور على فيسبوك.\nOK = امسحه من فيسبوك ومن المنصة\nCancel = خيارات تانية');
-            if (!remote && !confirm('تمسحه من المنصة بس (هيفضل ظاهر على فيسبوك)؟')) return;
-        } else if (!confirm('مسح المنشور من المنصة؟ (مش هيتمسح من إنستجرام لو كان اتنشر - Meta ما بتسمحش بحذفه من هنا)')) return;
-        const res = await fetchJSON('/api/social/posts/' + id + '/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote }) });
-        if (res.success) { P.toast('اتمسح', 'success'); load(); loadCalendar(); loadStats(); } else P.toast(res.error || 'Could not', 'error');
-    };
-
-    window.reconcilePost = async function (id, btn) {
-        if (btn) { btn.disabled = true; btn.textContent = '...'; }
-        const res = await fetchJSON('/api/social/posts/' + id + '/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        if (res.success) {
-            const r = (res.data.results || [])[0] || {};
-            P.toast(r.message || 'تم التحقق', r.outcome === 'still_uncertain' ? 'error' : 'success');
-        } else P.toast(res.error || 'Could not', 'error');
-        load();
-    };
-
-    window.resolvePost = async function (id) {
-        const a = prompt('المنشور ظاهر على الصفحة؟\n1 = أيوه اتنشر\n2 = لأ ماتنشرش (هيتسمح بإعادة النشر)');
-        const resolution = a === '1' ? 'published' : (a === '2' ? 'not_published' : null);
-        if (!resolution) return;
-        const res = await fetchJSON('/api/social/posts/' + id + '/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolution }) });
-        if (res.success) P.toast('تم الحسم', 'success'); else P.toast(res.error || 'Could not', 'error');
-        load();
-    };
-
-    let qTimer = null;
-    ['spFStatus', 'spFPlat'].forEach(id => document.getElementById(id).addEventListener('change', load));
-    document.getElementById('spQ').addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(load, 350); });
-    document.getElementById('spDays').addEventListener('change', loadStats);
-
-    load();
-    loadStats();
-    loadCalendar();
-    loadAccounts();
-    loadTargets();
-})();
-JS;
+        $ar = current_lang() === 'ar';
+        $asset = static fn (string $path): string => htmlspecialchars(asset_v($path), ENT_QUOTES, 'UTF-8');
+        $view = static function (array $vars): string {
+            extract($vars, EXTR_SKIP);
+            ob_start();
+            include __DIR__ . '/../Views/social/index.php';
+            return (string) ob_get_clean();
+        };
+        $body = $view([
+            'ar' => $ar,
+            'uid' => (int) ($this->user['id'] ?? 0),
+            'cssUrl' => $asset('/assets/css/social-pro.css'),
+            'jsUrl' => $asset('/assets/js/social-pro.js'),
+            'monthlyCss' => $asset('/assets/css/social-monthly-plans.css'),
+            'monthlyJs' => $asset('/assets/js/social-monthly-plans.js'),
+            'pickerJs' => $asset('/assets/js/site-photo-picker.js'),
+        ]);
 
         header('Content-Type: text/html; charset=utf-8');
-        echo $this->renderPanelPage('social', 'Social media', 'Manage and publish social media content across all connected platforms', $body, $script);
+        echo $this->renderPanelPage(
+            'social',
+            $ar ? 'السوشيال ميديا' : 'Social media',
+            $ar ? 'انشر وجدول ورد على عملائك وتابع النتائج على كل المنصات' : 'Publish, schedule, answer customers and track results across all platforms',
+            $body,
+            ''
+        );
         exit;
     }
 
@@ -1134,6 +510,158 @@ JS;
         }
         $pages = PublishHealthReport::build($rows, $health);
         return $this->success(['days' => $days, 'pages' => $pages]);
+    }
+
+    // ------------------------------------------------------------------
+    // صندوق التعليقات
+    // ------------------------------------------------------------------
+
+    /** GET /api/social/inbox?status=open|new|replied|hidden|done|all&intent= */
+    public function inboxList(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $inbox = new SocialCommentInbox();
+        if (!$inbox->ready()) {
+            return $this->success(['installed' => false, 'comments' => [], 'counts' => ['open' => 0, 'hot' => 0]]);
+        }
+        try {
+            $r = $inbox->list((int) $this->user['id'], (string) $this->get('status', 'open'), (string) $this->get('intent', ''));
+            return $this->success(['installed' => true] + $r);
+        } catch (Throwable $e) {
+            Logger::error('Social inbox list failed', ['message' => $e->getMessage()]);
+            return $this->error('تعذر تحميل التعليقات', 500);
+        }
+    }
+
+    /** POST /api/social/inbox/sync - سحب التعليقات الجديدة دلوقتي */
+    public function inboxSync(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_sync', 6, 300))) {
+            return $error;
+        }
+        $inbox = new SocialCommentInbox();
+        if (!$inbox->ready()) {
+            return $this->error('شغّل migration السوشيال الاحترافي (2026_10_20_000001_social_pro.sql) الأول', 422);
+        }
+        @set_time_limit(120);
+        try {
+            return $this->success($inbox->sync((int) $this->user['id'], 15));
+        } catch (Throwable $e) {
+            Logger::error('Social inbox sync failed', ['message' => $e->getMessage()]);
+            return $this->error('تعذر سحب التعليقات من Meta دلوقتي، جرّب تاني', 500);
+        }
+    }
+
+    /** POST /api/social/inbox/{id}/suggest - رد مقترح بالذكاء الاصطناعي */
+    public function inboxSuggest(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'ai', 30, 60))) {
+            return $error;
+        }
+        try {
+            $uid = (int) $this->user['id'];
+            return $this->success((new SocialCommentInbox())->suggest($uid, (int) ($params['id'] ?? 0), ContentLanguageService::forUser($uid, null)));
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
+        } catch (Throwable $e) {
+            Logger::warning('Social inbox suggest failed', ['message' => $e->getMessage()]);
+            return $this->error('مقدرناش نجهّز رد دلوقتي، اكتب ردك أو جرّب تاني', 502);
+        }
+    }
+
+    /** POST /api/social/inbox/{id}/reply  body: {text} */
+    public function inboxReply(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_reply', 60, 60))) {
+            return $error;
+        }
+        try {
+            return $this->success((new SocialCommentInbox())->reply((int) $this->user['id'], (int) ($params['id'] ?? 0), (string) $this->get('text', '')), 'اتبعت الرد');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            return $this->error(CustomerError::message($e->getMessage(), 502), 502);
+        }
+    }
+
+    /** POST /api/social/inbox/{id}/hide - إخفاء تعليق سبام/مسيء */
+    public function inboxHide(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_reply', 60, 60))) {
+            return $error;
+        }
+        try {
+            return $this->success((new SocialCommentInbox())->hide((int) $this->user['id'], (int) ($params['id'] ?? 0)), 'اتخفى التعليق');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            return $this->error(CustomerError::message($e->getMessage(), 502), 502);
+        }
+    }
+
+    /** POST /api/social/inbox/{id}/done - تم التعامل معاه (من غير رد علني) */
+    public function inboxDone(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($error = $this->verifyCsrf()) {
+            return $error;
+        }
+        try {
+            return $this->success((new SocialCommentInbox())->done((int) $this->user['id'], (int) ($params['id'] ?? 0)));
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
+        }
+    }
+
+    /** GET /api/social/best-times?connection_id= - أفضل مواعيد النشر بتوقيت حساب العميل */
+    public function bestTimes(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $uid = (int) $this->user['id'];
+        $cid = (int) $this->get('connection_id', 0) ?: null;
+        $tz = (string) (($this->db->query('SELECT timezone FROM users WHERE id = ?', [$uid])[0]['timezone'] ?? '') ?: 'UTC');
+        $samples = SocialBestTimes::samples($uid, $cid);
+        $prefs = SocialBestTimes::preferencesFrom($samples, $tz);
+        return $this->success([
+            'timezone' => $tz,
+            'source' => $prefs['source'],
+            'measured' => $prefs['measured'],
+            'min_measured' => SocialBestTimes::MIN_MEASURED,
+            'by_day' => $prefs['times'],
+            'top' => $prefs['source'] === 'measured' ? SocialBestTimes::rank($samples, $tz, 3) : [],
+        ]);
+    }
+
+    /** GET /social/report?month=YYYY-MM - تقرير أداء شهري جاهز للطباعة / الحفظ PDF (بهوية الشركة) */
+    public function report(array $params = []): void
+    {
+        $uid = (int) ($this->user['id'] ?? 0);
+        $month = (string) ($_GET['month'] ?? '');
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/D', $month)) {
+            $month = gmdate('Y-m', strtotime('first day of last month'));
+        }
+        $data = SocialReport::build($uid, $month);
+        header('Content-Type: text/html; charset=utf-8');
+        echo SocialReport::render($data, current_lang() === 'ar');
+        exit;
     }
 
     private static array $colCache = [];
@@ -1623,6 +1151,10 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        // الستوري ما لهاش نص على المنصة: النص هنا ملاحظة داخلية اختيارية
+        if ((string) $this->get('post_format', '') === 'story' && trim((string) $this->get('content', '')) === '') {
+            $this->data['content'] = 'Story';
+        }
         if (!$this->validate(['content' => 'required'])) {
             return $this->error('Missing data', 422, $this->getErrors());
         }
@@ -1694,13 +1226,34 @@ JS;
             $mediaId = $albumIds[0];
         }
 
+        // الستوري: صورة/فيديو واحد على فيسبوك وإنستجرام بس
+        $format = (string) $this->get('post_format', 'feed') === 'story' ? 'story' : 'feed';
+        if ($format === 'story') {
+            if ($mediaId <= 0 || $albumIds) {
+                return $this->error('الستوري محتاجة صورة أو فيديو واحد بالظبط', 422);
+            }
+            if ($targets) {
+                $cids = implode(',', array_map('intval', array_column($targets, 'platform_connection_id')));
+                if ($this->db->query("SELECT id FROM platform_connections WHERE id IN ({$cids}) AND platform NOT IN ('facebook','instagram') LIMIT 1")) {
+                    return $this->error('الستوري متاحة لفيسبوك وإنستجرام بس', 422);
+                }
+            }
+        }
+        $websiteId = (int) $this->get('website_id', 0);
+        if ($websiteId > 0 && !$this->db->query('SELECT id FROM websites WHERE id = ? AND user_id = ? LIMIT 1', [$websiteId, $uid])) {
+            $websiteId = 0;
+        }
+        $utm = $this->get('utm_campaign', '');
+        $utm = is_string($utm) ? SocialLinkTracker::slug($utm) : '';
+
         try {
             $post = $this->service->createPost(
                 $uid,
                 // كان media_item_id بيتشال هنا، فاللي جاي من Creative Studio كان بيتنشر نص بس
-                ['content' => $this->get('content'), 'website_id' => $this->get('website_id'), 'media_item_id' => $mediaId ?: null,
+                ['content' => $this->get('content'), 'website_id' => $websiteId ?: null, 'media_item_id' => $mediaId ?: null,
                  'media_item_ids' => $albumIds ?: null,
-                 'hashtags' => $this->cleanHashtags($this->get('hashtags')), 'first_comment' => $this->cleanFirstComment($this->get('first_comment'))],
+                 'hashtags' => $this->cleanHashtags($this->get('hashtags')), 'first_comment' => $this->cleanFirstComment($this->get('first_comment')),
+                 'post_format' => $format, 'utm_campaign' => $utm],
                 $targets
             );
             if ($tiktokOpts) {
@@ -1769,10 +1322,29 @@ JS;
             return $this->error('Topic is required', 422);
         }
 
-        $result = $this->service->generateCaption(
-            (string) $this->get('topic'),
-            (string) $this->get('platform', 'instagram'),
-            ContentLanguageService::forUser((int)$this->user['id'], (int)$this->get('website_id',0) ?: null)
+        $uid = (int) $this->user['id'];
+        $wid = (int) $this->get('website_id', 0) ?: null;
+        if ($wid && !$this->db->query('SELECT id FROM websites WHERE id = ? AND user_id = ? LIMIT 1', [$wid, $uid])) {
+            $wid = null;
+        }
+        $platforms = $this->get('platforms', []);
+        $platforms = is_array($platforms) ? array_values(array_filter($platforms, 'is_string')) : [];
+        if (!$platforms && is_string($this->get('platform'))) {
+            $platforms = [(string) $this->get('platform')];
+        }
+        $language = (string) $this->get('language', '');
+        if (!in_array($language, ['ar', 'en'], true)) {
+            $language = ContentLanguageService::forUser($uid, $wid);
+        }
+        $result = $this->service->generateCaptionPro(
+            $uid,
+            $wid,
+            mb_substr((string) $this->get('topic'), 0, 400),
+            $platforms,
+            $language,
+            (string) $this->get('tone', 'friendly'),
+            (string) $this->get('goal', 'engagement'),
+            (string) $this->get('format', 'feed') === 'story' ? 'story' : 'feed'
         );
 
         if (!$result['success']) {

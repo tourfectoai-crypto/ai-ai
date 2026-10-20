@@ -49,7 +49,7 @@ class YouTubeAPI
                 'title'       => $title,
                 'description' => $description . "\n\n#Shorts",
                 'tags'        => $tags,
-                'categoryId'  => '22', // People & Blogs
+                'categoryId'  => '19', // Travel & Events (منصة سياحة)
             ],
             'status' => [
                 'privacyStatus'             => $privacy,

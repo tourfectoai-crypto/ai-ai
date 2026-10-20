@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__.'/../BusinessHub/BusinessHubService.php';
 require_once __DIR__.'/SocialBrandStudio.php';
+require_once __DIR__.'/SocialBestTimes.php';
 /** Monthly campaigns use the existing delivery queue and its external-write safeguards. */
 class SocialMonthlyPlanService
 {
@@ -44,12 +45,14 @@ class SocialMonthlyPlanService
         $ids=[];foreach($values as $v){if(!is_scalar($v)||!ctype_digit((string)$v)||(int)$v<1)throw new InvalidArgumentException('Invalid '.$name);$ids[]=(int)$v;}
         return array_values(array_unique($ids));
     }
-    public static function schedule(string $month,string $timezone,string $clock,int $count,?DateTimeImmutable $now=null): array {
+    /** $clock='smart': كل يوم بميعاده الأفضل ($prefs = [dow=>'HH:MM'] من SocialBestTimes) بدل ساعة واحدة ثابتة طول الشهر */
+    public static function schedule(string $month,string $timezone,string $clock,int $count,?DateTimeImmutable $now=null,?array $prefs=null): array {
+        $smart=$clock==='smart';if($smart){$prefs=$prefs?:SocialBestTimes::BENCHMARK;$clock='00:00';}
         if(!preg_match('/^\d{4}-\d{2}$/D',$month)||!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/D',$clock)||!in_array($timezone,DateTimeZone::listIdentifiers(),true)||$count<1||$count>20)throw new InvalidArgumentException('Invalid month, timezone, time or post count');
         $zone=new DateTimeZone($timezone);$now=($now??new DateTimeImmutable('now'))->setTimezone($zone);
         $start=DateTimeImmutable::createFromFormat('!Y-m-d H:i',$month.'-01 '.$clock,$zone);
         if(!$start||$start->format('Y-m')!==$month||$month<$now->format('Y-m')||$month>$now->modify('+6 months')->format('Y-m'))throw new InvalidArgumentException('Choose this month or one of the next six months');
-        $days=[];for($d=$start;$d->format('Y-m')===$month;$d=$d->modify('+1 day'))if($d->getTimestamp()>$now->getTimestamp()+900)$days[]=$d;
+        $days=[];for($d=$start;$d->format('Y-m')===$month;$d=$d->modify('+1 day')){if($smart){$hm=(string)($prefs[(int)$d->format('w')]??'19:00');if(!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/D',$hm))$hm='19:00';[$hh,$mm]=array_map('intval',explode(':',$hm));$d=$d->setTime($hh,$mm);}if($d->getTimestamp()>$now->getTimestamp()+900)$days[]=$d;}
         if(count($days)<$count)throw new InvalidArgumentException('Not enough future days in this month; choose fewer posts or next month');
         $out=[];for($i=0;$i<$count;$i++){$index=$count===1?0:(int)round($i*(count($days)-1)/($count-1));$out[]=$days[$index]->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');}return $out;
     }
@@ -103,7 +106,7 @@ class SocialMonthlyPlanService
             $brief['shared_profile']=(new BusinessHubService($this->db))->profile($uid,(int)$wid);$brief['language']=$input['language']??'en';if(!in_array($brief['language'],['ar','en'],true))throw new InvalidArgumentException('Choose Arabic or English');
             $brief['timezone']=self::shortText($input['timezone']??'','timezone',64,1);$brief['month']=self::shortText($input['month']??'','month',7,7);$brief['publish_time']=self::shortText($input['publish_time']??'18:00','publish time',5,5);$brief['post_count']=$count;
             $brief['mix']=in_array($input['mix']??'mix',['mix','photo','design'],true)?($input['mix']??'mix'):'mix';
-            $slots=self::schedule($brief['month'],$brief['timezone'],$brief['publish_time'],$count);
+            $slots=self::schedule($brief['month'],$brief['timezone'],$brief['publish_time'],$count,null,$brief['publish_time']==='smart'?SocialBestTimes::preferences($uid,$brief['timezone']):null);
             $brief['connection_ids']=self::ids($input['connection_ids']??null,'publishing pages',4);$brief['media_ids']=self::ids($input['media_ids']??null,'campaign images/videos',60);
             $connections=$this->connections($uid,(int)$wid,$brief['connection_ids']);$assets=$this->assets($uid,$brief['media_ids']);
             foreach($connections as $c)if(!self::compatible($c['platform'],$assets))throw new InvalidArgumentException('Upload and select a video for TikTok or YouTube');
@@ -136,7 +139,7 @@ class SocialMonthlyPlanService
             // الذكاء الصناعي يشوف صور العميل اللي لسه ماشافهاش قبل ما يختار صورة لكل بوست
             $studio=new SocialBrandStudio($this->pdo);try{$studio->learnMissing($uid,$brief['media_ids'],12);}catch(Throwable $e){}
             $assets=$this->assets($uid,$brief['media_ids']);
-            $slots=self::schedule($brief['month'],$brief['timezone'],$brief['publish_time'],$count);
+            $slots=self::schedule($brief['month'],$brief['timezone'],$brief['publish_time'],$count,null,$brief['publish_time']==='smart'?SocialBestTimes::preferences($uid,$brief['timezone']):null);
             $this->q("UPDATE social_monthly_plans SET status='generating',updated_at=UTC_TIMESTAMP() WHERE id=? AND status='queued'",[$planId]);
             $platforms=array_values(array_unique(array_column($connections,'platform')));
             $past=$this->performanceContext($uid,(int)$wid);

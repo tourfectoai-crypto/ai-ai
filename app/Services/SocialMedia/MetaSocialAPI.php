@@ -279,6 +279,41 @@ class MetaSocialAPI
     }
 
     /**
+     * Story بفيديو على صفحة فيسبوك (video_stories) - نفس مراحل الـ Reel: start ← رفع من رابط ← finish.
+     * فيسبوك بيعالج الفيديو بعد finish؛ الرد فيه post_id لما يتقبل.
+     */
+    public function publishVideoStoryToFacebookPage(string $pageId, string $pageAccessToken, string $videoUrl): array
+    {
+        $start = $this->post("{$pageId}/video_stories", ['upload_phase' => 'start'], $pageAccessToken);
+        if (!$start['success']) {
+            return $start + ['stage' => 'start'];
+        }
+        $videoId = (string) ($start['data']['video_id'] ?? '');
+        $uploadUrl = (string) ($start['data']['upload_url'] ?? '');
+        if ($videoId === '' || $uploadUrl === '') {
+            return $this->localError('بدء رفع فيديو الـ Story فشل: فيسبوك ما رجّعش video_id/upload_url', MetaApiError::UNKNOWN) + ['stage' => 'start'];
+        }
+        $host = strtolower((string) parse_url($uploadUrl, PHP_URL_HOST));
+        if (parse_url($uploadUrl, PHP_URL_SCHEME) !== 'https' || !($host === 'facebook.com' || str_ends_with($host, '.facebook.com'))) {
+            return $this->localError('upload_url غير موثوق: ' . $host, MetaApiError::PARAM) + ['stage' => 'start'];
+        }
+        $upload = $this->request('POST', '', [], [], [
+            'url' => $uploadUrl,
+            'headers' => ['Authorization: OAuth ' . $pageAccessToken, 'file_url: ' . $videoUrl],
+            'raw_token' => true,
+            'timeout' => 120,
+        ]);
+        if (!$upload['success']) {
+            return $upload + ['stage' => 'upload', 'video_id' => $videoId];
+        }
+        $finish = $this->post("{$pageId}/video_stories", ['upload_phase' => 'finish', 'video_id' => $videoId], $pageAccessToken);
+        if (!$finish['success']) {
+            return $finish + ['stage' => 'finish', 'video_id' => $videoId];
+        }
+        return ['success' => true, 'video_id' => $videoId, 'post_id' => (string) ($finish['data']['post_id'] ?? $videoId), 'post_url' => null];
+    }
+
+    /**
      * نشر فيديو على صفحة فيسبوك عن طريق رابط عام (file_url) - فيسبوك
      * بيسحب الفيديو بنفسه ويعالجه، مفيش رفع bytes مباشر مطلوب هنا.
      */
@@ -443,6 +478,23 @@ class MetaSocialAPI
     }
 
     /**
+     * container ستوري إنستجرام (صورة أو فيديو). الستوري ما لهاش كابشن. بعده polling ثم publishInstagramContainer.
+     * @return array ['success'=>bool, 'container_id'=>?string]
+     */
+    public function createInstagramStoryContainer(string $igUserId, string $pageAccessToken, string $mediaUrl, bool $isVideo): array
+    {
+        $result = $this->post("{$igUserId}/media", ['media_type' => 'STORIES', $isVideo ? 'video_url' : 'image_url' => $mediaUrl], $pageAccessToken);
+        if (!$result['success']) {
+            return $result;
+        }
+        $containerId = $result['data']['id'] ?? null;
+        if (!$containerId) {
+            return $this->localError('تعذر إنشاء container الستوري في انستجرام', MetaApiError::UNKNOWN);
+        }
+        return ['success' => true, 'container_id' => $containerId];
+    }
+
+    /**
      * كاروسيل إنستجرام (2-10 صور): children ثم container الكاروسيل. بعده لازم polling ثم publishInstagramContainer.
      * @param string[] $imageUrls
      */
@@ -526,6 +578,55 @@ class MetaSocialAPI
             return $r;
         }
         return ['success' => true, 'comment_id' => $r['data']['id'] ?? null];
+    }
+
+    /**
+     * تعليقات منشور (أول مستوى، الأحدث أولًا) بشكل موحّد للمنصتين.
+     * فيسبوك: pages_read_engagement + pages_read_user_content. إنستجرام: instagram_manage_comments.
+     * @return array ['success'=>bool,'comments'=>[['id','message','author_name','author_id','created_time','like_count','hidden','reply_count']]]
+     */
+    public function getObjectComments(string $platform, string $objectId, string $pageAccessToken, int $limit = 50): array
+    {
+        $api = $this->withToken($pageAccessToken);
+        $limit = max(1, min(100, $limit));
+        $r = $platform === 'instagram'
+            ? $api->get("{$objectId}/comments", ['fields' => 'id,text,username,from{id,username},timestamp,like_count,hidden,replies.limit(0).summary(true)', 'limit' => $limit])
+            : $api->get("{$objectId}/comments", ['fields' => 'id,message,from{id,name},created_time,like_count,is_hidden,comment_count', 'filter' => 'toplevel', 'order' => 'reverse_chronological', 'limit' => $limit]);
+        if (!$r['success']) {
+            return $r;
+        }
+        $out = [];
+        foreach ((array) ($r['data']['data'] ?? []) as $c) {
+            if (empty($c['id'])) {
+                continue;
+            }
+            $out[] = $platform === 'instagram'
+                ? ['id' => (string) $c['id'], 'message' => (string) ($c['text'] ?? ''), 'author_name' => (string) ($c['username'] ?? $c['from']['username'] ?? ''), 'author_id' => (string) ($c['from']['id'] ?? ''),
+                   'created_time' => $c['timestamp'] ?? null, 'like_count' => (int) ($c['like_count'] ?? 0), 'hidden' => !empty($c['hidden']), 'reply_count' => (int) ($c['replies']['summary']['total_count'] ?? 0)]
+                : ['id' => (string) $c['id'], 'message' => (string) ($c['message'] ?? ''), 'author_name' => (string) ($c['from']['name'] ?? ''), 'author_id' => (string) ($c['from']['id'] ?? ''),
+                   'created_time' => $c['created_time'] ?? null, 'like_count' => (int) ($c['like_count'] ?? 0), 'hidden' => !empty($c['is_hidden']), 'reply_count' => (int) ($c['comment_count'] ?? 0)];
+        }
+        return ['success' => true, 'comments' => $out];
+    }
+
+    /** رد على تعليق: فيسبوك /{comment}/comments - إنستجرام /{comment}/replies */
+    public function replyToComment(string $platform, string $commentId, string $pageAccessToken, string $message): array
+    {
+        $r = $this->post($platform === 'instagram' ? "{$commentId}/replies" : "{$commentId}/comments", ['message' => $message], $pageAccessToken);
+        if (!$r['success']) {
+            return $r;
+        }
+        return ['success' => true, 'reply_id' => $r['data']['id'] ?? null];
+    }
+
+    /** إخفاء تعليق (سبام/إساءة) - بيفضل ظاهر لصاحبه بس */
+    public function hideComment(string $platform, string $commentId, string $pageAccessToken, bool $hide = true): array
+    {
+        $r = $this->post($commentId, $platform === 'instagram' ? ['hide' => $hide ? 'true' : 'false'] : ['is_hidden' => $hide ? 'true' : 'false'], $pageAccessToken);
+        if (!$r['success']) {
+            return $r;
+        }
+        return ['success' => true];
     }
 
     /** تعديل نص منشور فيسبوك بعد النشر */

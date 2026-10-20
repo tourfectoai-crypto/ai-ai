@@ -1,0 +1,98 @@
+<?php
+/**
+ * اختبارات نقية (من غير DB أو شبكة) لإضافات السوشيال الاحترافي:
+ * UTM، تصنيف التعليقات، أفضل المواعيد، تحليل نسخ الكاتب الذكي، توصيات التقرير، عنوان يوتيوب، الجدولة الذكية.
+ * التشغيل: php tools/test_social_pro.php
+ */
+declare(strict_types=1);
+$root = dirname(__DIR__);
+if (!class_exists('Database')) { class Database { public static function getInstance() { throw new RuntimeException('no db in tests'); } } }
+if (!interface_exists('QueueJobInterface')) { interface QueueJobInterface { public function handle(array $payload): void; } }
+require_once $root . '/app/Services/SocialMedia/MetaApiError.php';
+require_once $root . '/app/Services/SocialMedia/PublishPolicy.php';
+require_once $root . '/app/Services/SocialMedia/SocialLinkTracker.php';
+require_once $root . '/app/Services/SocialMedia/SocialCommentInbox.php';
+require_once $root . '/app/Services/SocialMedia/SocialBestTimes.php';
+require_once $root . '/app/Services/SocialMedia/SocialReport.php';
+
+$fail = 0;
+function check(string $name, bool $ok): void { global $fail; echo ($ok ? 'PASS ' : 'FAIL ') . $name . "\n"; if (!$ok) $fail++; }
+
+// ---------- UTM ----------
+$hosts = ['example-tours.com'];
+$m = SocialLinkTracker::apply("احجز الآن: https://www.example-tours.com/trips/hurghada?x=1#top.\nو https://other.com/a", 'facebook', 'Oct Offer', $hosts);
+check('UTM tags own domain with source/medium/campaign', str_contains($m, 'https://www.example-tours.com/trips/hurghada?x=1&utm_source=facebook&utm_medium=social&utm_campaign=oct-offer#top.'));
+check('UTM leaves external links untouched', str_contains($m, 'https://other.com/a') && !str_contains($m, 'other.com/a?utm'));
+check('UTM keeps existing utm links', SocialLinkTracker::apply('https://example-tours.com/?utm_source=x', 'instagram', 'c', $hosts) === 'https://example-tours.com/?utm_source=x');
+check('UTM no campaign = unchanged', SocialLinkTracker::apply('https://example-tours.com/a', 'facebook', '', $hosts) === 'https://example-tours.com/a');
+check('UTM subdomain counts as own', str_contains(SocialLinkTracker::apply('https://book.example-tours.com/x', 'tiktok', 'c', $hosts), 'utm_source=tiktok'));
+check('UTM deterministic', SocialLinkTracker::apply('https://example-tours.com', 'facebook', 'c', $hosts) === SocialLinkTracker::apply('https://example-tours.com', 'facebook', 'c', $hosts));
+check('UTM slug arabic ok', SocialLinkTracker::slug(' عرض الصيف 2026! ') === 'عرض-الصيف-2026');
+
+// ---------- تصنيف التعليقات ----------
+$cases = [
+    'بكام الرحلة دي؟' => 'price', 'How much for 2 adults?' => 'price', 'Great trip!' => 'praise', 'عايز احجز لشخصين يوم الجمعة' => 'booking',
+    'تحفة ❤' => 'praise', 'نصابين ومحدش رد عليا' => 'complaint', 'امتى الرحلة الجاية؟' => 'question', 'check my profile for promo' => 'spam',
+    'what time is pickup' => 'question', 'السعر كام يا جماعة' => 'price', 'ممكن رقم الواتس' => 'booking', 'ok' => 'other',
+];
+foreach ($cases as $text => $want) {
+    check("classify «{$text}» = {$want}", SocialCommentInbox::classify($text) === $want);
+}
+
+// ---------- أفضل المواعيد ----------
+$samples = [];
+for ($i = 0; $i < 6; $i++) { $samples[] = ['at' => '2026-10-0' . ($i % 7 + 1) . ' 17:00:00', 'score' => 50]; } // 19:00 القاهرة (UTC+2 / +3 صيفي)
+for ($i = 0; $i < 6; $i++) { $samples[] = ['at' => '2026-10-1' . ($i % 7) . ' 06:00:00', 'score' => 5]; }
+$rank = SocialBestTimes::rank($samples, 'Africa/Cairo', 3);
+check('best times ranks high-engagement evening first', $rank[0]['avg'] >= 50 && in_array($rank[0]['hour'], [19, 20], true));
+$pref = SocialBestTimes::preferencesFrom($samples, 'Africa/Cairo');
+check('preferences measured when enough data', $pref['source'] === 'measured' && count($pref['times']) === 7);
+check('preferences benchmark when little data', SocialBestTimes::preferencesFrom(array_slice($samples, 0, 3), 'UTC')['source'] === 'benchmark');
+
+// ---------- الجدولة الذكية في الخطة الشهرية ----------
+require_once $root . '/app/Services/SocialMedia/SocialMonthlyPlanService.php';
+$now = new DateTimeImmutable('2026-10-20 10:00:00', new DateTimeZone('UTC'));
+$slots = SocialMonthlyPlanService::schedule('2026-11', 'Africa/Cairo', 'smart', 8, $now, [0 => '20:00', 1 => '12:00', 2 => '12:00', 3 => '12:00', 4 => '12:00', 5 => '10:00', 6 => '10:00']);
+$hours = array_map(static fn ($s) => (new DateTimeImmutable($s, new DateTimeZone('UTC')))->setTimezone(new DateTimeZone('Africa/Cairo'))->format('w H:i'), $slots);
+$okDay = true;
+foreach ($hours as $h) { [$dow, $hm] = explode(' ', $h); $want = [0 => '20:00', 5 => '10:00', 6 => '10:00'][(int) $dow] ?? '12:00'; if ($hm !== $want) $okDay = false; }
+check('smart schedule uses per-weekday best time', count($slots) === 8 && $okDay);
+check('fixed clock schedule unchanged', count(SocialMonthlyPlanService::schedule('2026-11', 'UTC', '18:00', 4, $now)) === 4);
+
+// ---------- الكاتب الذكي ----------
+if (!class_exists('SocialPostService')) {
+    // تحميل الكلاس من غير تبعيات التشغيل
+    foreach (['SocialPost', 'SocialPostTarget', 'GenerationLifecycle', 'PrivateMedia', 'Container', 'QueueManager', 'ActivityLog', 'PublishSocialPostJob', 'AiText', 'GeminiClient'] as $c) { if (!class_exists($c)) eval("class {$c} {}"); }
+    require_once $root . '/app/Services/SocialMedia/SocialPostService.php';
+}
+$v = SocialPostService::parseCaptionVariants("```json\n{\"variants\":[{\"angle\":\"story\",\"content\":\"رحلة رائعة للغردقة 🌊\\n\\n#Hurghada #RedSea\",\"hashtags\":[\"Egypt\"],\"first_comment\":\"احجز من هنا\"},{\"content\":\"\"},{\"content\":\"Second\",\"hashtags\":[\"#Travel\",\"bad tag!\"]}]}\n```");
+check('variants parsed and empties skipped', count($v) === 2);
+check('trailing hashtags moved out of content', $v[0]['content'] === 'رحلة رائعة للغردقة 🌊' && in_array('Hurghada', $v[0]['hashtags'], true) && in_array('Egypt', $v[0]['hashtags'], true));
+check('invalid hashtags dropped', $v[1]['hashtags'] === ['Travel']);
+check('legacy single content shape accepted', count(SocialPostService::parseCaptionVariants('{"content":"x","hashtags":[]}')) === 1);
+
+// ---------- يوتيوب ----------
+if (!class_exists('PublishSocialPostJob', false) || !method_exists('PublishSocialPostJob', 'youTubeMeta')) {
+    $src = file_get_contents($root . '/app/Jobs/PublishSocialPostJob.php');
+    preg_match('/public static function youTubeMeta\(string \$message\): array\s*\{.*?\n    \}\n/s', $src, $mm);
+    eval('final class YtMetaProbe { ' . $mm[0] . ' }');
+    [$title, $tags] = YtMetaProbe::youTubeMeta("#Shorts\n" . str_repeat('غوص في البحر الأحمر <رائع> ', 10) . "\nتفاصيل\n#RedSea #Diving");
+} else {
+    [$title, $tags] = PublishSocialPostJob::youTubeMeta("#Shorts\n" . str_repeat('غوص في البحر الأحمر <رائع> ', 10) . "\nتفاصيل\n#RedSea #Diving");
+}
+check('youtube title ≤100, no <>, from first text line', mb_strlen($title) <= 100 && !str_contains($title, '<') && str_starts_with($title, 'غوص'));
+check('youtube tags from hashtags', $tags === ['Shorts', 'RedSea', 'Diving']);
+
+// ---------- توصيات التقرير ----------
+$base = ['published' => 10, 'failed' => 2, 'likes' => 0, 'comments' => 0, 'shares' => 0, 'reach' => 0, 'measured' => 6, 'engagement' => 100, 'success_rate' => 83, 'avg_engagement' => 16.7, 'by_platform' => []];
+$prev = ['engagement' => 200] + $base;
+$ins = SocialReport::insights(['current' => $base, 'previous' => $prev, 'formats' => ['video' => ['avg_score' => 40.0, 'measured' => 3], 'photo' => ['avg_score' => 10.0, 'measured' => 3]], 'best_times' => [['dow' => 5, 'hour' => 19, 'avg' => 40, 'n' => 4]], 'comments' => ['total' => 10, 'replied' => 3, 'leads' => 4]]);
+$all = implode(' | ', array_column($ins, 1));
+check('insight: engagement drop detected', str_contains($all, 'fell -50%'));
+check('insight: best format with ratio', str_contains($all, 'video/reels (×4'));
+check('insight: success rate warning', str_contains($all, 'success rate is 83%'));
+check('insight: unanswered comments with leads', str_contains($all, 'Only 30%') && str_contains($all, '4 asked'));
+check('insight: empty month', count(SocialReport::insights(['current' => ['published' => 0] + $base, 'previous' => $prev])) === 1);
+
+echo $fail ? "\n{$fail} check(s) failed.\n" : "\nAll social-pro checks passed.\n";
+exit($fail ? 1 : 0);

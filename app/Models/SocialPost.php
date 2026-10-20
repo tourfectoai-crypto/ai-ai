@@ -10,6 +10,6 @@ class SocialPost extends Model
     protected $table = 'social_posts';
     protected $fillable = [
         'user_id', 'website_id', 'content', 'media_item_id',
-        'hashtags', 'first_comment', 'status'
+        'hashtags', 'first_comment', 'status', 'post_format', 'utm_campaign'
     ];
 }
