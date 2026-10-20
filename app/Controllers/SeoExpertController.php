@@ -20,10 +20,13 @@ class SeoExpertController extends Controller
         if(!$this->isAuthenticated()){header('Location: /login');exit;}
         $css=htmlspecialchars(asset_v('/assets/css/seo-expert.css'),ENT_QUOTES,'UTF-8');$js=htmlspecialchars(asset_v('/assets/js/seo-expert.js'),ENT_QUOTES,'UTF-8');$editorJs=htmlspecialchars(asset_v('/assets/js/seo-page-editor.js'),ENT_QUOTES,'UTF-8');$impactJs=htmlspecialchars(asset_v('/assets/js/seo-impact.js'),ENT_QUOTES,'UTF-8');$workspaceJs=htmlspecialchars(asset_v('/assets/js/seo-workspace.js'),ENT_QUOTES,'UTF-8');$workspaceCss=htmlspecialchars(asset_v('/assets/css/seo-workspace.css'),ENT_QUOTES,'UTF-8');$uid=(int)$this->user['id'];
         $readinessJs=htmlspecialchars(asset_v('/assets/js/seo-service-readiness.js'),ENT_QUOTES,'UTF-8');
+        $guideJs=htmlspecialchars(asset_v('/assets/js/seo-guide.js'),ENT_QUOTES,'UTF-8');$guideCss=htmlspecialchars(asset_v('/assets/css/seo-guide.css'),ENT_QUOTES,'UTF-8');
         $body='<link rel="stylesheet" href="'.$css.'"><link rel="stylesheet" href="'.$workspaceCss.'"><section id="seoExpertRoot" data-user-id="'.$uid.'"><p>Loading SEO Expert… / جارٍ تحميل خبير SEO…</p></section><script defer src="'.$js.'"></script><script defer src="'.$editorJs.'"></script><script defer src="'.$impactJs.'"></script><script defer src="'.$workspaceJs.'"></script><script defer src="'.$readinessJs.'"></script>';
         $links=['ar'=>['اللغات والفهرسة','البحث المحلي والروابط والتقرير الشهري'],'fr'=>['Langues et indexation','SEO local, liens et rapport mensuel'],'de'=>['Sprachen und Indexierung','Lokales SEO, Links und Monatsbericht']][current_lang()]??['Languages and indexing','Local search, links and monthly report'];
-        $body='<p><a href="/international-seo">'.$links[0].'</a> · <a href="/local-seo">'.$links[1].'</a></p>'.$body;
-        echo $this->renderPanelPage('seo_expert','SEO / AEO / GEO','Connect → Plan → Execute → Verify → Improve',$body);exit;
+        // المسار البسيط هو أول حاجة العميل بيشوفها؛ الأدوات المتقدمة مخفية تحت زرار "للخبراء"
+        $body='<link rel="stylesheet" href="'.$guideCss.'"><section id="seoGuideRoot" aria-live="polite"></section><div id="seoAdvanced" hidden><p><a href="/international-seo">'.$links[0].'</a> · <a href="/local-seo">'.$links[1].'</a></p>'.$body.'</div><script defer src="'.$guideJs.'"></script>';
+        $subtitle=['ar'=>'خطوات بسيطة، والمنصة بتكمل الباقي لوحدها','fr'=>'Quelques étapes simples, la plateforme fait le reste','de'=>'Ein paar einfache Schritte, den Rest erledigt die Plattform'][current_lang()]??'A few simple steps, then the platform does the rest';
+        echo $this->renderPanelPage('seo_expert','SEO / AEO / GEO',$subtitle,$body);exit;
     }
     private function action(string $action,array $params=[]): array{
         header('Cache-Control: no-store, private');header('Pragma: no-cache');

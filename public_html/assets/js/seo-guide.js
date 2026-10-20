@@ -1,0 +1,139 @@
+/**
+ * Tourfecto - مسار السيو البسيط
+ * أول حاجة العميل بيشوفها: 4 خطوات واضحة بزرار واحد لكل خطوة، وبعدها ملخص الأسبوع.
+ * الأدوات المتقدمة (الخطة، المحرر، النتائج...) متاحة تحت زرار "للخبراء".
+ */
+(() => {
+  'use strict';
+  const start = async () => {
+    const root = document.getElementById('seoGuideRoot'), advanced = document.getElementById('seoAdvanced'), P = window.Panel;
+    if (!root || !advanced || !P) return;
+    const ar = document.documentElement.lang.toLowerCase().startsWith('ar'), t = (a, e) => ar ? a : e, esc = P.esc, base = '/api/seo-expert';
+    const params = new URLSearchParams(location.search);
+    let setup = null, overview = null, readiness = null, health = null, run = null, busy = false, timer = null;
+
+    const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+    const req = async (url, body) => {
+      const r = await P.fetchJSON(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, csrf_token: setup?.csrf_token }) } : undefined);
+      if (!r?.success) throw new Error(r?.error || t('حصلت مشكلة. جرّب تاني بعد شوية.', 'Something went wrong. Please try again shortly.'));
+      return r.data;
+    };
+    const wid = () => Number(root.querySelector('#sgSite')?.value || 0);
+
+    // الأدوات المتقدمة: مخفية افتراضيًا، وبتفتح لو العميل جاي من رابط لصفحة معينة أو اختارها قبل كده
+    const setAdvanced = (open, focusPage, remember = true) => {
+      advanced.hidden = !open; if (remember) store.set('tf-seo-advanced', open ? '1' : '0');
+      const btn = root.querySelector('#sgAdvancedToggle'); if (btn) btn.textContent = open ? t('إخفاء الأدوات المتقدمة', 'Hide advanced tools') : t('الأدوات المتقدمة (للخبراء)', 'Advanced tools (for experts)');
+      if (open && focusPage) { const u = new URL(location.href); u.searchParams.set('page', focusPage); if (wid()) u.searchParams.set('website_id', wid()); location.href = u.toString(); }
+    };
+
+    const runText = s => ({
+      queued: [t('المنصة بتجهز لفحص موقعك…', 'Getting ready to check your website…'), 'busy'],
+      scanning: [t('المنصة بتفحص صفحات موقعك دلوقتي (بياخد كام دقيقة).', 'Checking your website pages now (takes a few minutes).'), 'busy'],
+      scanned: [t('خلصنا الفحص، وبنجهز التحسينات…', 'Check finished, preparing improvements…'), 'busy'],
+      planning: [t('بنجهز التحسينات المناسبة لموقعك…', 'Preparing the right improvements for your website…'), 'busy'],
+      draft: [t('التحسينات جاهزة.', 'Improvements are ready.'), 'ok'],
+      executing: [t('المنصة بتطبّق التحسينات على موقعك دلوقتي.', 'Applying improvements to your website now.'), 'busy'],
+      monitoring: [t('اتطبقت التحسينات، وبنتأكد إنها ظاهرة على موقعك.', 'Improvements applied; confirming they appear on your site.'), 'busy'],
+      completed: [t('الدورة خلصت.', 'This cycle is finished.'), 'ok'],
+      failed: [t('الدورة دي ماكملتش. فريق الدعم اتبلغ، وتقدر تتواصل معانا.', 'This cycle did not finish. Support has been notified; you can contact us.'), 'bad'],
+    }[s] || [s, 'ok']);
+
+    const steps = () => {
+      const c = health?.connector?.state, pub = health?.publishing?.state, facts = (readiness?.checks || []).find(x => x.id === 'facts');
+      const cfg = overview?.config, gscSaved = !!overview?.connections?.google_search_console?.saved;
+      const siteDone = c === 'publicly_observed' || pub === 'authenticated';
+      const factsDone = facts ? ['recorded', 'observed'].includes(facts.state) : false;
+      const googleDone = gscSaved && health?.metrics?.gsc?.state !== 'needs_connection_review';
+      const autoDone = !!(cfg && cfg.status === 'active' && (cfg.policy?.autopilot || cfg.policy?.auto_missing_metadata));
+      return [
+        { key: 'site', done: siteDone, checking: health === null && !siteDone, title: t('اربط موقعك', 'Connect your website'), text: t('عشان المنصة تقدر تحسّن صفحات موقعك بنفسها. لو موقعك ووردبريس نزّل الإضافة، ولو مبرمج خاص المنصة بتركّب الربط لوحدها.', 'So the platform can improve your pages itself. WordPress: install the plugin. Custom site: the platform installs the connection for you.'), action: t('اربط الموقع', 'Connect website'), run: () => setAdvanced(true, 'settings') },
+        { key: 'facts', done: factsDone, title: t('أكد بيانات شركتك', 'Confirm your company details'), text: t('اسم الشركة وخدماتها والبلد اللي عملاءك منه. المنصة مابتنشرش أي معلومة عن شركتك من غير ما تأكدها.', 'Company name, services and where your customers come from. Nothing about your company is published unless you confirm it.'), action: t('أكد البيانات', 'Confirm details'), run: () => { location.href = '/business-hub?website_id=' + wid(); } },
+        { key: 'google', done: googleDone, title: t('اربط حساب جوجل', 'Connect Google'), text: t('عشان نشوف ترتيبك وزياراتك الحقيقية، ونبعت صفحاتك الجديدة لجوجل أول بأول. هتوافق على الصلاحيات مرة واحدة.', 'So we can see your real rankings and visits, and send new pages to Google. You approve access once.'), action: t('اربط جوجل', 'Connect Google'), run: () => { location.href = '/search-console/connect/' + wid() + '?return_to=%2Fseo-expert'; } },
+        { key: 'auto', done: autoDone, title: t('شغّل الطيار الآلي', 'Turn on autopilot'), text: t('المنصة هتفحص موقعك كل أسبوع وتطبّق التحسينات لوحدها، وأي معلومة جديدة عن شركتك هتستنى موافقتك. تقدر توقفه أو ترجع في أي تعديل وقت ما تحب.', 'The platform checks your site every week and applies improvements itself; any new fact about your company waits for your approval. Pause or undo anytime.'), action: t('شغّل الطيار الآلي', 'Turn on autopilot'), run: turnOnAutopilot },
+      ];
+    };
+
+    async function turnOnAutopilot() {
+      const q = overview?.quote || setup?.quote;
+      if (!q?.ok) throw new Error(t('رصيدك أو باقتك مش كفاية لدورة فحص. اشحن الرصيد أو رقّي الباقة الأول.', 'Your plan or balance is not enough for a cycle. Top up or upgrade first.'));
+      const price = q.source === 'wallet' ? Number(q.price || 0) : 0;
+      const cost = price > 0 ? t('كل دورة أسبوعية بتتكلف ', 'Each weekly cycle costs ') + price.toFixed(2) + ' $' : t('الدورات الأسبوعية من ضمن باقتك.', 'Weekly cycles are included in your plan.');
+      if (!confirm(t('تشغيل الطيار الآلي؟\n\n', 'Turn on autopilot?\n\n') + cost + t('\nبحد أقصى 4 دورات في الشهر. بتأكد إن بيانات شركتي صحيحة.', '\nUp to 4 cycles a month. I confirm my company details are accurate.'))) return;
+      let cfg = overview?.config;
+      if (cfg?.status === 'active') { await req(base + '/sites/' + wid() + '/pause', {}); }
+      const brief = cfg?.brief || (await req('/api/business-hub/sites/' + wid() + '/profile'))?.profile?.facts || {};
+      const policy = cfg?.policy || {};
+      overview = await req(base + '/sites/' + wid() + '/configure', {
+        business_name: brief.business_name || '', business_facts: brief.business_facts || '', audience: brief.audience || '', goal: brief.goal || '',
+        language: ['ar', 'en'].includes(brief.language) ? brief.language : (ar ? 'ar' : 'en'), max_pages: Number(policy.max_pages || 100), max_cycles: 4,
+        max_cycle_price: Math.max(Number(policy.max_cycle_price || 0), price), max_data_wallet_monthly: Number(policy.max_data_wallet_monthly || 0),
+        auto_missing_metadata: true, autopilot: true, facts_confirmed: true,
+      });
+      const busyRun = (overview.runs || []).find(r => ['queued', 'scanning', 'scanned', 'planning', 'executing'].includes(r.status));
+      if (!busyRun) await req(base + '/sites/' + wid() + '/start', { request_key: 'guide_' + wid() + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10), quote_hash: overview.quote.hash, research_wallet_cap: 0 });
+      await load();
+      message(t('الطيار الآلي اشتغل ✓ المنصة بدأت تفحص موقعك دلوقتي، وهتشوف النتيجة هنا خلال دقايق.', 'Autopilot is on ✓ The platform started checking your website; results appear here in a few minutes.'));
+    }
+
+    const message = (text, error = false) => { const m = root.querySelector('#sgMessage'); if (!m) return; m.textContent = text; m.hidden = !text; m.className = 'sg-message' + (error ? ' error' : ''); };
+    const act = fn => async () => { if (busy) return; busy = true; render(); try { await fn(); } catch (e) { message(e.message, true); } finally { busy = false; render(); } };
+
+    function summary() {
+      if (!run) return '';
+      const tasks = run.tasks || [], [text, tone] = runText(run.run?.status);
+      const auto = tasks.filter(x => ['approved', 'active', 'verified', 'publishing'].includes(x.status)).length;
+      const approve = tasks.filter(x => x.status === 'pending').length;
+      const mine = tasks.filter(x => x.status === 'needs_client');
+      const next = overview?.config?.next_due_at ? new Date(String(overview.config.next_due_at).replace(' ', 'T') + 'Z').toLocaleDateString(ar ? 'ar-EG' : undefined, { weekday: 'long', day: 'numeric', month: 'long' }) : '';
+      const short = s => { const one = String(s || '').split('\n')[0]; return one.length > 170 ? one.slice(0, 167) + '…' : one; };
+      return `<section class="sg-card sg-week"><div class="sg-week-head"><h3>${t('الأسبوع ده', 'This week')}</h3><span class="sg-pill ${tone}">${esc(text)}</span></div>
+        ${tone === 'busy' && !tasks.length ? `<div class="sg-progress"><span class="sg-bar"></span><p>${t('المنصة شغالة على موقعك دلوقتي. الصفحة دي بتتحدث لوحدها، ومش محتاج تفضل فاتحها.', 'The platform is working on your website now. This page updates itself; you do not need to keep it open.')}</p></div>` : `
+        <div class="sg-stats"><div><b>${auto}</b><span>${t('تحسين المنصة عملته لوحدها', 'improvements done automatically')}</span></div>
+        <div class="${approve ? 'warn' : ''}"><b>${approve}</b><span>${t('محتاج موافقتك (فيه معلومة عن شركتك)', 'need your approval (company facts)')}</span></div>
+        <div class="${mine.length ? 'warn' : ''}"><b>${mine.length}</b><span>${t('محتاج منك خطوة', 'need a step from you')}</span></div></div>`}
+        ${approve ? `<div class="sg-row"><p>${t('فيه تعديلات بتذكر معلومات عن شركتك (زي سعر أو سياسة). راجعها ووافق على الصح بس.', 'Some changes mention facts about your company (like a price or policy). Review and approve only what is correct.')}</p><button type="button" class="p-btn" data-go="plan">${t('راجع ووافق', 'Review and approve')}</button></div>` : ''}
+        ${mine.length ? `<h4>${t('المطلوب منك', 'What we need from you')}</h4><ol class="sg-todo">${mine.slice(0, 5).map(x => `<li><b>${esc(x.title)}</b><span>${esc(short(x.instructions))}</span></li>`).join('')}</ol>${mine.length > 5 ? `<button type="button" class="p-btn outline" data-go="plan">${t('عرض الكل', 'Show all')} (${mine.length})</button>` : ''}` : (!approve && tone !== 'busy' ? `<p class="sg-done">✓ ${t('مش مطلوب منك أي حاجة الأسبوع ده.', 'Nothing is needed from you this week.')}</p>` : '')}
+        ${next ? `<p class="sg-muted">${t('الفحص الجاي: ', 'Next check: ')}${esc(next)}</p>` : ''}
+        <div class="sg-links"><button type="button" class="p-btn outline" data-go="results">${t('شوف النتايج والزيارات', 'See results and visits')}</button><a class="p-btn outline" href="/ai-visibility">${t('ظهورك في ChatGPT', 'Your visibility in ChatGPT')}</a></div></section>`;
+    }
+
+    function render() {
+      const list = steps(), sites = setup?.websites || [], firstOpen = list.findIndex(s => !s.done), allDone = firstOpen === -1;
+      root.innerHTML = `<section class="sg-card sg-hero ${allDone ? 'ok' : ''}"><div><h2>${allDone ? t('خدمة السيو شغالة لوحدها ✓', 'Your SEO runs on its own ✓') : t('فاضل ', '') + (list.length - list.filter(s => s.done).length) + t(' خطوة وخدمة السيو تشتغل لوحدها', ' step(s) left until your SEO runs on its own')}</h2>
+          <p>${allDone ? t('المنصة بتفحص موقعك وتحسّنه كل أسبوع. هنبلغك لو احتجنا منك حاجة.', 'The platform checks and improves your site every week. We will tell you if we need anything.') : t('كل خطوة بتاخد دقيقة. خلّصها بالترتيب، وبعدها المنصة بتكمل الباقي.', 'Each step takes a minute. Finish them in order and the platform does the rest.')}</p></div>
+          ${sites.length > 1 ? `<label class="sg-site">${t('الموقع', 'Website')} <select id="sgSite" class="p-select">${sites.map(s => `<option value="${s.id}">${esc(s.domain || s.company_name || s.id)}</option>`).join('')}</select></label>` : `<input type="hidden" id="sgSite" value="${sites[0]?.id || ''}">`}</section>
+        <p id="sgMessage" class="sg-message" role="status" hidden></p>
+        ${!sites.length ? `<section class="sg-card"><h3>${t('ضيف موقعك الأول', 'Add your website first')}</h3><p>${t('اكتب رابط موقعك عشان نبدأ.', 'Enter your website link to start.')}</p><a class="p-btn" href="/websites">${t('ضيف موقع', 'Add website')}</a></section>` : `
+        ${allDone ? `<details class="sg-card sg-setup"><summary>✓ ${t('كل خطوات الإعداد خلصت', 'All setup steps are done')}</summary>` : ''}<ol class="sg-steps">${list.map((s, i) => `<li class="sg-step ${s.done ? 'done' : (i === firstOpen ? 'current' : 'later')}"><span class="sg-num">${s.done ? '✓' : i + 1}</span><div><h3>${esc(s.title)}</h3>${s.done ? '' : `<p>${esc(s.text)}</p>`}
+          ${s.checking ? `<span class="sg-muted">${t('بنتأكد من ربط موقعك…', 'Checking your website connection…')}</span>` : ''}${!s.done && !s.checking && i === firstOpen ? `<button type="button" class="p-btn" data-step="${s.key}" ${busy ? 'disabled' : ''}>${busy ? t('لحظة…', 'One moment…') : esc(s.action)}</button>` : ''}${s.done ? `<span class="sg-ok">${t('تم', 'Done')}</span>` : ''}</div></li>`).join('')}</ol>${allDone ? '</details>' : ''}
+        ${summary()}`}
+        <div class="sg-advanced"><button type="button" class="p-btn outline" id="sgAdvancedToggle"></button></div>`;
+      const sel = root.querySelector('#sgSite'); if (sel && sites.length) { const want = String(params.get('website_id') || store.get('tf-seo-site') || ''); if (sites.some(s => String(s.id) === want)) sel.value = want; sel.onchange = () => { store.set('tf-seo-site', sel.value); const legacy = document.getElementById('seWebsite'); if (legacy) { legacy.value = sel.value; legacy.dispatchEvent(new Event('change')); } health = null; run = null; load(); }; }
+      root.querySelectorAll('[data-step]').forEach(b => { const s = list.find(x => x.key === b.dataset.step); b.onclick = act(async () => s.run()); });
+      root.querySelectorAll('[data-go]').forEach(b => { b.onclick = () => setAdvanced(true, b.dataset.go, false); });
+      root.querySelector('#sgAdvancedToggle').onclick = () => setAdvanced(advanced.hidden);
+      setAdvanced(!advanced.hidden, null, false);
+    }
+
+    async function load() {
+      if (!wid()) { render(); return; }
+      const id = wid();
+      const [ov, rd] = await Promise.allSettled([req(base + '/sites/' + id), req(base + '/sites/' + id + '/readiness')]);
+      overview = ov.status === 'fulfilled' ? ov.value : null; readiness = rd.status === 'fulfilled' ? rd.value : null;
+      const last = overview?.runs?.[0];
+      run = last ? await req(base + '/runs/' + last.id).catch(() => null) : null;
+      render();
+      // فحص الربط الحقيقي بياخد ثواني؛ بنعمله في الخلفية ونحدّث الخطوات لما يخلص
+      if (!health) req(base + '/sites/' + id + '/probe', {}).then(h => { health = h; render(); }).catch(() => { health = {}; render(); });
+      clearTimeout(timer);
+      if (last && ['queued', 'scanning', 'scanned', 'planning', 'executing', 'monitoring'].includes(last.status)) timer = setTimeout(() => load().catch(() => {}), 20000);
+    }
+
+    advanced.hidden = !(params.has('page') || store.get('tf-seo-advanced') === '1');
+    root.innerHTML = `<section class="sg-card"><p>${t('جارٍ التحميل…', 'Loading…')}</p></section>`;
+    try { setup = await req(base + '/setup'); render(); await load(); }
+    catch (e) { root.innerHTML = `<section class="sg-card"><p>${esc(e.message)}</p><button type="button" class="p-btn" onclick="location.reload()">${t('حاول تاني', 'Try again')}</button></section>`; }
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();
+})();
