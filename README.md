@@ -95,3 +95,4 @@ define('SESSION_LIFETIME', getenv('SESSION_LIFETIME') ?: 3600);
 - فحص وجود المجلدات/الملفات الأساسية (`app/`, `vendor/autoload.php`, `storage/`, `.env`)
 
 ⚠️ **مهم:** احذف أي سكريبت تشخيص من السيرفر فور ما تخلص، لأنه بيكشف مسارات وتفاصيل حساسة."# ai-ai" 
+"# ai-ai" 
