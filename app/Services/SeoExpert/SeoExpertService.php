@@ -439,18 +439,38 @@ class SeoExpertService
         }
         return $n;
     }
+    /**
+     * فحص خطة الذكاء الاصطناعي: الاقتراح الغلط أو غير الآمن بيتشال لوحده، وباقي الخطة السليمة بتكمل.
+     * الخطة كلها بترفض بس لو مش JSON مفهوم أصلًا.
+     */
     public static function validatePlan(string $raw,array $pages,string $host,?array $allowed=null): array{
-        $j=json_decode(preg_replace('/^```(?:json)?\s*|\s*```$/i','',trim($raw)),true);if(!is_array($j)||!is_array($j['changes']??null)||!is_array($j['client_tasks']??null))throw new RuntimeException('Invalid expert plan');
-        $summary=self::text($j['summary']??'','summary',2500,10);$changes=[];$seen=[];
-        foreach(array_slice($j['changes'],0,25) as $c){$index=$c['page_index']??null;$field=$c['field']??'';if(!is_int($index)||!isset($pages[$index])||($allowed!==null&&!in_array($index,$allowed,true))||!in_array($field,['title','description','viewport','lang'],true)||!is_string($c['value']??null))throw new RuntimeException('Unsafe or unsupported plan action');
-            $value=EdgeRules::sanitize($field,$c['value'],$host);if(!is_string($value)||FixValueBuilder::looksLikePlaceholder($value))throw new RuntimeException('Invalid SEO value');$key=$index.':'.$field;if(isset($seen[$key]))throw new RuntimeException('Duplicate plan action');$seen[$key]=true;
-            // عنوان أو وصف بطول غير مناسب مايتعرضش على العميل أصلًا
-            $length=mb_strlen($value);if(($field==='title'&&($length<25||$length>65))||($field==='description'&&($length<110||$length>165)))continue;
-            $changes[]=['page_index'=>$index,'field'=>$field,'value'=>$value,'reason'=>self::text($c['reason']??'','reason',1000,5)];
+        $raw=preg_replace('/^```(?:json)?\s*|\s*```$/i','',trim($raw));$j=json_decode($raw,true);
+        if(!is_array($j)&&preg_match('/\{.*\}/s',$raw,$m))$j=json_decode($m[0],true);
+        if(!is_array($j)||(!is_array($j['changes']??null)&&!is_array($j['client_tasks']??null)&&!is_array($j['content_drafts']??null)))throw new RuntimeException('Invalid expert plan');
+        $clip=static fn($v,int $max)=>is_string($v)?mb_substr(trim($v),0,$max):'';$skipped=['changes'=>0,'client_tasks'=>0,'content_drafts'=>0];
+        $summary=$clip($j['summary']??'',2500);if(mb_strlen($summary)<10)$summary='Evidence-led improvements for the audited pages.';
+        $changes=[];$seen=[];
+        foreach(array_slice(is_array($j['changes']??null)?$j['changes']:[],0,25) as $c){
+            $index=is_array($c)?($c['page_index']??null):null;$field=is_array($c)?($c['field']??''):'';
+            if(!is_int($index)||!isset($pages[$index])||($allowed!==null&&!in_array($index,$allowed,true))||!in_array($field,['title','description','viewport','lang'],true)||!is_string($c['value']??null)||isset($seen[$index.':'.$field])){$skipped['changes']++;continue;}
+            $value=EdgeRules::sanitize($field,$c['value'],$host);$reason=$clip($c['reason']??'',1000);
+            // قيمة مش آمنة، أو عنوان/وصف بطول غير مناسب، أو من غير سبب: مايتعرضش على العميل أصلًا
+            $length=is_string($value)?mb_strlen($value):0;
+            if(!is_string($value)||FixValueBuilder::looksLikePlaceholder($value)||mb_strlen($reason)<5||($field==='title'&&($length<25||$length>65))||($field==='description'&&($length<110||$length>165))){$skipped['changes']++;continue;}
+            $seen[$index.':'.$field]=true;$changes[]=['page_index'=>$index,'field'=>$field,'value'=>$value,'reason'=>$reason];
         }
-        $manual=[];foreach(array_slice($j['client_tasks'],0,10) as $m){$index=$m['page_index']??0;if(!is_int($index)||!isset($pages[$index])||($allowed!==null&&!in_array($index,$allowed,true)))throw new RuntimeException('Invalid task page');$category=$m['category']??'seo';if(!in_array($category,['seo','aeo','geo'],true))throw new RuntimeException('Invalid task category');$manual[]=['page_index'=>$index,'category'=>$category,'title'=>self::text($m['title']??'','task title',250,5),'instructions'=>self::text($m['instructions']??'','task instructions',3000,20)];}
-        $drafts=[];foreach(array_slice($j['content_drafts']??[],0,2) as $d){$drafts[]=['title'=>self::text($d['title']??'','draft title',150,10),'body'=>self::text($d['body']??'','draft body',9000,150),'category'=>in_array($d['category']??'', ['aeo','geo'],true)?$d['category']:'aeo','faqs'=>is_array($d['faqs']??null)?array_slice($d['faqs'],0,8):[],'meta_description'=>self::text($d['meta_description']??'','meta description',500)];}
-        return ['summary'=>$summary,'changes'=>$changes,'client_tasks'=>$manual,'content_drafts'=>$drafts];
+        $manual=[];foreach(array_slice(is_array($j['client_tasks']??null)?$j['client_tasks']:[],0,10) as $m){
+            $index=is_array($m)?($m['page_index']??0):null;$category=is_array($m)?($m['category']??'seo'):'';$title=$clip(is_array($m)?($m['title']??''):'',250);$instructions=$clip(is_array($m)?($m['instructions']??''):'',3000);
+            if(!is_int($index)||!isset($pages[$index])||($allowed!==null&&!in_array($index,$allowed,true))||!in_array($category,['seo','aeo','geo'],true)||mb_strlen($title)<5||mb_strlen($instructions)<20){$skipped['client_tasks']++;continue;}
+            $manual[]=['page_index'=>$index,'category'=>$category,'title'=>$title,'instructions'=>$instructions];
+        }
+        $drafts=[];foreach(array_slice(is_array($j['content_drafts']??null)?$j['content_drafts']:[],0,2) as $d){
+            // المقال بلغات زي الألماني بيطلع أطول في عدد الحروف، فالحد 20 ألف حرف (حوالي 1000 كلمة بأي لغة)
+            $title=$clip(is_array($d)?($d['title']??''):'',150);$body=is_array($d)&&is_string($d['body']??null)?trim($d['body']):'';
+            if(mb_strlen($title)<10||mb_strlen($body)<150||mb_strlen($body)>20000){$skipped['content_drafts']++;continue;}
+            $drafts[]=['title'=>$title,'body'=>$body,'category'=>in_array($d['category']??'', ['aeo','geo'],true)?$d['category']:'aeo','faqs'=>is_array($d['faqs']??null)?array_slice($d['faqs'],0,8):[],'meta_description'=>$clip($d['meta_description']??'',500)];
+        }
+        return ['summary'=>$summary,'changes'=>$changes,'client_tasks'=>$manual,'content_drafts'=>$drafts,'skipped'=>$skipped];
     }
     private function task(array $run,string $kind,string $category,array $page,string $title,string $instructions,?string $field=null,?string $value=null,string $status='pending'): void{
         $before=$field?($page['values'][$field]??[]):[];if($field==='jsonld')$before=$page['schema']??[];
