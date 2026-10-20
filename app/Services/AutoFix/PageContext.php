@@ -381,7 +381,7 @@ class PageContext
     }
     public static function benefit(string $field): string
     {
-        return match($field){'title'=>'Helps visitors and search engines identify the page.','description'=>'Provides a useful summary that search engines may show in results.','canonical'=>'Identifies the preferred page URL.','robots'=>'Controls page indexing instructions.','viewport'=>'Supports correct layout on mobile devices.','lang'=>'Identifies the page language for accessibility and search.','og'=>'Controls the preview when the page is shared.','jsonld'=>'Describes the business using structured data.','hsts'=>'Requests HTTPS-only access for the configured duration.','llms_txt'=>'Provides a readable site summary; discovery or ranking benefits are not guaranteed.','related_links'=>'Links related trips together so visitors and Google find more of your pages.',default=>'Requires a separate implementation and verification method.'};
+        return match($field){'link_fix'=>'Removes dead-end links for visitors and search engines.','title'=>'Helps visitors and search engines identify the page.','description'=>'Provides a useful summary that search engines may show in results.','canonical'=>'Identifies the preferred page URL.','robots'=>'Controls page indexing instructions.','viewport'=>'Supports correct layout on mobile devices.','lang'=>'Identifies the page language for accessibility and search.','og'=>'Controls the preview when the page is shared.','jsonld'=>'Describes the business using structured data.','hsts'=>'Requests HTTPS-only access for the configured duration.','llms_txt'=>'Provides a readable site summary; discovery or ranking benefits are not guaranteed.','related_links'=>'Links related trips together so visitors and Google find more of your pages.',default=>'Requires a separate implementation and verification method.'};
     }
     private static function normalizeValue(string $s): string
     {return trim(preg_replace('/\s+/u',' ',html_entity_decode($s,ENT_QUOTES|ENT_HTML5,'UTF-8')));}
@@ -405,6 +405,12 @@ class PageContext
         }elseif($field==='related_links'){
             $want=array_column(json_decode($expected,true)?:[],'url');$found=$ctx['tf_related']??[];$out['observed']=$found;
             $same=$want!==[]&&!array_diff($want,$found);
+        }elseif($field==='link_fix'){
+            // اتصلح لما الرابط المكسور يختفي من الصفحة، والبديل (لو فيه) يظهر مكانه
+            $norm=static fn($u)=>preg_replace('/^www\./','',strtolower((string)parse_url((string)$u,PHP_URL_HOST))).'|'.rtrim((string)parse_url((string)$u,PHP_URL_PATH),'/').(($q=parse_url((string)$u,PHP_URL_QUERY))?'?'.$q:'');
+            $links=array_map($norm,$ctx['internal_links']??[]);$fixes=json_decode($expected,true)?:[];$left=[];
+            foreach($fixes as $f){if(in_array($norm($f['from']??''),$links,true)||(($f['to']??'')!==''&&!in_array($norm($f['to']),$links,true)))$left[]=$f['from']??'';}
+            $out['observed']=['still_broken_or_missing'=>$left];$same=$fixes!==[]&&!$left;
         }elseif($field==='hsts'){$out['observed']=$ctx['hsts']??'';$same=$out['observed']===$expected;
         }elseif($field==='llms_txt'){$out['observed']=$ctx['llms_body']??null;$same=is_string($out['observed']) && self::normalizeValue($out['observed'])===self::normalizeValue($expected);
         }else{

@@ -39,7 +39,7 @@ final class SeoCycleReport
 
     public static function summarize(array $tasks, array $snap): array
     {
-        $d = ['titles' => 0, 'descriptions' => 0, 'schema' => 0, 'links' => 0, 'articles' => 0, 'other' => 0, 'needs' => [], 'gsc' => null];
+        $d = ['titles' => 0, 'descriptions' => 0, 'schema' => 0, 'links' => 0, 'articles' => 0, 'broken' => 0, 'other' => 0, 'needs' => [], 'gsc' => null];
         foreach ($tasks as $t) {
             if ($t['status'] === 'needs_client') { $d['needs'][] = (string) $t['title']; continue; }
             if ($t['status'] !== 'verified') continue;
@@ -49,6 +49,7 @@ final class SeoCycleReport
             elseif ($f === 'description') $d['descriptions']++;
             elseif ($f === 'jsonld' || str_starts_with($f, 'schema')) $d['schema']++;
             elseif ($f === 'related_links') $d['links']++;
+            elseif ($f === 'link_fix') $d['broken']++;
             else $d['other']++;
         }
         $d['needs'] = array_values(array_unique($d['needs']));
@@ -60,13 +61,14 @@ final class SeoCycleReport
     /** @return array{0:string,1:string[]} */
     public static function text(array $d, string $site, bool $ar): array
     {
-        $done = $d['titles'] + $d['descriptions'] + $d['schema'] + $d['links'] + $d['articles'] + $d['other'];
+        $done = $d['titles'] + $d['descriptions'] + $d['schema'] + $d['links'] + $d['broken'] + $d['articles'] + $d['other'];
         $subject = $ar ? 'ملخص السيو لموقع ' . $site . ': ' . ($done ? 'اتطبق ' . $done . ' تحسين' : 'الدورة خلصت') : 'SEO summary for ' . $site . ': ' . ($done ? $done . ' improvements applied' : 'cycle finished');
         $rows = [
             'titles' => [$ar ? 'عناوين صفحات اتحسّنت' : 'Page titles improved'],
             'descriptions' => [$ar ? 'أوصاف صفحات اتحسّنت' : 'Page descriptions improved'],
             'schema' => [$ar ? 'بيانات Schema اتضافت' : 'Schema blocks added'],
             'links' => [$ar ? 'صفحات اتربطت بصفحات تانية' : 'Pages linked to related pages'],
+            'broken' => [$ar ? 'صفحات اتصلحت فيها روابط مكسورة' : 'Pages with broken links fixed'],
             'articles' => [$ar ? 'مقالات جديدة اتنشرت' : 'New articles published'],
             'other' => [$ar ? 'تحسينات تانية' : 'Other improvements'],
         ];

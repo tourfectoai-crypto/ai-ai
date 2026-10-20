@@ -120,6 +120,27 @@ class EdgeRules
                     $out[] = ['url' => $u, 'title' => $t];
                 }
                 return json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            case 'link_fix':
+                // روابط مكسورة جوه الصفحة: الرابط القديم → صفحة شغالة من نفس الموقع، أو "to" فاضي = الرابط يتشال ويفضل نصه
+                $j = json_decode($raw, true);
+                if (!is_array($j) || !array_is_list($j) || count($j) < 1 || count($j) > 10) {
+                    return null;
+                }
+                $out = [];
+                foreach ($j as $l) {
+                    $from = is_array($l) ? (string) ($l['from'] ?? '') : '';
+                    $to = is_array($l) ? (string) ($l['to'] ?? '') : '';
+                    foreach ([$from, $to] as $i => $u) {
+                        if ($i === 1 && $u === '') {
+                            continue;
+                        }
+                        if (strlen($u) > 500 || !preg_match('#^https?://[^\s<>"\']+$#i', $u) || strtolower((string) parse_url($u, PHP_URL_HOST)) !== strtolower($siteHost)) {
+                            return null;
+                        }
+                    }
+                    $out[] = ['from' => $from, 'to' => $to];
+                }
+                return json_encode($out, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             case 'llms_txt':
                 return (strlen($raw) >= 20 && strlen($raw) <= 20000 && strpos($raw, '<') === false) ? $raw : null;
         }
@@ -161,7 +182,7 @@ class EdgeRules
         if($exists){
             $pageRows=$db->query("SELECT page_path,field_name,expected_value FROM seo_expert_tasks WHERE website_id=? AND kind='metadata' AND is_active=1 AND status IN ('active','verified','needs_client') ORDER BY id",[$websiteId]);
             $pageRules=[];
-            foreach($pageRows as $r){$path=(string)$r['page_path'];$field=(string)$r['field_name'];if(!in_array($field,['title','description','canonical','viewport','lang','jsonld','related_links'],true)||!str_starts_with($path,'/')||str_contains($path,'?')||str_contains($path,chr(92))||preg_match('/[\x00-\x20]/',$path))continue;$clean=self::sanitize($field,(string)$r['expected_value'],$siteHost);if($clean!==null)$pageRules[$path][$field]=$field==='related_links'?json_decode($clean,true):$clean;}
+            foreach($pageRows as $r){$path=(string)$r['page_path'];$field=(string)$r['field_name'];if(!in_array($field,['title','description','canonical','viewport','lang','jsonld','related_links','link_fix'],true)||!str_starts_with($path,'/')||str_contains($path,'?')||str_contains($path,chr(92))||preg_match('/[\x00-\x20]/',$path))continue;$clean=self::sanitize($field,(string)$r['expected_value'],$siteHost);if($clean!==null)$pageRules[$path][$field]=in_array($field,['related_links','link_fix'],true)?json_decode($clean,true):$clean;}
             if($pageRules)$rules['page_rules']=$pageRules;
             // وصف تلقائي للصور اللي من غير alt (من اسم الصورة أو عنوان الصفحة) - للمواقع اللي مفعّلة خدمة SEO
             $sx=$db->query("SELECT policy_json FROM seo_expert_sites WHERE website_id=? AND status IN ('active','draft') LIMIT 1",[$websiteId]);
@@ -224,7 +245,7 @@ class EdgeRules
             $pageRules=ContentQualityService::rules($currentQuality,$siteHost,$rules['page_rules']??[]);
             foreach ($pageRules as $path=>&$fields) foreach ($fields as $field=>&$value) {
                 $clean=self::sanitize($field,is_array($value)?json_encode($value):$value,$siteHost);
-                if ($clean!==null) $value=$field==='related_links'?json_decode($clean,true):$clean;
+                if ($clean!==null) $value=in_array($field,['related_links','link_fix'],true)?json_decode($clean,true):$clean;
             }
             unset($fields,$value);
             if ($pageRules) $rules['page_rules']=$pageRules;
@@ -265,6 +286,29 @@ function tf_edge_fill_alt( $html, $fallback ) {
     }, (string) $html );
 }
 }
+if ( ! function_exists( 'tf_edge_fix_links' ) ) {
+function tf_edge_fix_links( $html, $fixes ) {
+    $key = function ( $u ) {
+        $p = parse_url( html_entity_decode( trim( (string) $u ), ENT_QUOTES, 'UTF-8' ) );
+        if ( ! is_array( $p ) ) { return ''; }
+        $host = isset( $p['host'] ) ? preg_replace( '/^www\./', '', strtolower( $p['host'] ) ) : '';
+        return $host . '|' . rtrim( isset( $p['path'] ) ? $p['path'] : '', '/' ) . ( isset( $p['query'] ) ? '?' . $p['query'] : '' );
+    };
+    $map = array();
+    foreach ( (array) $fixes as $f ) {
+        if ( ! is_array( $f ) || empty( $f['from'] ) ) { continue; }
+        $k = $key( $f['from'] ); $map[ $k ] = isset( $f['to'] ) ? (string) $f['to'] : '';
+        $map[ '|' . substr( $k, strpos( $k, '|' ) + 1 ) ] = $map[ $k ];
+    }
+    if ( ! $map ) { return $html; }
+    return preg_replace_callback( '#<a\b([^>]*?)\bhref\s*=\s*(["\'])([^"\']*)\2([^>]*)>(.*?)</a>#is', function ( $m ) use ( $map, $key ) {
+        $k = $key( $m[3] );
+        if ( ! isset( $map[ $k ] ) ) { return $m[0]; }
+        if ( $map[ $k ] === '' ) { return $m[5]; }
+        return '<a' . $m[1] . 'href=' . $m[2] . htmlspecialchars( $map[ $k ], ENT_QUOTES, 'UTF-8' ) . $m[2] . $m[4] . '>' . $m[5] . '</a>';
+    }, (string) $html );
+}
+}
 if ( ! function_exists( 'tf_edge_related_html' ) ) {
 function tf_edge_related_html( $links ) {
     $h = '';
@@ -298,6 +342,7 @@ add_filter( 'the_content', function ( $content ) {
     $r = tf_edge_rules();
     if ( ! empty( $r['auto_alt'] ) ) { $content = tf_edge_fill_alt( $content, get_the_title() ); }
     $page = tf_edge_page_rules();
+    if ( ! empty( $page['link_fix'] ) && is_array( $page['link_fix'] ) ) { $content = tf_edge_fix_links( $content, $page['link_fix'] ); }
     if ( ! empty( $page['related_links'] ) && is_array( $page['related_links'] ) && strpos( $content, 'data-tf-related' ) === false ) {
         $GLOBALS['tf_edge_lang'] = get_bloginfo( 'language' );
         $content .= tf_edge_related_html( $page['related_links'] );
@@ -370,7 +415,7 @@ if ( ! function_exists( 'tf_edge_rules' ) ) {
         if ( tf_edge_is_home() ) { foreach (array('title','description','canonical','robots','viewport','lang','og','jsonld') as \$key) { if(isset(\$all[\$key]))\$page[\$key]=\$all[\$key]; } }
         \$path = tf_edge_current_path();
         if ( isset(\$all['page_rules'][\$path]) && is_array(\$all['page_rules'][\$path]) ) {
-            foreach(array('title','description','canonical','viewport','lang','jsonld','related_links') as \$key)if(isset(\$all['page_rules'][\$path][\$key]))\$page[\$key]=\$all['page_rules'][\$path][\$key];
+            foreach(array('title','description','canonical','viewport','lang','jsonld','related_links','link_fix') as \$key)if(isset(\$all['page_rules'][\$path][\$key]))\$page[\$key]=\$all['page_rules'][\$path][\$key];
         }
         return \$page;
     }
@@ -449,7 +494,7 @@ function tf_edge_normalize_head( \$head, \$rules ) {
     return strtr( \$head, \$protected ) . \$extra;
 }
 }
-add_action( 'wp_head', function () { echo '<meta name="tourfecto-connector" content="4"><meta name="tourfecto-connector-features" content="body">'; }, -100000 );
+add_action( 'wp_head', function () { echo '<meta name="tourfecto-connector" content="4"><meta name="tourfecto-connector-features" content="body links">'; }, -100000 );
 add_action( 'wp_head', function () {
     if ( tf_edge_has_page_rules() ) {
         \$rules = tf_edge_page_rules();
@@ -594,7 +639,7 @@ function tf_edge_page_rules()
         }
     }
     if (isset($all['page_rules'][$path]) && is_array($all['page_rules'][$path])) {
-        foreach (['title', 'description', 'canonical', 'viewport', 'lang', 'jsonld', 'related_links'] as $k) {
+        foreach (['title', 'description', 'canonical', 'viewport', 'lang', 'jsonld', 'related_links', 'link_fix'] as $k) {
             if (isset($all['page_rules'][$path][$k])) {
                 $page[$k] = $all['page_rules'][$path][$k];
             }
@@ -736,7 +781,7 @@ function tf_edge_buffer($html, $override = null)
         }
         $head = strtr(substr($masked, $open, $close - $open), $hidden);
         $head=preg_replace('/<meta\b[^>]*\bname=["\']tourfecto-connector(?:-features)?["\'][^>]*>/i','',$head);
-        $marker = "\n<meta name=\"tourfecto-connector\" content=\"4\"><meta name=\"tourfecto-connector-features\" content=\"body\">\n";
+        $marker = "\n<meta name=\"tourfecto-connector\" content=\"4\"><meta name=\"tourfecto-connector-features\" content=\"body links\">\n";
         if(!empty(tf_edge_rules()['articles']) && stripos($head,'rel="sitemap"')===false)$marker.='<link rel="sitemap" type="application/xml" href="'.tf_edge_e(tf_edge_site().'/?tf_guides_sitemap=1').'">';
         $newHead = $marker . ($r ? tf_edge_apply_head($head, $r) : $head);
         $rest = substr($masked, $close);
@@ -744,6 +789,9 @@ function tf_edge_buffer($html, $override = null)
         $all = tf_edge_rules();
         if (!empty($all['auto_alt'])) {
             $rest = tf_edge_fill_alt($rest, isset($r['title']) ? (string) $r['title'] : '');
+        }
+        if (!empty($r['link_fix']) && is_array($r['link_fix'])) {
+            $rest = tf_edge_fix_links($rest, $r['link_fix']);
         }
         if (!empty($r['related_links']) && is_array($r['related_links']) && strpos($rest,'data-tf-related')===false) {
             $block = tf_edge_related_html($r['related_links']);

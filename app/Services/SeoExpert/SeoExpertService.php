@@ -409,10 +409,25 @@ class SeoExpertService
     private function hygieneTasks(array $r,array $pages,array $snapshot,array $site): void{
         $ar=($snapshot['brief']['language']??'en')==='ar';$byUrl=[];foreach($pages as $p)$byUrl[$p['url']]=$p;$sources=$snapshot['link_source']??[];$n=0;
         $words=static function(string $path){preg_match_all('/[\p{L}\p{N}]{3,}/u',mb_strtolower(str_replace(['-','/','_'],' ',$path)),$m);return array_unique($m[0]);};
+        // الروابط المكسورة: ملف الربط بيصلحها لوحده (لأقرب صفحة شغالة لو التطابق واضح، أو بيشيل الرابط ويسيب النص)، ولو الربط قديم بتفضل للعميل
+        $fixes=[];
         foreach($snapshot['failures']??[] as $f){
             if($n>=10||($f['reason']??'')!=='unreachable')continue;try{$path=self::path((string)$f['url']);}catch(Throwable $e){continue;}$from=$sources[$path]??null;if(!$from||!isset($byUrl[$from]))continue;
             $best=null;$bestScore=0;foreach($pages as $p){$common=count(array_intersect($words($path),$words((string)$p['page_path'])));if($common>$bestScore){$best=$p['url'];$bestScore=$common;}}
+            // التغيير التلقائي لصفحة بديلة بس لو التطابق واضح: كلمتين مميزتين على الأقل (مش tours/blog...) ومفيش صفحة تانية بنفس الدرجة
+            $generic=['tour','tours','trip','trips','blog','page','pages','category','product','products','html','php','www','en','ar','de','fr','es','it'];$key=static fn($x)=>array_values(array_diff($words($x),$generic));$top=0;$ties=0;$pick=null;
+            foreach($pages as $p){$c=count(array_intersect($key($path),$key((string)$p['page_path'])));if($c>$top){$top=$c;$ties=1;$pick=$p['url'];}elseif($c&&$c===$top)$ties++;}
+            if(SeoPagePolicy::classify($byUrl[$from])['eligible']&&count($fixes[$from]??[])<10){$fixes[$from][]=['from'=>(string)$f['url'],'to'=>$top>=2&&$ties===1?(string)$pick:'','hint'=>$best];$n++;continue;}
             $this->task($r,'manual','seo',$byUrl[$from],$ar?'رابط مكسور في الصفحة دي':'Broken link on this page',($ar?"الصفحة دي فيها رابط لـ {$f['url']} والرابط ده مش بيفتح. ":"This page links to {$f['url']}, which does not open. ").($best?($ar?"غيّر الرابط لـ {$best} (أقرب صفحة شغالة) أو شيله.":"Change it to {$best} (the closest working page) or remove it."):($ar?'شيل الرابط أو غيّره لصفحة شغالة.':'Remove it or point it to a working page.')),'broken_link',$best,'needs_client');$n++;
+        }
+        $host=(string)parse_url((string)$site['main_url'],PHP_URL_HOST);
+        foreach($fixes as $from=>$list){
+            // تصليحات قديمة شغالة على نفس الصفحة بتفضل (التاسك الجديد بيحل محل القديم)
+            $old=$this->q("SELECT expected_value FROM seo_expert_tasks WHERE website_id=? AND page_path=? AND field_name='link_fix' AND is_active=1 ORDER BY id DESC LIMIT 1",[$r['website_id'],$byUrl[$from]['page_path']??self::path($from)])->fetchColumn();
+            $merged=[];foreach(array_merge(json_decode((string)$old,true)?:[],$list) as $x)if(is_array($x)&&!empty($x['from']))$merged[$x['from']]=['from'=>(string)$x['from'],'to'=>(string)($x['to']??'')];
+            $value=EdgeRules::sanitize('link_fix',(string)json_encode(array_slice(array_values($merged),-10),JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE),$host);if(!is_string($value))continue;
+            $lines=array_map(static fn($x)=>$x['to']!==''?($ar?"{$x['from']} ← هيتغيّر لـ {$x['to']}":"{$x['from']} → {$x['to']}"):($ar?"{$x['from']} ← هيتشال الرابط ويفضل النص".($x['hint']?" (أو غيّره بنفسك لـ {$x['hint']})":''):"{$x['from']} → link removed, text kept".($x['hint']?" (or point it to {$x['hint']})":'')),$list);
+            $this->task($r,'metadata','seo',$byUrl[$from],($ar?'تصليح روابط مكسورة: ':'Fix broken links: ').count($list),($ar?"الصفحة دي فيها روابط مش بتفتح. المنصة بتصلحها من خلال ملف الربط من غير ما تغيّر محتواك، وتقدر ترجع فيها:\n":"This page has links that do not open. The platform fixes them through the connector without editing your content; you can undo it:\n").implode("\n",$lines),'link_fix',$value);
         }
         if($this->connection((int)$r['user_id'],(int)$r['website_id'],'wordpress'))return;
         $m=0;foreach($pages as $p){
@@ -595,7 +610,7 @@ class SeoExpertService
             // Future cycles may fix missing basic metadata only, under a previously enabled budgeted policy.
             elseif($cfg['status']==='active'&&!empty($policy['auto_missing_metadata'])){
                 $items=$this->q("SELECT id,field_name,before_json FROM seo_expert_tasks WHERE run_id=? AND kind='metadata' AND status='pending'",[$id])->fetchAll(PDO::FETCH_ASSOC);
-                foreach($items as $t)if(in_array($t['field_name'],['jsonld','related_links'],true)||(in_array($t['field_name'],['title','description','viewport'],true)&&empty(array_filter(json_decode($t['before_json'],true)?:[]))))$this->q("UPDATE seo_expert_tasks SET status='approved' WHERE id=?",[$t['id']]);
+                foreach($items as $t)if(in_array($t['field_name'],['jsonld','related_links','link_fix'],true)||(in_array($t['field_name'],['title','description','viewport'],true)&&empty(array_filter(json_decode($t['before_json'],true)?:[]))))$this->q("UPDATE seo_expert_tasks SET status='approved' WHERE id=?",[$t['id']]);
                 if($this->q("SELECT id FROM seo_expert_tasks WHERE run_id=? AND status='approved' LIMIT 1",[$id])->fetchColumn()){$this->q("UPDATE seo_expert_runs SET status='executing',updated_at=UTC_TIMESTAMP() WHERE id=?",[$id]);$this->queueWork($id,'apply');}
             }
             try{if($autoApplied!==null){$waiting=(int)$this->q("SELECT COUNT(*) FROM seo_expert_tasks WHERE run_id=? AND status IN ('pending','needs_client')",[$id])->fetchColumn();Notification::notify($uid,'seo_expert_plan','SEO autopilot: '.$autoApplied.' improvements are being applied',$waiting?$waiting.' items need your input (new business facts or account access).':'Nothing needs your input this week.','/seo-expert');}else Notification::notify($uid,'seo_expert_plan','SEO plan ready','Review the plan and any tasks that need your input.','/seo-expert');}catch(Throwable $ignored){}
@@ -905,6 +920,7 @@ class SeoExpertService
                     $check=PageContext::verifyValue($t['field_name'],$t['expected_value'],$ctx);if($check['state']==='verified'){$this->q("UPDATE seo_expert_tasks SET status='verified',evidence_json=?,checked_at=UTC_TIMESTAMP() WHERE id=?",[json_encode($check,JSON_THROW_ON_ERROR),$t['id']]);continue;}
                     if(!empty($ctx['native_seo_owner'])&&in_array($t['field_name'],['title','description'],true)){$this->needsClient($t,'This page has directly reviewed Tourfecto SEO fields. Apply title/description changes through the unified editor; an overlay rule was not activated.');continue;}
                     if(($ctx['connector_version']??'')!=='4'){$this->needsClient($t,'Install or update the Tourfecto server-side connector, clear the public page cache, and recheck.');continue;}
+                    if($t['field_name']==='link_fix'&&!preg_match('/\blinks\b/',(string)($ctx['connector_features']??''))){$this->needsClient($t,'Update the Tourfecto plugin/connector to the latest version (download it again from the SEO page) so broken links are fixed automatically, or change the links listed in this task yourself.');continue;}
                     if($t['field_name']==='related_links'&&!str_contains((string)($ctx['connector_features']??''),'body')){$this->needsClient($t,'Update the Tourfecto plugin/connector to the latest version (download it again from the SEO page), clear the page cache, and recheck. The older version cannot add related-trip links.');continue;}
                     $before=json_decode($t['before_json'],true)?:[];$now=$t['field_name']==='jsonld'?($ctx['schema']??[]):($ctx['values'][$t['field_name']]??[]);
                     if($before!==$now){$this->needsClient($t,'The page changed after planning. Generate a fresh plan instead of overwriting this edit.');continue;}
