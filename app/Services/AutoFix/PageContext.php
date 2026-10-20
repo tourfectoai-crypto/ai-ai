@@ -120,6 +120,37 @@ class PageContext
         }
         $out['links'] = array_values($links);
 
+        // كل الروابط الداخلية في الصفحة (لحساب الصفحات اليتيمة والروابط المكسورة)
+        $internal = [];
+        foreach ($xp->query('//a[@href]') as $a) {
+            $abs = $this->absolute($out['final_url'], $a->getAttribute('href'));
+            if ($abs === '' || strtolower((string) parse_url($abs, PHP_URL_HOST)) !== $host || preg_match('#\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js)$#i', (string) parse_url($abs, PHP_URL_PATH))) {
+                continue;
+            }
+            $abs = preg_replace('/#.*$/', '', $abs);
+            $internal[$abs] = true;
+            if (count($internal) >= 300) {
+                break;
+            }
+        }
+        $out['internal_links'] = array_keys($internal);
+
+        // صور من غير وصف (alt): جوجل وقارئات الشاشة مش بيفهموها
+        $out['images'] = 0;
+        $out['images_missing_alt'] = [];
+        foreach ($xp->query('//img[@src]') as $img) {
+            $src = $this->absolute($out['final_url'], $img->getAttribute('src'));
+            if ($src === '' || stripos($src, 'data:') === 0) {
+                continue;
+            }
+            $out['images']++;
+            if (!$img->hasAttribute('alt') || trim($img->getAttribute('alt')) === '') {
+                if (count($out['images_missing_alt']) < 30) {
+                    $out['images_missing_alt'][] = $src;
+                }
+            }
+        }
+
         // وسائل التواصل الحقيقية (تليفون / إيميل / واتساب) لملء بيانات النشاط تلقائيًا.
         // قبل حذف الـ footer/nav تحت، لأن بيانات التواصل غالبًا هناك.
         $contacts = ['phones' => [], 'emails' => [], 'whatsapp' => []];

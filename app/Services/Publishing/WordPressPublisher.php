@@ -147,6 +147,35 @@ class WordPressPublisher
             ? ['success'=>true,'url'=>$r['data']['link']] : ['success'=>false];
     }
 
+    /**
+     * بيكتب وصف (alt) لصورة في مكتبة الوسائط، بس لو الصورة مالهاش وصف أصلًا.
+     * الصورة بتتعرف من اسم الملف (من غير مقاس WordPress زي -1024x683).
+     */
+    public function setMediaAltBySource(string $siteUrl, string $username, string $appPassword, string $src, string $alt): array
+    {
+        $key = static fn(string $u) => strtolower(preg_replace('/-\d+x\d+(?=\.[a-z0-9]+$)/i', '', basename((string) parse_url($u, PHP_URL_PATH))));
+        $file = $key($src);
+        $search = preg_replace('/\.[a-z0-9]+$/i', '', $file);
+        if ($search === '' || trim($alt) === '') {
+            return ['success' => false, 'state' => 'invalid'];
+        }
+        $found = $this->request('GET', $siteUrl, '/wp-json/wp/v2/media?per_page=20&_fields=id,source_url,alt_text&search=' . rawurlencode($search), $username, $appPassword);
+        if (!$found['success'] || !is_array($found['data'])) {
+            return ['success' => false, 'state' => 'unavailable'];
+        }
+        foreach ($found['data'] as $item) {
+            if (!is_array($item) || $key((string) ($item['source_url'] ?? '')) !== $file) {
+                continue;
+            }
+            if (trim((string) ($item['alt_text'] ?? '')) !== '') {
+                return ['success' => true, 'state' => 'already_described'];
+            }
+            $saved = $this->request('POST', $siteUrl, '/wp-json/wp/v2/media/' . (int) $item['id'], $username, $appPassword, ['alt_text' => mb_substr(trim($alt), 0, 125)]);
+            return ['success' => (bool) $saved['success'], 'state' => $saved['success'] ? 'described' : 'save_failed', 'media_id' => (int) $item['id']];
+        }
+        return ['success' => false, 'state' => 'not_in_media_library'];
+    }
+
     /** Plugin signs a short-lived preview bound to the authenticated creator and post. */
     public function setSeoFields(string $siteUrl,string $username,string $appPassword,int $postId,array $fields): array
     {

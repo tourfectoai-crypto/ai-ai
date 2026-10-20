@@ -27,7 +27,7 @@ class SitemapSubmissionService
         $client=$this->clientFactory?($this->clientFactory)($uid,$wid):SeoTrafficAlertService::client($uid,$wid);
         if(!$client)return $this->save($uid,$wid,['success'=>false,'state'=>'reconnect_required','error'=>'Search Console access unavailable']);
         [$api,$property]=$client;
-        $url ??= $permission['sitemap_url']?:rtrim($permission['main_url'],'/').'/sitemap.xml';
+        $url ??= $permission['sitemap_url']?:(self::detect($this->reader,$permission['main_url'])??rtrim($permission['main_url'],'/').'/sitemap.xml');
         // Never turn a user-entered sitemap into a request to another host.
         if(strtolower((string)parse_url($url,PHP_URL_HOST))!==strtolower((string)parse_url($permission['main_url'],PHP_URL_HOST)))throw new InvalidArgumentException('Sitemap must be on the customer domain');
         $old=json_decode($permission['result_json']??'',true)?:[];
@@ -35,6 +35,18 @@ class SitemapSubmissionService
             $listed=$api->listSitemaps($property);$result=array_replace($old,['sitemaps'=>$listed['sitemaps']??[],'listing_ok'=>!empty($listed['ok']),'listing_error'=>empty($listed['ok'])?'Search Console sitemap listing unavailable':null]);
         }else $result=self::submit($api,$property,$url,$permission['granted_scope'],true,$this->reader);
         return $this->save($uid,$wid,$result,$url);
+    }
+    /** بيلاقي خريطة الموقع الحقيقية: من سطر Sitemap في robots.txt، أو الأسماء المعروفة (Yoast وووردبريس). */
+    public static function detect(SeoPublicPageReader $reader,string $mainUrl): ?string {
+        $base=rtrim($mainUrl,'/');$host=strtolower((string)parse_url($mainUrl,PHP_URL_HOST));$candidates=[];
+        try{$robots=$reader->fetch($base.'/robots.txt');if(!empty($robots['success'])&&($robots['http_status']??0)===200&&preg_match_all('/^\s*Sitemap:\s*(\S+)/mi',(string)($robots['html']??''),$m))foreach($m[1] as $u)if(strtolower((string)parse_url($u,PHP_URL_HOST))===$host)$candidates[]=$u;}catch(Throwable $e){}
+        foreach(['/sitemap_index.xml','/sitemap.xml','/wp-sitemap.xml'] as $path)$candidates[]=$base.$path;
+        foreach(array_unique($candidates) as $url){
+            try{$r=$reader->fetch($url);}catch(Throwable $e){continue;}
+            $xml=(string)($r['html']??'');if(empty($r['success'])||($r['http_status']??0)!==200||strlen($xml)>1000000||preg_match('/<!DOCTYPE|<!ENTITY/i',$xml))continue;
+            $doc=new DOMDocument();if(@$doc->loadXML($xml,LIBXML_NONET|LIBXML_NOERROR|LIBXML_NOWARNING)&&in_array($doc->documentElement->localName??'',['urlset','sitemapindex'],true))return ($r['url']??$url)===$url?$url:null;
+        }
+        return null;
     }
     private function save(int $uid,int $wid,array $result,?string $url=null): array {
         $this->db->exec('UPDATE seo_sitemap_permissions SET sitemap_url=COALESCE(?,sitemap_url),result_json=?,checked_at=UTC_TIMESTAMP(),updated_at=UTC_TIMESTAMP() WHERE website_id=? AND user_id=?',[$url,json_encode($result,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),$wid,$uid]);return $result;

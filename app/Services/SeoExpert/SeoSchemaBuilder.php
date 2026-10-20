@@ -56,9 +56,16 @@ class SeoSchemaBuilder
     }
 
     /** Recheck old unexecuted proposals against the current public page too. */
+    /** صفحة مقال أو دليل (مدونة): ينفع يتحط فيها روابط لرحلات ومقالات قريبة */
+    public static function isArticlePage(array $page): bool
+    {
+        $path = (string) ($page['page_path'] ?? parse_url((string) ($page['url'] ?? ''), PHP_URL_PATH));
+        return (bool) preg_match('~/(?:blog|guides?|articles?|news|stories|journal|magazine)/[^/]+~i', $path);
+    }
+
     public static function taskCompatible(array $page,string $field,string $value): bool
     {
-        if($field==='related_links')return self::isTourPage($page);
+        if($field==='related_links')return self::isTourPage($page)||self::isArticlePage($page);
         $schema=$field==='jsonld'?json_decode($value,true):null;
         return !is_array($schema)||!self::hasType([$schema],['TouristTrip'])||self::isTourPage($page);
     }

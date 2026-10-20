@@ -1,6 +1,9 @@
 <?php
 final class AiVisibilityController extends Controller
 {
+    /** رسايل الخدمة عربي؛ في باقي اللغات بتتترجم من نفس قاموس الصفحة */
+    private static function translate(string $text): string{static $dict=null;$dict??=(require dirname(__DIR__).'/Views/AiVisibility/translations.php')[current_lang()]??[];return $dict[$text]??$text;}
+    protected function error(string $error,int $code=400,array $details=[]): array{return parent::error(self::translate($error),$code,$details);}
     public function data(array $params=[]): array
     {
         if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
@@ -30,11 +33,15 @@ final class AiVisibilityController extends Controller
     {
         if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
         if($err=$this->verifyCsrf())return $err;
-        try{$r=(new AiVisibilityService($this->db))->llmsDraft((int)$this->user['id'],(int)$this->get('website_id'));return $this->success(['draft'=>$r['draft'],'status'=>'draft_requires_review','note'=>'راجع البيانات قبل النشر. الملف ده بيساعد محركات الذكاء الاصطناعي تفهم موقعك، ومفيش ضمان ترتيب.']);}
+        try{$r=(new AiVisibilityService($this->db))->llmsDraft((int)$this->user['id'],(int)$this->get('website_id'));return $this->success(['draft'=>$r['draft'],'status'=>'draft_requires_review','note'=>self::translate('راجع البيانات قبل النشر. الملف ده بيساعد محركات الذكاء الاصطناعي تفهم موقعك، ومفيش ضمان ترتيب.')]);}
         catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
         catch(Throwable $e){Logger::error('AI Visibility llms draft failed',['website_id'=>(int)$this->get('website_id'),'error'=>$e->getMessage()]);return $this->error('تعذر قراءة صفحات موقعك العامة دلوقتي. اتأكد إن الموقع شغال وجرّب تاني.',422);}
     }
     /** Compatibility with deployed web routes that still dispatch to index. */
     public function index(array $params=[]): array {return $this->page($params);}
-    public function page(array $params=[]): array {if(!$this->isAuthenticated())return $this->error('Unauthorized',401);ob_start();require dirname(__DIR__).'/Views/AiVisibility/index.php';$body=ob_get_clean();echo $this->renderPanelPage('ai_analyze','ظهورك في الذكاء الصناعي','قياسات فعلية للأسئلة والمصادر، بدون تقديرات',$body);return [];}
+    public function page(array $params=[]): array {if(!$this->isAuthenticated())return $this->error('Unauthorized',401);ob_start();require dirname(__DIR__).'/Views/AiVisibility/index.php';$body=ob_get_clean();$title='ظهورك في الذكاء الصناعي';$subtitle='قياسات فعلية للأسئلة والمصادر، بدون تقديرات';
+        // الصفحة مكتوبة عربي؛ في باقي اللغات بنترجم النصوص (HTML وJavaScript) من القاموس
+        $dict=(require dirname(__DIR__).'/Views/AiVisibility/translations.php')[current_lang()]??null;
+        if($dict){$body=str_replace('<section class="p-card" dir="rtl" id="geo-root"','<section class="p-card" dir="ltr" id="geo-root"',strtr($body,$dict));$title=$dict[$title];$subtitle=$dict[$subtitle];}
+        echo $this->renderPanelPage('ai_analyze',$title,$subtitle,$body);return [];}
 }

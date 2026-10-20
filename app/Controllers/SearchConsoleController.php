@@ -87,6 +87,10 @@ class SearchConsoleController extends Controller
             exit;
         }
 
+        // خدمة السيو بتبعت خريطة الموقع لجوجل لوحدها، فبنطلب الإذن ده مرة واحدة وقت الربط
+        if (!$this->allowSitemapSubmit && $this->get('return_to') === '/seo-expert' && $this->db->query("SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='seo_sitemap_permissions'")) {
+            $this->allowSitemapSubmit = true;
+        }
         $oauth = $this->oauthClient($this->allowSitemapSubmit);
         if (!$oauth->isConfigured()) {
             $this->renderOAuthError('ربط Search Console لسه مش مفعّل من إدارة النظام (بيانات OAuth ناقصة في إعدادات السيرفر - راجع GOOGLE_SEARCH_CONSOLE_REDIRECT_URI في .env).');
