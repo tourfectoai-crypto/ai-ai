@@ -4,28 +4,28 @@
 
 -- 1) social_post_targets
 SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_post_targets' AND COLUMN_NAME = 'error_code');
-SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `error_code` INT DEFAULT NULL COMMENT 'كود خطأ Meta' AFTER `last_error`', 'SELECT 1');
+SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `error_code` INT DEFAULT NULL COMMENT ''كود خطأ Meta'' AFTER `last_error`', 'SELECT 1');
 PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_post_targets' AND COLUMN_NAME = 'error_category');
-SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `error_category` VARCHAR(20) DEFAULT NULL COMMENT 'token|permission|rate_limit|blocked|media|param|transient|unknown' AFTER `error_code`', 'SELECT 1');
+SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `error_category` VARCHAR(20) DEFAULT NULL COMMENT ''token|permission|rate_limit|blocked|media|param|transient|unknown'' AFTER `error_code`', 'SELECT 1');
 PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_post_targets' AND COLUMN_NAME = 'fbtrace_id');
-SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `fbtrace_id` VARCHAR(64) DEFAULT NULL COMMENT 'رمز تتبع Meta للدعم الفني' AFTER `error_category`', 'SELECT 1');
+SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `fbtrace_id` VARCHAR(64) DEFAULT NULL COMMENT ''رمز تتبع Meta للدعم الفني'' AFTER `error_category`', 'SELECT 1');
 PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_post_targets' AND COLUMN_NAME = 'retry_count');
-SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `retry_count` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'محاولات الإعادة التلقائية (حد استخدام/شبكة)' AFTER `fbtrace_id`', 'SELECT 1');
+SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `retry_count` TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT ''محاولات الإعادة التلقائية (حد استخدام/شبكة)'' AFTER `fbtrace_id`', 'SELECT 1');
 PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_post_targets' AND COLUMN_NAME = 'next_retry_at');
 SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `next_retry_at` DATETIME DEFAULT NULL AFTER `retry_count`', 'SELECT 1');
 PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_post_targets' AND COLUMN_NAME = 'publish_attempt_at');
-SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `publish_attempt_at` DATETIME DEFAULT NULL COMMENT 'وقت آخر طلب نشر فعلي (UTC) - أساس نافذة المصالحة' AFTER `next_retry_at`', 'SELECT 1');
+SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `publish_attempt_at` DATETIME DEFAULT NULL COMMENT ''وقت آخر طلب نشر فعلي (UTC) - أساس نافذة المصالحة'' AFTER `next_retry_at`', 'SELECT 1');
 PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_post_targets' AND COLUMN_NAME = 'reconciled_at');
-SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `reconciled_at` DATETIME DEFAULT NULL COMMENT 'اتحسم بالمصالحة التلقائية أو يدويًا' AFTER `publish_attempt_at`', 'SELECT 1');
+SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `reconciled_at` DATETIME DEFAULT NULL COMMENT ''اتحسم بالمصالحة التلقائية أو يدويًا'' AFTER `publish_attempt_at`', 'SELECT 1');
 PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_post_targets' AND COLUMN_NAME = 'publish_ms');
-SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `publish_ms` INT DEFAULT NULL COMMENT 'زمن تنفيذ النشر بالمللي ثانية' AFTER `reconciled_at`', 'SELECT 1');
+SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD COLUMN `publish_ms` INT DEFAULT NULL COMMENT ''زمن تنفيذ النشر بالمللي ثانية'' AFTER `reconciled_at`', 'SELECT 1');
 PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 SET @has := (SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_post_targets' AND INDEX_NAME = 'idx_status_attempt');
 SET @q := IF(@has = 0, 'ALTER TABLE `social_post_targets` ADD INDEX `idx_status_attempt` (`status`, `publish_attempt_at`)', 'SELECT 1');

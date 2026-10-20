@@ -590,8 +590,8 @@ class MetaSocialAPI
         $api = $this->withToken($pageAccessToken);
         $limit = max(1, min(100, $limit));
         $r = $platform === 'instagram'
-            ? $api->get("{$objectId}/comments", ['fields' => 'id,text,username,from{id,username},timestamp,like_count,hidden,replies.limit(0).summary(true)', 'limit' => $limit])
-            : $api->get("{$objectId}/comments", ['fields' => 'id,message,from{id,name},created_time,like_count,is_hidden,comment_count', 'filter' => 'toplevel', 'order' => 'reverse_chronological', 'limit' => $limit]);
+            ? $api->get("{$objectId}/comments", ['fields' => 'id,text,username,from{id,username},timestamp,like_count,hidden,replies.limit(25){from{id}}', 'limit' => $limit])
+            : $api->get("{$objectId}/comments", ['fields' => 'id,message,from{id,name},created_time,like_count,is_hidden,comment_count,comments.limit(25){from{id}}', 'filter' => 'toplevel', 'order' => 'reverse_chronological', 'limit' => $limit]);
         if (!$r['success']) {
             return $r;
         }
@@ -602,9 +602,11 @@ class MetaSocialAPI
             }
             $out[] = $platform === 'instagram'
                 ? ['id' => (string) $c['id'], 'message' => (string) ($c['text'] ?? ''), 'author_name' => (string) ($c['username'] ?? $c['from']['username'] ?? ''), 'author_id' => (string) ($c['from']['id'] ?? ''),
-                   'created_time' => $c['timestamp'] ?? null, 'like_count' => (int) ($c['like_count'] ?? 0), 'hidden' => !empty($c['hidden']), 'reply_count' => (int) ($c['replies']['summary']['total_count'] ?? 0)]
+                   'created_time' => $c['timestamp'] ?? null, 'like_count' => (int) ($c['like_count'] ?? 0), 'hidden' => !empty($c['hidden']), 'reply_count' => count((array) ($c['replies']['data'] ?? [])),
+                   'reply_author_ids' => array_values(array_filter(array_map(static fn ($x) => (string) ($x['from']['id'] ?? ''), (array) ($c['replies']['data'] ?? []))))]
                 : ['id' => (string) $c['id'], 'message' => (string) ($c['message'] ?? ''), 'author_name' => (string) ($c['from']['name'] ?? ''), 'author_id' => (string) ($c['from']['id'] ?? ''),
-                   'created_time' => $c['created_time'] ?? null, 'like_count' => (int) ($c['like_count'] ?? 0), 'hidden' => !empty($c['is_hidden']), 'reply_count' => (int) ($c['comment_count'] ?? 0)];
+                   'created_time' => $c['created_time'] ?? null, 'like_count' => (int) ($c['like_count'] ?? 0), 'hidden' => !empty($c['is_hidden']), 'reply_count' => (int) ($c['comment_count'] ?? 0),
+                   'reply_author_ids' => array_values(array_filter(array_map(static fn ($x) => (string) ($x['from']['id'] ?? ''), (array) ($c['comments']['data'] ?? []))))];
         }
         return ['success' => true, 'comments' => $out];
     }

@@ -140,10 +140,16 @@ final class SocialCommentInbox
                 }
                 $intent = self::classify($c['message']);
                 $ts = $c['created_time'] ? strtotime((string) $c['created_time']) : false;
-                $status = $c['hidden'] ? 'hidden' : ($c['reply_count'] > 0 ? 'replied' : 'new');
+                // اترد عليه = الصفحة نفسها ردّت (من المنصة أو من تطبيق فيسبوك/إنستجرام مباشرة)، مش أي رد من الجمهور
+                $pageReplied = in_array((string) $r['external_location_id'], (array) ($c['reply_author_ids'] ?? []), true);
+                $status = $c['hidden'] ? 'hidden' : ($pageReplied ? 'replied' : 'new');
                 $exists = $this->db->query('SELECT id FROM social_comments WHERE platform_connection_id = ? AND external_comment_id = ? LIMIT 1', [(int) $r['connection_id'], $c['id']]);
                 if ($exists) {
-                    $this->db->query('UPDATE social_comments SET like_count = ?, fetched_at = NOW() WHERE id = ?', [$c['like_count'], (int) $exists[0]['id']]);
+                    // لو الفريق ردّ أو أخفى من تطبيق Meta مباشرة نقفل التعليق هنا كمان
+                    $this->db->query(
+                        "UPDATE social_comments SET like_count = ?, status = IF(status = 'new' AND ? <> 'new', ?, status), fetched_at = NOW() WHERE id = ?",
+                        [$c['like_count'], $status, $status, (int) $exists[0]['id']]
+                    );
                     continue;
                 }
                 $this->db->query(
