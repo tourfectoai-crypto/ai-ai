@@ -398,6 +398,7 @@ return [
     'EmailAutomation' => dirname(__DIR__,2).'/app/Models/EmailAutomation.php',
     'EmailAutomationEntry' => dirname(__DIR__,2).'/app/Models/EmailAutomationEntry.php',
     'EmailAutomationService' => dirname(__DIR__,2).'/app/Services/EmailMarketing/EmailAutomationService.php',
+    'EmailPlatformBridge' => dirname(__DIR__,2).'/app/Services/EmailMarketing/EmailPlatformBridge.php',
     'EmailAutomationStep' => dirname(__DIR__,2).'/app/Models/EmailAutomationStep.php',
     'EmailCampaign' => dirname(__DIR__,2).'/app/Models/EmailCampaign.php',
     'EmailCampaignRecipient' => dirname(__DIR__,2).'/app/Models/EmailCampaignRecipient.php',

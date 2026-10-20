@@ -866,6 +866,22 @@ class EmailMarketingController extends Controller
         </div>
 
         <div class="p-card">
+            <div class="p-card-head"><h3>🔗 Platform connections</h3><span class="p-card-sub">Bookings and CRM trigger workflows; bookings made from an email are credited to the campaign</span></div>
+            <div id="emPlatformIntegration" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;padding:4px 2px;">
+                <label style="display:flex;gap:8px;align-items:flex-start;"><input type="checkbox" id="emIntSyncBookings"/> <span>Add new booking customers as subscribers<br><small class="p-cell-muted">Off by default. Existing contacts who unsubscribed are never re-subscribed.</small></span></label>
+                <div><label class="p-label">List for booking customers</label><select class="p-input" id="emIntBookingList" style="width:100%;"></select></div>
+                <label style="display:flex;gap:8px;align-items:flex-start;"><input type="checkbox" id="emIntSyncCrm"/> <span>Add new CRM leads / won deals as subscribers</span></label>
+                <div><label class="p-label">List for CRM contacts</label><select class="p-input" id="emIntCrmList" style="width:100%;"></select></div>
+                <label style="display:flex;gap:8px;align-items:flex-start;"><input type="checkbox" id="emIntAttribution"/> <span>Credit bookings to the email that brought them</span></label>
+                <div><label class="p-label">Attribution window (days)</label><input class="p-input" id="emIntWindow" type="number" min="1" max="90" style="width:100%;"/></div>
+                <div style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <small class="p-cell-muted" id="emIntVars"></small>
+                    <button class="p-btn primary xs" onclick="savePlatformIntegration(this)">Save connections</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="p-card">
             <div class="p-card-head"><h3>📋 Workflow</h3></div>
             <div id="emAutomationsList"><div class="p-loading-row">Loading...</div></div>
         </div>
@@ -899,7 +915,7 @@ class EmailMarketingController extends Controller
                         <select class="p-input" id="emAutoEntryAudience" multiple style="width:100%;height:70px;"></select>
                     </div>
                     <div>
-                        <label class="p-label">Exit lists (optional)</label>
+                        <label class="p-label">Stay only while in these lists (optional)</label>
                         <select class="p-input" id="emAutoExitAudience" multiple style="width:100%;height:70px;"></select>
                     </div>
                 </div>
@@ -1305,6 +1321,12 @@ class EmailMarketingController extends Controller
             "SELECT COUNT(*) AS total FROM email_ab_tests WHERE user_id = ?",
             [$userId]
         )[0]['total'];
+        $revenue = (new EmailPlatformBridge())->revenueSummary($userId);
+        $revenueLabel = implode(' + ', array_map(
+            fn ($r) => number_format((float) $r['revenue'], 0) . ' ' . $r['currency'],
+            $revenue['by_currency']
+        )) ?: '0';
+        $revenueBookings = array_sum(array_map(fn ($r) => (int) $r['bookings'], $revenue['by_currency']));
 
         return $this->success([
             'kpis' => [
@@ -1315,7 +1337,10 @@ class EmailMarketingController extends Controller
                 ['label' => 'Click rate', 'value' => $clickRate . '%', 'icon' => '🖱'],
                 ['label' => 'Transactional messages', 'value' => (int) ($txStats['total'] ?? 0), 'icon' => '⚡'],
                 ['label' => 'A/B tests', 'value' => $abCount, 'icon' => '🧪'],
+                ['label' => 'Bookings from email', 'value' => $revenueBookings, 'icon' => '🧳'],
+                ['label' => 'Booking revenue from email', 'value' => $revenueLabel, 'icon' => '💰'],
             ],
+            'email_revenue' => $revenue,
             'delivery' => $this->deliveryStatus(),
             'quota' => $this->campaignService->guard()->snapshot($userId),
             'recent_campaigns' => $this->campaignService->list($userId),
@@ -2369,6 +2394,34 @@ HTML;
         ]);
     }
 
+    // ============================================================
+    //  API: Platform integration (Bookings / CRM / Revenue attribution)
+    // ============================================================
+
+    public function platformIntegration(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $bridge = new EmailPlatformBridge();
+        return $this->success([
+            'settings' => $bridge->settings($this->uid()),
+            'revenue' => $bridge->revenueSummary($this->uid()),
+            'variables' => EmailPlatformBridge::variables(),
+        ]);
+    }
+
+    public function savePlatformIntegration(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $result = (new EmailPlatformBridge())->saveSettings($this->uid(), $this->all());
+        return $result['success']
+            ? $this->success($result['settings'], 'Integration settings saved')
+            : $this->error($result['error'], 422);
+    }
+
     public function createAutomation(array $params = []): array
     {
         if (!$this->isAuthenticated()) {
@@ -2909,6 +2962,10 @@ HTML;
             http_response_code(404);
             echo 'Invalid tracking link.';
             exit;
+        }
+        // روابط موقع صاحب الحملة بتاخد tf_em عشان الحجز اللي يجي منها يتنسب للحملة
+        if (class_exists('EmailPlatformBridge')) {
+            $url = (new EmailPlatformBridge())->decorateClickUrl($clickToken, $url);
         }
         header('Location: ' . $url, true, 302);
         exit;
@@ -3863,7 +3920,9 @@ HTML;
                 ['Open rate', c.open_rate + '%'],
                 ['Click rate', c.click_rate + '%'],
                 ['Click/open', c.click_to_open_rate + '%'],
-                ['Unsubscribe rate', c.unsubscribe_rate + '%']
+                ['Unsubscribe rate', c.unsubscribe_rate + '%'],
+                ['Bookings from this campaign', parseInt(c.attributed_bookings_count || 0, 10)],
+                ['Attributed booking revenue', Number(c.attributed_revenue || 0).toLocaleString()]
             ].map(rr => `
                 <div style="padding:12px;border:1px solid #e5e7eb;border-radius:10px;text-align:center;">
                     <div style="font-size:20px;font-weight:700;">${rr[1]}</div>
@@ -4597,7 +4656,50 @@ HTML;
             campaign_opened: { label: 'Campaign (optional)', type: 'campaign' },
             campaign_clicked: { label: 'Campaign (optional)', type: 'campaign' },
             date_after: { label: 'Number of days after subscribing', type: 'days' },
+            booking_created: { label: '', type: 'none' },
+            booking_confirmed: { label: '', type: 'none' },
+            booking_cancelled: { label: '', type: 'none' },
+            trip_upcoming: { label: 'Days before the trip', type: 'days', def: 3 },
+            trip_completed: { label: 'Days after the trip ends', type: 'days', def: 1 },
+            crm_lead_created: { label: '', type: 'none' },
+            crm_deal_won: { label: '', type: 'none' },
         };
+        const EM_AUTO_DAY_TRIGGERS = ['date_after', 'trip_upcoming', 'trip_completed'];
+        const EM_AUTO_CHECKS = {
+            has_tag: 'Has tag', not_has_tag: 'Does not have tag', in_list: 'In list', not_in_list: 'Not in list',
+            opened_last_email: 'Opened previous email', not_opened_last_email: 'Did not open previous email',
+            clicked_last_email: 'Clicked previous email', not_clicked_last_email: 'Did not click previous email',
+        };
+
+        async function loadPlatformIntegration() {
+            const r = await emApi('/platform-integration');
+            if (!r.success) return;
+            const st = r.data.settings || {};
+            const listOpts = '<option value="">No list</option>' + emAutoLists.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+            document.getElementById('emIntBookingList').innerHTML = listOpts;
+            document.getElementById('emIntCrmList').innerHTML = listOpts;
+            document.getElementById('emIntSyncBookings').checked = !!parseInt(st.sync_booking_customers || 0, 10);
+            document.getElementById('emIntSyncCrm').checked = !!parseInt(st.sync_crm_contacts || 0, 10);
+            document.getElementById('emIntAttribution').checked = !!parseInt(st.revenue_attribution ?? 1, 10);
+            document.getElementById('emIntBookingList').value = st.booking_list_id ? String(st.booking_list_id) : '';
+            document.getElementById('emIntCrmList').value = st.crm_list_id ? String(st.crm_list_id) : '';
+            document.getElementById('emIntWindow').value = st.attribution_window_days || 30;
+            document.getElementById('emIntVars').textContent = 'Booking variables for emails: ' + Object.keys(r.data.variables || {}).join(' ');
+        }
+
+        async function savePlatformIntegration(btn) {
+            btn.disabled = true;
+            const r = await emPost('/platform-integration', {
+                sync_booking_customers: document.getElementById('emIntSyncBookings').checked ? 1 : 0,
+                booking_list_id: parseInt(document.getElementById('emIntBookingList').value, 10) || 0,
+                sync_crm_contacts: document.getElementById('emIntSyncCrm').checked ? 1 : 0,
+                crm_list_id: parseInt(document.getElementById('emIntCrmList').value, 10) || 0,
+                revenue_attribution: document.getElementById('emIntAttribution').checked ? 1 : 0,
+                attribution_window_days: parseInt(document.getElementById('emIntWindow').value, 10) || 30,
+            });
+            btn.disabled = false;
+            notify(r.success ? 'Connections saved' : (r.error || 'An error occurred'));
+        }
 
         async function loadAutomations() {
             const r = await emApi('/automations');
@@ -4608,6 +4710,7 @@ HTML;
             emAutoLists = listsR.lists || [];
             emAutoTemplates = (tmplR.templates || []).filter(t => t.status === 'ready' || !t.status);
             emAutoCampaigns = campR.campaigns || [];
+            loadPlatformIntegration();
 
             const rows = emAutomations.map(a => {
                 const trigLabel = emAutoMeta.triggers[a.trigger_type] || a.trigger_type;
@@ -4644,17 +4747,20 @@ HTML;
             }
         }
 
-        function automationTriggerValueHtml(type) {
+        function automationTriggerValueHtml(type, def) {
             if (type === 'list') {
-                const opts = emAutoLists.map(l => `<option value="">All lists</option><option value="${l.id}">${esc(l.name)}</option>`).join('');
+                const opts = '<option value="">All lists</option>' + emAutoLists.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
                 return `<select class="p-input" id="emAutoTriggerValue" style="width:100%;">${opts}</select>`;
             }
             if (type === 'campaign') {
-                const opts = emAutoCampaigns.map(c => `<option value="">All campaigns</option><option value="${c.id}">${esc(c.name)}</option>`).join('');
+                const opts = '<option value="">All campaigns</option>' + emAutoCampaigns.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
                 return `<select class="p-input" id="emAutoTriggerValue" style="width:100%;">${opts}</select>`;
             }
             if (type === 'days') {
-                return `<input class="p-input" id="emAutoTriggerValue" type="number" min="1" value="7" style="width:100%;"/>`;
+                return `<input class="p-input" id="emAutoTriggerValue" type="number" min="1" value="${def || 7}" style="width:100%;"/>`;
+            }
+            if (type === 'none') {
+                return '';
             }
             return `<input class="p-input" id="emAutoTriggerValue" placeholder="Example: vip" style="width:100%;"/>`;
         }
@@ -4663,7 +4769,7 @@ HTML;
             const type = EM_AUTO_TRIGGER_OPTIONS[document.getElementById('emAutoTrigger').value] || { label: '', type: 'text' };
             document.getElementById('emAutoTriggerValueLabel').textContent = type.label;
             const wrap = document.getElementById('emAutoTriggerValueWrap');
-            wrap.innerHTML = '<label class="p-label" id="emAutoTriggerValueLabel">' + esc(type.label) + '</label>' + automationTriggerValueHtml(type.type);
+            wrap.innerHTML = '<label class="p-label" id="emAutoTriggerValueLabel">' + esc(type.label) + '</label>' + automationTriggerValueHtml(type.type, type.def);
         }
 
         function openAutomationModal(id) {
@@ -4694,19 +4800,16 @@ HTML;
                             tvEl.value = String(tv.list_id || tv.campaign_id || '');
                         } else if (a.trigger_type === 'tag_added') {
                             tvEl.value = tv.tag || '';
-                        } else if (a.trigger_type === 'date_after') {
-                            tvEl.value = tv.days || 7;
+                        } else if (EM_AUTO_DAY_TRIGGERS.includes(a.trigger_type)) {
+                            tvEl.value = tv.days || (EM_AUTO_TRIGGER_OPTIONS[a.trigger_type] || {}).def || 7;
                         }
                     }
-                    if ((a.entry_audience_ids || []).length) document.getElementById('emAutoEntryAudience').value = a.entry_audience_ids;
-                    if ((a.exit_audience_ids || []).length) document.getElementById('emAutoExitAudience').value = a.exit_audience_ids;
+                    // multiple select: .value = array بيختار عنصر واحد بس
+                    const selectMany = (el, ids) => [...el.options].forEach(o => { o.selected = (ids || []).map(String).includes(o.value); });
+                    selectMany(document.getElementById('emAutoEntryAudience'), a.entry_audience_ids);
+                    selectMany(document.getElementById('emAutoExitAudience'), a.exit_audience_ids);
                     (a.steps || []).forEach(s => {
-                        const value = s.step_value || {};
-                        addAutomationStep(s.step_type, {
-                            days: value.days, hours: value.hours, minutes: value.minutes,
-                            subject: value.subject, html: value.html, template_id: value.template_id,
-                            tag: value.tag, list_id: value.list_id,
-                        });
+                        addAutomationStep(s.step_type, Object.assign({}, s.step_value || {}));
                     });
                     if (!(a.steps || []).length) addAutomationStep();
                 });
@@ -4733,18 +4836,27 @@ HTML;
             row.dataset.idx = idx;
             row.innerHTML = `
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                    <span style="font-weight:700;color:#6b7280;">#${idx + 1}</span>
+                    <span class="em-auto-step-num" style="font-weight:700;color:#6b7280;">#${idx + 1}</span>
                     <select class="p-input" style="flex:1;" onchange="renderAutomationStepBody(this, ${idx})">
                         ${options}
                     </select>
                     <button class="p-btn xs" onclick="moveAutomationStep(${idx}, -1)">↑</button>
                     <button class="p-btn xs" onclick="moveAutomationStep(${idx}, 1)">↓</button>
-                    <button class="p-btn xs" onclick="document.querySelectorAll('[data-idx]').forEach(r=>{ if(parseInt(r.dataset.idx)===${idx}) r.remove(); })">✕</button>
+                    <button class="p-btn xs" onclick="document.querySelectorAll('[data-idx]').forEach(r=>{ if(parseInt(r.dataset.idx)===${idx}) r.remove(); }); renumberAutomationSteps();">✕</button>
                 </div>
                 <div class="em-auto-step-body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;"></div>`;
             document.getElementById('emAutoSteps').appendChild(row);
             const sel = row.querySelector('select');
             renderAutomationStepBody(sel, idx, value);
+            renumberAutomationSteps();
+        }
+
+        // رقم الخطوة الظاهر = ترتيبها الفعلي (هو اللي "وإلا روح لخطوة #" بيعتمد عليه)
+        function renumberAutomationSteps() {
+            document.querySelectorAll('.em-auto-step-row').forEach((row, i) => {
+                const num = row.querySelector('.em-auto-step-num');
+                if (num) num.textContent = '#' + (i + 1);
+            });
         }
 
         function moveAutomationStep(idx, dir) {
@@ -4754,6 +4866,7 @@ HTML;
             if (i < 0 || j < 0 || j >= rows.length) return;
             const parent = rows[i].parentNode;
             parent.insertBefore(rows[i], dir < 0 ? rows[j] : rows[j].nextSibling);
+            renumberAutomationSteps();
         }
 
         function renderAutomationStepBody(sel, idx, value) {
@@ -4779,6 +4892,25 @@ HTML;
                 body.innerHTML = `<select class="p-input" data-step-k="list_id" style="grid-column:1/-1;"><option value="">Choose a list...</option>
                     ${emAutoLists.map(l => `<option value="${l.id}"${String(value.list_id) === String(l.id) ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}
                 </select>`;
+            } else if (type === 'condition' || type === 'goal') {
+                // else_position محفوظ كترتيب الخطوة (0-based)؛ الواجهة بتعرضه كرقم الخطوة (#)
+                const elsePos = parseInt(value.else_position ?? -1, 10);
+                body.innerHTML = `
+                    <select class="p-input" data-step-k="check">${Object.entries(EM_AUTO_CHECKS).map(([k, v]) => `<option value="${k}"${value.check === k ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>
+                    <input class="p-input" placeholder="Tag (for tag checks)" data-step-k="tag" value="${esc(value.tag || '')}"/>
+                    <select class="p-input" data-step-k="list_id"><option value="">List (for list checks)</option>
+                        ${emAutoLists.map(l => `<option value="${l.id}"${String(value.list_id) === String(l.id) ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}
+                    </select>
+                    ${type === 'condition' ? `<input class="p-input" type="number" min="0" placeholder="If not: go to step # (empty = end)" data-step-k="else_step" value="${elsePos >= 0 ? elsePos + 1 : ''}"/>` : '<small class="p-cell-muted" style="grid-column:1/-1;">If the check is true the contact reached the goal and leaves the workflow.</small>'}`;
+            } else if (type === 'create_crm_task') {
+                body.innerHTML = `
+                    <input class="p-input" placeholder="Task title, e.g. Call {{name}} about {{trip_name}}" data-step-k="title" value="${esc(value.title || '')}" style="grid-column:1/-1;"/>
+                    <input class="p-input" type="number" min="0" placeholder="Due in (days)" data-step-k="due_days" value="${value.due_days ?? 1}"/>
+                    <select class="p-input" data-step-k="priority">${['low', 'medium', 'high'].map(pr => `<option value="${pr}"${(value.priority || 'medium') === pr ? ' selected' : ''}>${pr}</option>`).join('')}</select>`;
+            } else if (type === 'notify_owner') {
+                body.innerHTML = `
+                    <input class="p-input" placeholder="Notification title" data-step-k="title" value="${esc(value.title || '')}" style="grid-column:1/-1;"/>
+                    <input class="p-input" placeholder="Details (optional)" data-step-k="body" value="${esc(value.body || '')}" style="grid-column:1/-1;"/>`;
             } else {
                 body.innerHTML = '';
             }
@@ -4792,14 +4924,27 @@ HTML;
                 row.querySelectorAll('[data-step-k]').forEach(inp => {
                     const k = inp.dataset.stepK;
                     let v = inp.value;
-                    if (k === 'days' || k === 'hours' || k === 'minutes' || k === 'list_id' || k === 'template_id') {
+                    if (k === 'days' || k === 'hours' || k === 'minutes' || k === 'list_id' || k === 'template_id' || k === 'due_days') {
                         v = v === '' ? 0 : parseInt(v, 10) || 0;
                     }
                     value[k] = v;
                 });
                 if (type === 'send_email' && !value.subject && !value.html && !value.template_id) return;
                 if ((type === 'add_tag' || type === 'remove_tag') && !value.tag) return;
+                if ((type === 'create_crm_task') && !value.title) return;
+                if ('else_step' in value) {
+                    const n = parseInt(value.else_step, 10);
+                    value.else_position = n > 0 ? n - 1 : -1; // ترتيب الخطوة في الشاشة
+                    delete value.else_step;
+                }
                 steps.push({ position, step_type: type, step_value: value });
+            });
+            // الخطوات الفاضية بتتشال، فنحوّل else_position من ترتيب الشاشة لترتيب القائمة المرسلة
+            // (لو الخطوة المقصودة اتشالت: أول خطوة محفوظة بعدها)
+            steps.forEach(st => {
+                if (st.step_value.else_position === undefined || st.step_value.else_position < 0) return;
+                const target = steps.findIndex(o => o.position >= st.step_value.else_position);
+                st.step_value.else_position = target;
             });
             return steps;
         }
@@ -4814,7 +4959,7 @@ HTML;
             if (triggerType === 'subscribed') triggerValue = { list_id: parseInt(tvRaw, 10) || 0 };
             else if (triggerType === 'campaign_opened' || triggerType === 'campaign_clicked') triggerValue = { campaign_id: parseInt(tvRaw, 10) || 0 };
             else if (triggerType === 'tag_added') triggerValue = { tag: tvRaw || '' };
-            else if (triggerType === 'date_after') triggerValue = { days: parseInt(tvRaw, 10) || 7 };
+            else if (EM_AUTO_DAY_TRIGGERS.includes(triggerType)) triggerValue = { days: parseInt(tvRaw, 10) || (EM_AUTO_TRIGGER_OPTIONS[triggerType] || {}).def || 7 };
 
             const body = {
                 name,

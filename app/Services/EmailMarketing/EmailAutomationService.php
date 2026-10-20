@@ -149,7 +149,6 @@ class EmailAutomationService
         if (!$auto) {
             return ['success' => false, 'error' => 'سير العمل غير موجود'];
         }
-        $this->db->query("DELETE FROM email_automation_steps WHERE automation_id = ?", [$automationId]);
         $valid = [];
         $indexToPos = [];
         foreach ($steps as $i => $step) {
@@ -160,6 +159,7 @@ class EmailAutomationService
             $indexToPos[(int) $i] = count($valid);
             $valid[] = $step;
         }
+        $prepared = [];
         foreach ($valid as $position => $step) {
             $type = (string) $step['step_type'];
             $value = is_array($step['step_value'] ?? null) ? $step['step_value'] : (json_decode((string) ($step['step_value'] ?? ''), true) ?: []);
@@ -175,13 +175,15 @@ class EmailAutomationService
                     return ['success' => false, 'error' => 'نوع الشرط غير مدعوم'];
                 }
             }
-            $model = new EmailAutomationStep([
-                'automation_id' => $automationId,
-                'position' => $position,
-                'step_type' => $type,
-                'step_value' => $this->jsonField($value),
-            ]);
-            $model->save();
+            if ($type === EmailAutomationStep::STEP_GOAL && !self::isValidCheck((string) ($value['check'] ?? ''))) {
+                return ['success' => false, 'error' => 'نوع شرط الهدف غير مدعوم'];
+            }
+            $prepared[] = ['position' => $position, 'step_type' => $type, 'step_value' => $this->jsonField($value)];
+        }
+        // الحذف بعد التحقق من كل الخطوات: خطوة غلط ما تمسحش سير العمل الموجود
+        $this->db->query("DELETE FROM email_automation_steps WHERE automation_id = ?", [$automationId]);
+        foreach ($prepared as $row) {
+            (new EmailAutomationStep(['automation_id' => $automationId] + $row))->save();
         }
         return ['success' => true];
     }
@@ -229,7 +231,10 @@ class EmailAutomationService
                 $campaignId = (int) ($trigger['campaign_id'] ?? 0);
                 return $campaignId === 0 || (int) ($event['campaign_id'] ?? 0) === $campaignId;
             default:
-                return false;
+                // مشغّلات الحجز/الرحلة/CRM (EmailPlatformBridge)
+                return class_exists('EmailPlatformBridge')
+                    && isset(EmailPlatformBridge::triggers()[(string) $automation['trigger_type']])
+                    && EmailPlatformBridge::triggerMatches((string) $automation['trigger_type'], $trigger, $event);
         }
     }
 
@@ -298,6 +303,9 @@ class EmailAutomationService
     public function processDue(): array
     {
         $this->enrollDateAfterAutomations();
+        if (class_exists('EmailPlatformBridge')) {
+            (new EmailPlatformBridge())->enrollTripAutomations();
+        }
 
         $entries = $this->db->query(
             "SELECT * FROM email_automation_entries
@@ -504,7 +512,7 @@ class EmailAutomationService
                         $html = $html !== '' ? $html : (string) $template->getAttribute('html_body');
                     }
                 }
-                return $this->sendToSubscriber($userId, $subscriberId, $subject, $html, $automationId, (int) ($step['id'] ?? 0), $entryId);
+                return $this->sendToSubscriber($userId, $subscriberId, $subject, $html, $automationId, (int) ($step['id'] ?? 0), $entryId, $context);
             case EmailAutomationStep::STEP_ADD_TAG:
                 return (new ContactManagementService())->applyTagByName($userId, $subscriberId, (string) ($value['tag'] ?? '')) !== false;
             case EmailAutomationStep::STEP_REMOVE_TAG:
@@ -530,11 +538,15 @@ class EmailAutomationService
             case EmailAutomationStep::STEP_END:
                 return true;
             default:
+                // خطوات بتنفّذ في خدمات تانية (مهمة CRM / إشعار)
+                if (class_exists('EmailPlatformBridge')) {
+                    return (bool) (new EmailPlatformBridge())->executeStep((string) $step['step_type'], $userId, $subscriberId, $value, $context);
+                }
                 return false;
         }
     }
 
-    private function sendToSubscriber(int $userId, int $subscriberId, string $subject, string $html, int $automationId, int $stepId, int $entryId): bool
+    private function sendToSubscriber(int $userId, int $subscriberId, string $subject, string $html, int $automationId, int $stepId, int $entryId, array $context = []): bool
     {
         $row = $this->db->query(
             "SELECT * FROM email_subscribers WHERE id = ? AND user_id = ? AND status = 'subscribed' LIMIT 1",
@@ -545,6 +557,15 @@ class EmailAutomationService
         }
         $sub = $row[0];
         $attributes = json_decode((string) ($sub['attributes'] ?? 'null'), true) ?: [];
+        // سياق الحدث (مثلاً الحجز) يغلب على attributes: {{trip_name}}، {{booking_reference}}...
+        if (($context['source'] ?? '') === 'booking' && class_exists('EmailPlatformBridge')) {
+            foreach (array_keys(EmailPlatformBridge::variables()) as $placeholder) {
+                $key = trim($placeholder, '{}');
+                if (isset($context[$key]) && is_scalar($context[$key])) {
+                    $attributes[$key] = (string) $context[$key];
+                }
+            }
+        }
         $companyName = $this->db->query("SELECT company_name FROM users WHERE id = ? LIMIT 1", [$userId]);
         $data = [
             'name' => $sub['name'],
@@ -655,11 +676,14 @@ class EmailAutomationService
             $days = max(1, (int) ($trigger['days'] ?? 7));
             $cutoff = date('Y-m-d H:i:s', time() - $days * 86400);
 
+            // NOT EXISTS: من غيره المشترك اللي خلّص السير كان بيتسجّل تاني في كل
+            // تشغيل cron (enroll بيمنع المشاركة *النشطة* المكررة بس) فيوصله نفس البريد كل دقيقة.
             $subscribers = $this->db->query(
-                "SELECT id FROM email_subscribers
-                 WHERE user_id = ? AND status = 'subscribed' AND created_at <= ?
-                 ORDER BY id ASC LIMIT 500",
-                [$userId, $cutoff]
+                "SELECT s.id FROM email_subscribers s
+                 WHERE s.user_id = ? AND s.status = 'subscribed' AND s.created_at <= ?
+                   AND NOT EXISTS (SELECT 1 FROM email_automation_entries e WHERE e.automation_id = ? AND e.subscriber_id = s.id)
+                 ORDER BY s.id ASC LIMIT 500",
+                [$userId, $cutoff, (int) $auto['id']]
             );
             foreach ($subscribers as $sub) {
                 $this->enroll((int) $auto['id'], (int) $sub['id'], ['source' => 'date_after']);

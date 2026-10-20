@@ -29,6 +29,6 @@ class EmailAutomation extends Model
             self::TRIGGER_CAMPAIGN_OPENED => 'عند فتح حملة',
             self::TRIGGER_CAMPAIGN_CLICKED => 'عند النقر في حملة',
             self::TRIGGER_DATE_AFTER => 'بعد مدة من الاشتراك',
-        ];
+        ] + (class_exists('EmailPlatformBridge') ? EmailPlatformBridge::triggers() : []);
     }
 }

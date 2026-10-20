@@ -884,6 +884,8 @@ $router->delete('/api/email-marketing/automations/{id}', 'EmailMarketingControll
 $router->post('/api/email-marketing/automations/{id}/steps', 'EmailMarketingController', 'setAutomationSteps', ['AuthMiddleware']);
 $router->post('/api/email-marketing/automations/{id}/status', 'EmailMarketingController', 'setAutomationStatus', ['AuthMiddleware']);
 $router->post('/api/email-marketing/automations/run-due', 'EmailMarketingController', 'runAutomationsDue', ['AuthMiddleware']);
+$router->get('/api/email-marketing/platform-integration', 'EmailMarketingController', 'platformIntegration', ['AuthMiddleware']);
+$router->post('/api/email-marketing/platform-integration', 'EmailMarketingController', 'savePlatformIntegration', ['AuthMiddleware']);
 
 $router->get('/api/email-marketing/smtp-settings', 'EmailMarketingController', 'smtpSettings', ['AuthMiddleware']);
 $router->post('/api/email-marketing/smtp-settings', 'EmailMarketingController', 'saveSmtpSettings', ['AuthMiddleware']);

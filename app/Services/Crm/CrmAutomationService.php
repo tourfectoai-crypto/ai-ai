@@ -92,6 +92,11 @@ class CrmAutomationService
             return; // لا يوجد Tenant واضح - لا شيء ينفّذ (أأمن من التخمين)
         }
 
+        // أتمتة التسويق بالبريد (crm_lead_created / crm_deal_won) - مستقلة عن قواعد CRM
+        if (class_exists('EmailPlatformBridge')) {
+            (new EmailPlatformBridge())->onCrmEvent($event, $userId, $context);
+        }
+
         try {
             $rules = (new CrmAutomationRule())->activeForUserAndEvent($userId, $event);
         } catch (Exception $e) {

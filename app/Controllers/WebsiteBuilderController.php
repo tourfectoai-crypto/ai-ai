@@ -1113,6 +1113,7 @@ HTML;
         }
 
         WhatsAppStudioService::captureQuery((int)$website->getAttribute('id'),(int)$website->getAttribute('user_id'));
+        EmailPlatformBridge::captureQuery((int)$website->getAttribute('id'));
         $c = $this->internationalContent($website,$params);
         $industry = $c['industry'] ?? 'tours';
 
@@ -1493,6 +1494,7 @@ HTML;
         }
 
         WhatsAppStudioService::captureQuery((int)$website->getAttribute('id'),(int)$website->getAttribute('user_id'));
+        EmailPlatformBridge::captureQuery((int)$website->getAttribute('id'));
         $c = $this->internationalContent($website,$params);
         $esc = fn ($v) => htmlspecialchars((string) ($v ?? ''), ENT_QUOTES, 'UTF-8');
         [$lang, $dir] = $this->siteLangAttrs($c);
@@ -1637,6 +1639,7 @@ HTML;
         }
 
         WhatsAppStudioService::captureQuery((int)$website->getAttribute('id'),(int)$website->getAttribute('user_id'));
+        EmailPlatformBridge::captureQuery((int)$website->getAttribute('id'));
         $c = $this->internationalContent($website,$params);
         $esc = fn ($v) => htmlspecialchars((string) ($v ?? ''), ENT_QUOTES, 'UTF-8');
         [$lang, $dir] = $this->siteLangAttrs($c);
@@ -2029,6 +2032,8 @@ HTML;
                 'expected_total' => $this->get('quoted_total'),
                 'request_token' => $this->get('request_token'),
                 'wa_token' => $this->get('wa_token') ?: WhatsAppStudioService::cookieToken($websiteId),
+                // كليك من إيميل حملة/أتمتة (tf_em) → إسناد الحجز وإيراده للحملة (EmailPlatformBridge)
+                'em_token' => is_string($this->get('em_token')) && preg_match('/^[a-f0-9]{32,64}$/D', (string) $this->get('em_token')) ? (string) $this->get('em_token') : EmailPlatformBridge::cookieToken($websiteId),
                 'notes' => $this->siteUi('حجز مباشر من ') . ($itemType === 'room' ? $this->siteUi('صفحة الغرفة') : $this->siteUi('صفحة الرحلة')) . ': /sites/' . $slug . '/' . $itemsKey . '/' . $itemSlug,
             ];
             if ($attribution !== null) {
@@ -2366,6 +2371,7 @@ HTML;
         msg.textContent = '{$this->siteJs('جاري تأكيد الحجز')}...';
         payload.quoted_total=quote.total;
         var waToken=new URLSearchParams(window.location.search).get('wa_token');if(waToken&&/^[a-f0-9]{64}$/.test(waToken))payload.wa_token=waToken;
+        var emToken=new URLSearchParams(window.location.search).get('tf_em');if(emToken&&/^[a-f0-9]{32,64}$/.test(emToken))payload.em_token=emToken;
         fetch(form.getAttribute('data-action'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },

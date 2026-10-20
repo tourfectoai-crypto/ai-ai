@@ -150,6 +150,7 @@ class BookingController extends Controller
 
         try {
             $data['wa_token'] = is_string($in['wa_token']??null)?$in['wa_token']:'';
+            $data['em_token'] = is_string($in['em_token'] ?? null) && preg_match('/^[a-f0-9]{32,64}$/D', $in['em_token']) ? $in['em_token'] : '';
             $result = $this->engine->createBooking($userId, array_filter($data, fn ($v) => $v !== null));
 
             return $this->success($result, 'تم إنشاء الحجز بنجاح', 201);

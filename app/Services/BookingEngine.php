@@ -61,7 +61,7 @@ class BookingEngine
         foreach($extraIds as $id)if(filter_var($id,FILTER_VALIDATE_INT)===false||(int)$id<1)throw new InvalidArgumentException('إضافة غير صالحة');
         $extraIds=array_values(array_unique(array_map('intval',$extraIds)));sort($extraIds);
         $fingerprint=$requestToken ? hash('sha256',json_encode([$productId,$startDate,$endDate,(int)($data['rooms_count']??1),(int)($data['adults_count']??1),(int)($data['children_count']??0),$extraIds,trim((string)($data['customer_name']??'')),trim((string)($data['customer_email']??'')),trim((string)($data['customer_phone']??''))],JSON_THROW_ON_ERROR)) : null;
-        return $this->db->transaction(function (Database $db) use ($userId, $productId, $startDate, $data, $requestToken, $fingerprint,$endDate) {
+        $result = $this->db->transaction(function (Database $db) use ($userId, $productId, $startDate, $data, $requestToken, $fingerprint,$endDate) {
             // 1) تأكد إن الخدمة مملوكة للحساب فعلاً
             $product = $db->query(
                 'SELECT id, name, price, currency, website_id FROM crm_products WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE',
@@ -181,11 +181,20 @@ class BookingEngine
                 'total_amount' => $totalAmount,
             ];
         });
+        // التسويق بالبريد: إسناد الحجز لكليك إيميل (tf_em) + مشغّل "حجز جديد".
+        // بعد الـ commit عشان أي إرسال SMTP ما يطوّلش قفل الحجز.
+        if (empty($result['reused'])) {
+            if (class_exists('EmailPlatformBridge') && is_string($data['em_token'] ?? null) && $data['em_token'] !== '') {
+                (new EmailPlatformBridge($this->db))->attributeBooking($userId, (int) $result['id'], $data['em_token']);
+            }
+            $this->notifyEmailMarketing((int) $result['id'], 'booking_created');
+        }
+        return $result;
     }
 
     public function confirmBooking(int $userId, int $bookingId): bool
     {
-        return $this->db->transaction(function (Database $db) use ($userId, $bookingId): bool {
+        $confirmed = $this->db->transaction(function (Database $db) use ($userId, $bookingId): bool {
             $rows = $db->query('SELECT id, status FROM bookings WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE', [$bookingId, $userId]);
             if (!$rows) {
                 throw new Exception('الحجز غير موجود');
@@ -204,6 +213,8 @@ class BookingEngine
             $this->dispatchBookingConfirmationEmail($db, $bookingId);
             return true;
         });
+        $this->notifyEmailMarketing($bookingId, 'booking_confirmed');
+        return $confirmed;
     }
 
     /**
@@ -214,7 +225,7 @@ class BookingEngine
      */
     public function confirmBookingFromPayment(int $bookingId): bool
     {
-        return $this->db->transaction(function (Database $db) use ($bookingId) {
+        $confirmed = $this->db->transaction(function (Database $db) use ($bookingId) {
             $rows = $db->query(
                 'SELECT id, status FROM bookings WHERE id = ? LIMIT 1 FOR UPDATE',
                 [$bookingId]
@@ -253,12 +264,14 @@ class BookingEngine
 
             return true;
         });
+        $this->notifyEmailMarketing($bookingId, 'booking_confirmed');
+        return $confirmed;
     }
 
     /** إلغاء حجز - بيفك حجز مكان التوفر تلقائيًا لو الحجز كان pending/confirmed */
     public function cancelBooking(int $userId, int $bookingId, string $reason = ''): bool
     {
-        return $this->db->transaction(function (Database $db) use ($userId, $bookingId, $reason) {
+        $cancelled = $this->db->transaction(function (Database $db) use ($userId, $bookingId, $reason) {
             $rows = $db->query(
                 'SELECT id, product_id, start_date,end_date, status, booking_reference, total_amount, currency, inventory_units
                  FROM bookings WHERE id = ? AND user_id = ? LIMIT 1 FOR UPDATE',
@@ -300,6 +313,27 @@ class BookingEngine
 
             return true;
         });
+        $this->notifyEmailMarketing($bookingId, 'booking_cancelled');
+        return $cancelled;
+    }
+
+    /**
+     * ربط التسويق بالبريد (EmailPlatformBridge): مشغّلات الأتمتة + إسناد
+     * الإيراد. ثانوي تمامًا — أي فشل بيتسجّل جوه الـ bridge وما يأثرش على الحجز.
+     * المشغّل بيتسجّل مرة واحدة لكل حجز حتى لو التأكيد اتنادى أكتر من مرة.
+     */
+    private function notifyEmailMarketing(int $bookingId, string $trigger): void
+    {
+        if ($bookingId <= 0 || !class_exists('EmailPlatformBridge')) {
+            return;
+        }
+        try {
+            (new EmailPlatformBridge($this->db))->onBookingEvent($bookingId, $trigger);
+        } catch (Throwable $e) {
+            if (class_exists('Logger')) {
+                Logger::warning('Email marketing booking hook failed', ['booking_id' => $bookingId, 'error' => $e->getMessage()]);
+            }
+        }
     }
 
     /**

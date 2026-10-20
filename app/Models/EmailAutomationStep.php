@@ -33,6 +33,6 @@ class EmailAutomationStep extends Model
             self::STEP_END => 'نهاية',
             self::STEP_CONDITION => 'شرط (لو/وإلا)',
             self::STEP_GOAL => 'هدف (خروج عند التحقق)',
-        ];
+        ] + (class_exists('EmailPlatformBridge') ? EmailPlatformBridge::stepTypes() : []);
     }
 }
