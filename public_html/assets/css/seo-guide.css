@@ -62,3 +62,6 @@
 .sg-meter { height: 8px; border-radius: 99px; background: var(--panel-card-bg-2, #e5e7eb); overflow: hidden; margin: 8px 0 6px; }
 .sg-meter span { display: block; height: 100%; background: var(--panel-primary, #2563eb); }
 @media (max-width: 640px) { .sg-plan { grid-template-columns: 1fr; } .sg-alert .p-btn { width: 100%; } }
+.sg-facts { display: grid; gap: 10px; margin: 0 0 12px; }
+.sg-facts label { display: grid; gap: 4px; font-weight: 600; font-size: 14px; }
+.sg-facts textarea { width: 100%; resize: vertical; font-weight: 400; line-height: 1.7; }

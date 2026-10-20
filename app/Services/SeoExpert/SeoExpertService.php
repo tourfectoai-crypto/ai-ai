@@ -14,6 +14,7 @@ require_once __DIR__.'/SeoContentTargetSelector.php';
 require_once __DIR__.'/SeoRejectedContentDraft.php';
 require_once __DIR__.'/SeoKeywordMap.php';
 require_once __DIR__.'/SeoPlanLimits.php';
+require_once __DIR__.'/SeoCycleReport.php';
 require_once __DIR__.'/../BusinessHub/BusinessHubService.php';
 require_once __DIR__.'/../AutoFix/EdgeRules.php';
 /** Evidence-led site campaigns. The model drafts data; server code decides what may execute. */
@@ -241,7 +242,10 @@ class SeoExpertService
             $qualityStatus=$this->q('SELECT source_key,title,page_url,pillar_url,pillar_title,seo_state,seo_error,brief_json FROM seo_content_quality WHERE website_id=? AND user_id=? ORDER BY id DESC LIMIT 50',[$wid,$uid])->fetchAll(PDO::FETCH_ASSOC);
             foreach ($qualityStatus as &$item) {$contentBrief=json_decode($item['brief_json'],true);$item['keyword']=$contentBrief['keyword']??'';unset($item['brief_json']);}unset($item);
         }
-        return ['content_quality'=>$qualityStatus,'content_refresh_tasks'=>$refreshTasks,'site'=>['id'=>$wid,'url'=>$site['main_url']],'config'=>$cfg?:null,'runs'=>$runs,'connections'=>$connections,'worker_ready'=>self::worker(),'quote'=>$this->quote($uid),'plan_limits'=>SeoPlanLimits::forUser($uid,$this->db)];
+        return ['content_quality'=>$qualityStatus,'content_refresh_tasks'=>$refreshTasks,'site'=>['id'=>$wid,'url'=>$site['main_url']],'config'=>$cfg?:null,'runs'=>$runs,'connections'=>$connections,'worker_ready'=>self::worker(),'quote'=>$this->quote($uid),'plan_limits'=>SeoPlanLimits::forUser($uid,$this->db),'data_quota'=>self::dataQuota($uid)];
+    }
+    /** رصيد بيانات البحث في الباقة (المقالات بتستخدمه قبل المحفظة) */
+    private static function dataQuota(int $uid): ?array{try{$q=PlanUsage::quota($uid,'seo_data');return ['limit'=>$q['limit'],'used'=>$q['used'],'remaining'=>$q['remaining'],'covered'=>$q['covered']];}catch(Throwable $e){return null;}
     }
     private function enqueue(int $uid,int $wid,string $key,?string $hash=null,float $researchCap=0): int{
         $prior=$this->q('SELECT id,website_id FROM seo_expert_runs WHERE user_id=? AND request_key=?',[$uid,$key])->fetch(PDO::FETCH_ASSOC);if($prior){if((int)$prior['website_id']!==$wid)throw new InvalidArgumentException('Request key belongs to another website');return (int)$prior['id'];}
@@ -942,7 +946,7 @@ class SeoExpertService
             if($operation==='verify'&&$attempt<3){$pending=(bool)$this->q("SELECT id FROM seo_expert_tasks WHERE run_id=? AND user_id=? AND ((status='active' AND kind IN ('metadata','content')) OR (status='reverted' AND JSON_UNQUOTE(JSON_EXTRACT(evidence_json,'$.state'))='rollback_not_seen')) LIMIT 1",[$id,$uid])->fetchColumn();}
             if($operation==='apply'){$this->q("UPDATE seo_expert_runs SET status='monitoring',updated_at=UTC_TIMESTAMP() WHERE id=?",[$id]);try{$this->notifySearchEngines($uid,$wid,$id);}catch(Throwable $e){Logger::warning('SEO search engine notification skipped',['run_id'=>$id,'error'=>$e->getMessage()]);}$this->queueWork($id,'verify',180);}
             elseif($pending)$this->queueWork($id,'verify',300*(1+$attempt),$attempt+1);
-            else{$this->q("UPDATE seo_expert_runs SET status='completed',updated_at=UTC_TIMESTAMP() WHERE id=?",[$id]);}
+            else{$this->q("UPDATE seo_expert_runs SET status='completed',updated_at=UTC_TIMESTAMP() WHERE id=?",[$id]);try{SeoCycleReport::send($this->db,$uid,$wid,$id);}catch(Throwable $e){Logger::warning('SEO cycle report skipped',['run_id'=>$id,'error'=>$e->getMessage()]);}}
         }finally{try{(new SeoImpactService($this->db))->syncAutomatic($id);}catch(Throwable $impactError){Logger::warning('Automatic task impact monitoring needs review',['run_id'=>$id]);}ExternalExecution::unlock('seo-expert-site:'.$wid);$this->scheduleNext($uid,$wid);}
     }
     private function groupReviewTasks(array $run,array $pages,array $proposed,array $anchor): void {
