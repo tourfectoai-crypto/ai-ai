@@ -52,3 +52,13 @@
 .sg-bar { display: block; height: 6px; border-radius: 99px; background: linear-gradient(90deg, var(--panel-primary, #2563eb) 0 30%, var(--panel-card-bg-2, #e5e7eb) 30%); background-size: 200% 100%; animation: sg-move 1.6s linear infinite; }
 @keyframes sg-move { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @media (prefers-reduced-motion: reduce) { .sg-bar { animation: none; } }
+.sg-alerts { display: grid; gap: 10px; padding: 14px; border-inline-start: 5px solid var(--panel-warning, #f59e0b); }
+.sg-alert { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.sg-alert + .sg-alert { border-top: 1px solid var(--panel-border, #e5e7eb); padding-top: 10px; }
+.sg-alert p { flex: 1 1 280px; color: var(--panel-text, #111827) !important; }
+.sg-plan { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.sg-plan h4 { margin: 0 0 6px; }
+.sg-link { display: inline-block; margin-top: 8px; font-weight: 600; color: var(--panel-primary, #2563eb); text-decoration: none; }
+.sg-meter { height: 8px; border-radius: 99px; background: var(--panel-card-bg-2, #e5e7eb); overflow: hidden; margin: 8px 0 6px; }
+.sg-meter span { display: block; height: 100%; background: var(--panel-primary, #2563eb); }
+@media (max-width: 640px) { .sg-plan { grid-template-columns: 1fr; } .sg-alert .p-btn { width: 100%; } }

@@ -10,7 +10,7 @@
     if (!root || !advanced || !P) return;
     const ar = document.documentElement.lang.toLowerCase().startsWith('ar'), t = (a, e) => ar ? a : e, esc = P.esc, base = '/api/seo-expert';
     const params = new URLSearchParams(location.search);
-    let setup = null, overview = null, readiness = null, health = null, run = null, busy = false, timer = null;
+    let setup = null, overview = null, readiness = null, health = null, run = null, markets = null, busy = false, timer = null, alertHandlers = [];
 
     const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
     const req = async (url, body) => {
@@ -36,7 +36,7 @@
       executing: [t('المنصة بتطبّق التحسينات على موقعك دلوقتي.', 'Applying improvements to your website now.'), 'busy'],
       monitoring: [t('اتطبقت التحسينات، وبنتأكد إنها ظاهرة على موقعك.', 'Improvements applied; confirming they appear on your site.'), 'busy'],
       completed: [t('الدورة خلصت.', 'This cycle is finished.'), 'ok'],
-      failed: [t('الدورة دي ماكملتش. فريق الدعم اتبلغ، وتقدر تتواصل معانا.', 'This cycle did not finish. Support has been notified; you can contact us.'), 'bad'],
+      failed: [t('آخر فحص ماكملش', 'The last check did not finish'), 'bad'],
     }[s] || [s, 'ok']);
 
     const steps = () => {
@@ -45,7 +45,8 @@
       const siteDone = c === 'publicly_observed' || pub === 'authenticated';
       const factsDone = facts ? ['recorded', 'observed'].includes(facts.state) : false;
       const googleDone = gscSaved && health?.metrics?.gsc?.state !== 'needs_connection_review';
-      const autoDone = !!(cfg && cfg.status === 'active' && (cfg.policy?.autopilot || cfg.policy?.auto_missing_metadata));
+      const busyRun = (overview?.runs || []).some(r => ['queued', 'scanning', 'scanned', 'planning', 'executing', 'monitoring'].includes(r.status));
+      const autoDone = !!(cfg && (cfg.policy?.autopilot || cfg.policy?.auto_missing_metadata) && (cfg.status === 'active' || busyRun || (overview?.runs || []).length));
       return [
         { key: 'site', done: siteDone, checking: health === null && !siteDone, title: t('اربط موقعك', 'Connect your website'), text: t('عشان المنصة تقدر تحسّن صفحات موقعك بنفسها. لو موقعك ووردبريس نزّل الإضافة، ولو مبرمج خاص المنصة بتركّب الربط لوحدها.', 'So the platform can improve your pages itself. WordPress: install the plugin. Custom site: the platform installs the connection for you.'), action: t('اربط الموقع', 'Connect website'), run: () => setAdvanced(true, 'settings') },
         { key: 'facts', done: factsDone, title: t('أكد بيانات شركتك', 'Confirm your company details'), text: t('اسم الشركة وخدماتها والبلد اللي عملاءك منه. المنصة مابتنشرش أي معلومة عن شركتك من غير ما تأكدها.', 'Company name, services and where your customers come from. Nothing about your company is published unless you confirm it.'), action: t('أكد البيانات', 'Confirm details'), run: () => { location.href = '/business-hub?website_id=' + wid(); } },
@@ -76,12 +77,36 @@
       message(t('الطيار الآلي اشتغل ✓ المنصة بدأت تفحص موقعك دلوقتي، وهتشوف النتيجة هنا خلال دقايق.', 'Autopilot is on ✓ The platform started checking your website; results appear here in a few minutes.'));
     }
 
+    const usage = () => { const cfg = overview?.config; if (!cfg) return null; const month = new Date().toISOString().slice(0, 7); const used = cfg.budget_month === month ? Number(cfg.cycles_used || 0) : 0; return { used, max: Number(cfg.policy?.max_cycles || 0) }; };
+    async function retryCycle() {
+      overview = await req(base + '/sites/' + wid());
+      await req(base + '/sites/' + wid() + '/start', { request_key: 'retry_' + wid() + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10), quote_hash: overview.quote.hash, research_wallet_cap: 0 });
+      await load(); message(t('بدأنا فحص جديد ✓', 'A new check has started ✓'));
+    }
+    // تنبيه واحد لكل مشكلة، ومعاه الحل في زرار
+    function alerts() {
+      const out = [], u = usage(), snap = run?.run?.snapshot || {}, failed = run?.run?.status === 'failed';
+      if (u && u.max && u.used >= u.max) out.push([t('وصلت لحد الفحوصات الشهري (' + u.used + ' من ' + u.max + '). الطيار الآلي هيكمل أول الشهر الجاي، أو زوّد الحد من الإعدادات.', 'You reached this month\'s check limit (' + u.used + ' of ' + u.max + '). Autopilot resumes next month, or raise the limit in settings.'), t('زوّد الحد', 'Raise limit'), () => setAdvanced(true, 'settings', false)]);
+      else if (failed) out.push([t('آخر فحص ماكملش. ده مش بيتخصم منك، وتقدر تجرب تاني دلوقتي.', 'The last check did not finish. It was not charged; you can try again now.'), t('حاول تاني', 'Try again'), act(retryCycle)]);
+      if (snap.tech?.sitemap_auto?.state === 'permission_required') out.push([t('اسمح للمنصة تبعت صفحاتك الجديدة لجوجل أول بأول: اربط جوجل تاني ووافق على صلاحية "خريطة الموقع".', 'Let the platform send your new pages to Google: reconnect Google and allow sitemap access.'), t('اربط جوجل', 'Reconnect Google'), () => { location.href = '/search-console/connect/' + wid() + '?return_to=%2Fseo-expert'; }]);
+      if (snap.content_brief_state === 'research_budget_or_source_review') out.push([t('المقالات الأسبوعية متوقفة لأن ميزانية بيانات البحث صفر. حط مبلغ صغير (مثلاً 5$ في الشهر) من الإعدادات.', 'Weekly articles are paused because the search data budget is zero. Set a small amount (e.g. $5/month) in settings.'), t('افتح الإعدادات', 'Open settings'), () => setAdvanced(true, 'settings', false)]);
+      alertHandlers = out.map(a => a[2]);
+      return out.length ? `<section class="sg-card sg-alerts">${out.map((a, i) => `<div class="sg-alert"><p>${esc(a[0])}</p><button type="button" class="p-btn" data-alert="${i}">${esc(a[1])}</button></div>`).join('')}</section>` : '';
+    }
+    function marketsCard() {
+      const list = markets?.markets || [], limit = Number(markets?.limit || 0), u = usage();
+      if (!list.length && !u) return '';
+      return `<section class="sg-card sg-plan"><div><h4>${t('أسواقك', 'Your markets')}</h4><p>${list.map(m => esc(m.label)).join(' · ') || '—'}</p>${limit > list.length ? `<a class="sg-link" href="/ai/keywords?website_id=${wid()}">+ ${t('أضف سوق', 'Add a market')} (${list.length} ${t('من', 'of')} ${limit})</a>` : `<span class="sg-muted">${t('كل الأسواق المتاحة في باقتك مستخدمة', 'All markets in your plan are in use')} (${list.length}/${limit || list.length})</span>`}</div>
+        ${u ? `<div><h4>${t('الفحوصات الشهر ده', 'Checks this month')}</h4><div class="sg-meter" role="img" aria-label="${u.used} / ${u.max}"><span style="width:${u.max ? Math.min(100, Math.round(u.used / u.max * 100)) : 0}%"></span></div><p>${u.used} ${t('من', 'of')} ${u.max}</p></div>` : ''}</section>`;
+    }
     const message = (text, error = false) => { const m = root.querySelector('#sgMessage'); if (!m) return; m.textContent = text; m.hidden = !text; m.className = 'sg-message' + (error ? ' error' : ''); };
     const act = fn => async () => { if (busy) return; busy = true; render(); try { await fn(); } catch (e) { message(e.message, true); } finally { busy = false; render(); } };
 
     function summary() {
       if (!run) return '';
       const tasks = run.tasks || [], [text, tone] = runText(run.run?.status);
+      // دورة ماكملتش ومافيهاش مهام: مفيش أرقام نعرضها، والتنبيه فوق فيه الحل
+      if (tone === 'bad' && !tasks.length) return `<section class="sg-card sg-week"><div class="sg-week-head"><h3>${t('الأسبوع ده', 'This week')}</h3><span class="sg-pill bad">${esc(text)}</span></div><div class="sg-links"><button type="button" class="p-btn outline" data-go="results">${t('شوف النتايج والزيارات', 'See results and visits')}</button><a class="p-btn outline" href="/ai-visibility">${t('ظهورك في ChatGPT', 'Your visibility in ChatGPT')}</a></div></section>`;
       const auto = tasks.filter(x => ['approved', 'active', 'verified', 'publishing'].includes(x.status)).length;
       const approve = tasks.filter(x => x.status === 'pending').length;
       const mine = tasks.filter(x => x.status === 'needs_client');
@@ -99,19 +124,20 @@
     }
 
     function render() {
-      const list = steps(), sites = setup?.websites || [], firstOpen = list.findIndex(s => !s.done), allDone = firstOpen === -1;
-      root.innerHTML = `<section class="sg-card sg-hero ${allDone ? 'ok' : ''}"><div><h2>${allDone ? t('خدمة السيو شغالة لوحدها ✓', 'Your SEO runs on its own ✓') : t('فاضل ', '') + (list.length - list.filter(s => s.done).length) + t(' خطوة وخدمة السيو تشتغل لوحدها', ' step(s) left until your SEO runs on its own')}</h2>
+      const list = steps(), sites = setup?.websites || [], firstOpen = list.findIndex(s => !s.done), allDone = firstOpen === -1, alertsHtml = sites.length ? alerts() : '';
+      root.innerHTML = `<section class="sg-card sg-hero ${allDone && !alertHandlers.length ? 'ok' : ''}"><div><h2>${allDone && alertHandlers.length ? t('الطيار الآلي متفعّل، وفيه حاجة محتاجة منك تحت', 'Autopilot is on; something below needs you') : allDone ? t('خدمة السيو شغالة لوحدها ✓', 'Your SEO runs on its own ✓') : t('فاضل ', '') + (list.length - list.filter(s => s.done).length) + t(' خطوة وخدمة السيو تشتغل لوحدها', ' step(s) left until your SEO runs on its own')}</h2>
           <p>${allDone ? t('المنصة بتفحص موقعك وتحسّنه كل أسبوع. هنبلغك لو احتجنا منك حاجة.', 'The platform checks and improves your site every week. We will tell you if we need anything.') : t('كل خطوة بتاخد دقيقة. خلّصها بالترتيب، وبعدها المنصة بتكمل الباقي.', 'Each step takes a minute. Finish them in order and the platform does the rest.')}</p></div>
           ${sites.length > 1 ? `<label class="sg-site">${t('الموقع', 'Website')} <select id="sgSite" class="p-select">${sites.map(s => `<option value="${s.id}">${esc(s.domain || s.company_name || s.id)}</option>`).join('')}</select></label>` : `<input type="hidden" id="sgSite" value="${sites[0]?.id || ''}">`}</section>
         <p id="sgMessage" class="sg-message" role="status" hidden></p>
         ${!sites.length ? `<section class="sg-card"><h3>${t('ضيف موقعك الأول', 'Add your website first')}</h3><p>${t('اكتب رابط موقعك عشان نبدأ.', 'Enter your website link to start.')}</p><a class="p-btn" href="/websites">${t('ضيف موقع', 'Add website')}</a></section>` : `
         ${allDone ? `<details class="sg-card sg-setup"><summary>✓ ${t('كل خطوات الإعداد خلصت', 'All setup steps are done')}</summary>` : ''}<ol class="sg-steps">${list.map((s, i) => `<li class="sg-step ${s.done ? 'done' : (i === firstOpen ? 'current' : 'later')}"><span class="sg-num">${s.done ? '✓' : i + 1}</span><div><h3>${esc(s.title)}</h3>${s.done ? '' : `<p>${esc(s.text)}</p>`}
           ${s.checking ? `<span class="sg-muted">${t('بنتأكد من ربط موقعك…', 'Checking your website connection…')}</span>` : ''}${!s.done && !s.checking && i === firstOpen ? `<button type="button" class="p-btn" data-step="${s.key}" ${busy ? 'disabled' : ''}>${busy ? t('لحظة…', 'One moment…') : esc(s.action)}</button>` : ''}${s.done ? `<span class="sg-ok">${t('تم', 'Done')}</span>` : ''}</div></li>`).join('')}</ol>${allDone ? '</details>' : ''}
-        ${summary()}`}
+        ${alertsHtml}${summary()}${marketsCard()}`}
         <div class="sg-advanced"><button type="button" class="p-btn outline" id="sgAdvancedToggle"></button></div>`;
       const sel = root.querySelector('#sgSite'); if (sel && sites.length) { const want = String(params.get('website_id') || store.get('tf-seo-site') || ''); if (sites.some(s => String(s.id) === want)) sel.value = want; sel.onchange = () => { store.set('tf-seo-site', sel.value); const legacy = document.getElementById('seWebsite'); if (legacy) { legacy.value = sel.value; legacy.dispatchEvent(new Event('change')); } health = null; run = null; load(); }; }
       root.querySelectorAll('[data-step]').forEach(b => { const s = list.find(x => x.key === b.dataset.step); b.onclick = act(async () => s.run()); });
       root.querySelectorAll('[data-go]').forEach(b => { b.onclick = () => setAdvanced(true, b.dataset.go, false); });
+      root.querySelectorAll('[data-alert]').forEach(b => { b.onclick = () => alertHandlers[Number(b.dataset.alert)]?.(); });
       root.querySelector('#sgAdvancedToggle').onclick = () => setAdvanced(advanced.hidden);
       setAdvanced(!advanced.hidden, null, false);
     }
@@ -119,8 +145,8 @@
     async function load() {
       if (!wid()) { render(); return; }
       const id = wid();
-      const [ov, rd] = await Promise.allSettled([req(base + '/sites/' + id), req(base + '/sites/' + id + '/readiness')]);
-      overview = ov.status === 'fulfilled' ? ov.value : null; readiness = rd.status === 'fulfilled' ? rd.value : null;
+      const [ov, rd, mk] = await Promise.allSettled([req(base + '/sites/' + id), req(base + '/sites/' + id + '/readiness'), req('/api/seo/data/markets?website_id=' + id)]);
+      overview = ov.status === 'fulfilled' ? ov.value : null; readiness = rd.status === 'fulfilled' ? rd.value : null; markets = mk.status === 'fulfilled' ? mk.value : null;
       const last = overview?.runs?.[0];
       run = last ? await req(base + '/runs/' + last.id).catch(() => null) : null;
       render();
