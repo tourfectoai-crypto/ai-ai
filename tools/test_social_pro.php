@@ -94,5 +94,39 @@ check('insight: success rate warning', str_contains($all, 'success rate is 83%')
 check('insight: unanswered comments with leads', str_contains($all, 'Only 30%') && str_contains($all, '4 asked'));
 check('insight: empty month', count(SocialReport::insights(['current' => ['published' => 0] + $base, 'previous' => $prev])) === 1);
 
+// ---------- الرد الخاص: تعبئة القالب ----------
+check('template fills name/link/company', SocialCommentInbox::fillTemplate("Hi {name}!\nBook: {link}\n{company}", 'Ahmed Ali', 'Red Sea', 'https://x.example') === "Hi Ahmed!\nBook: https://x.example\nRed Sea");
+check('template drops empty link line & bad name', SocialCommentInbox::fillTemplate("Hi {name}, thanks!\nBook: {link}", '_.99', '', '') === 'Hi, thanks!');
+
+// ---------- روابط تتبّع الحجوزات ----------
+require_once $root . '/app/Services/SocialMedia/SocialAttribution.php';
+$mapped = SocialAttribution::replaceOwnLinks('Book https://www.example-tours.com/a?x=1, or https://other.com/b.', ['example-tours.com'], fn ($u) => 'https://app/go/CODE');
+check('own links replaced, punctuation kept, external untouched', $mapped === 'Book https://app/go/CODE, or https://other.com/b.');
+check('short code format', SocialAttribution::validCode(SocialAttribution::newCode()) && !SocialAttribution::validCode('bad code!'));
+
+// ---------- نمو المتابعين ----------
+require_once $root . '/app/Services/SocialMedia/SocialGrowth.php';
+$g = SocialGrowth::summarize([['connection_id' => 1, 'platform' => 'facebook', 'name' => 'P', 'snap_date' => '2026-10-01', 'followers' => 1000], ['connection_id' => 1, 'platform' => 'facebook', 'name' => 'P', 'snap_date' => '2026-10-20', 'followers' => 1100]]);
+check('growth change & percent', $g[0]['change'] === 100 && $g[0]['change_pct'] === 10.0 && $g[0]['current'] === 1100);
+
+// ---------- المنافسين ----------
+require_once $root . '/app/Services/SocialMedia/SocialCompetitors.php';
+$media = [];
+for ($i = 0; $i < 4; $i++) { $media[] = ['caption' => 'Trip #RedSea #Dive', 'likes' => 100 * ($i + 1), 'comments' => 10, 'timestamp' => gmdate('c', strtotime('2026-10-20') - $i * 3 * 86400), 'type' => $i ? 'VIDEO' : 'IMAGE', 'permalink' => 'https://instagram.com/p/' . $i]; }
+$a = SocialCompetitors::analyze($media);
+check('competitor avg engagement', $a['avg_engagement'] === 260.0);
+check('competitor posts per week ≈ 2.3', abs($a['posts_per_week'] - 2.3) < 0.01);
+check('competitor mix + top post + hashtags', $a['mix']['reels'] === 3 && $a['top'][0]['engagement'] === 410 && $a['hashtags'] === ['redsea', 'dive']);
+$cmp = SocialCompetitors::compare(['posts_per_week' => 1.0, 'avg_engagement' => 50.0], [['username' => 'rival', 'avg_engagement' => 260.0, 'posts_per_week' => 2.3, 'mix' => $a['mix'], 'hashtags' => $a['hashtags']]]);
+check('competitor insights: rhythm, reels, engagement gap, hashtags', count($cmp) === 4);
+
+// ---------- LinkedIn little text ----------
+require_once $root . '/app/Services/SocialMedia/LinkedInAPI.php';
+check('linkedin escapes reserved chars & links hashtags', LinkedInAPI::littleText('Hi (all) @team #RedSea 50% *now*') === 'Hi \\(all\\) \\@team {hashtag|\\#|RedSea} 50% \\*now\\*');
+
+// ---------- صلاحيات الفريق ----------
+require_once $root . '/app/Services/SocialMedia/SocialTeam.php';
+check('team matrix: support drafts+inbox but cannot publish/manage', SocialTeam::can(['can' => SocialTeam::MATRIX['support']], 'inbox') && !SocialTeam::can(['can' => SocialTeam::MATRIX['support']], 'publish') && !SocialTeam::can(['can' => SocialTeam::MATRIX['viewer']], 'draft') && SocialTeam::can(['can' => SocialTeam::MATRIX['manager']], 'manage'));
+
 echo $fail ? "\n{$fail} check(s) failed.\n" : "\nAll social-pro checks passed.\n";
 exit($fail ? 1 : 0);

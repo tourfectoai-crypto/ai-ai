@@ -88,7 +88,7 @@ class SocialPostReconciler
             if (!$list['success']) {
                 return self::res('still_uncertain', 'تعذر قراءة منشورات الصفحة من Meta: ' . ($list['error'] ?? ''));
             }
-            $expected = SocialLinkTracker::finalMessage($post, $platform);
+            $expected = SocialLinkTracker::finalMessage($post, $platform, (int) $target->getAttribute('id'));
             $m = FacebookPostMatcher::match($list['posts'], $expected, $attempt - self::WINDOW_BEFORE, $attempt + self::WINDOW_AFTER);
 
             if ($m['status'] === FacebookPostMatcher::STATUS_MATCH) {

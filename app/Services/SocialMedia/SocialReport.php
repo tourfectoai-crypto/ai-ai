@@ -10,6 +10,8 @@
  * @version 1.0.0
  */
 require_once __DIR__ . '/SocialBestTimes.php';
+require_once __DIR__ . '/SocialGrowth.php';
+require_once __DIR__ . '/SocialAttribution.php';
 
 final class SocialReport
 {
@@ -22,7 +24,7 @@ final class SocialReport
         $data = ['month' => $month, 'brand' => self::brand($userId), 'current' => self::period($userId, $start, $end), 'previous' => self::period($userId, $prevStart, $start)];
 
         $data['top_posts'] = $db->query(
-            "SELECT sp.content, c.platform, c.external_location_name AS page, pm.likes, pm.comments, pm.shares, pm.reach, pm.permalink, t.published_at,
+            "SELECT sp.id AS post_id, sp.content, c.platform, c.external_location_name AS page, pm.likes, pm.comments, pm.shares, pm.reach, pm.permalink, t.published_at,
                     (pm.likes + pm.comments * 2 + pm.shares * 3) AS score
                FROM social_post_metrics pm JOIN social_post_targets t ON t.id = pm.target_id JOIN social_posts sp ON sp.id = t.social_post_id
                LEFT JOIN platform_connections c ON c.id = t.platform_connection_id
@@ -30,6 +32,17 @@ final class SocialReport
               ORDER BY score DESC LIMIT 5",
             [$userId, $start, $end]
         ) ?: [];
+
+        // الحجوزات اللي جت من روابط المنشورات (لو تتبّع الحجوزات مفعّل)
+        $data['bookings'] = class_exists('SocialAttribution') ? SocialAttribution::totals($userId, $start, $end) : null;
+        $data['bookings_prev'] = class_exists('SocialAttribution') ? SocialAttribution::totals($userId, $prevStart, $start) : null;
+        $attr = class_exists('SocialAttribution') ? SocialAttribution::forPosts($userId, array_map(static fn ($r) => (int) $r['post_id'], $data['top_posts'])) : [];
+        foreach ($data['top_posts'] as &$tp) {
+            $tp['bookings'] = $attr[(int) $tp['post_id']]['bookings'] ?? 0;
+        }
+        unset($tp);
+
+        $data['growth'] = class_exists('SocialGrowth') ? SocialGrowth::series($userId, 31) : [];
 
         // حسب نوع المحتوى: فيديو / ألبوم / صورة / نص / ستوري
         $hasAlbum = SocialPostService::albumTableExists();
@@ -180,10 +193,41 @@ final class SocialReport
                           "Only {$rate}% of comments were answered" . ((int) ($c['leads'] ?? 0) > 0 ? ', and ' . (int) $c['leads'] . ' asked about price or booking' : '') . '. Every unanswered price question is a lost booking — use the comments inbox.'];
             }
         }
+        $bk = $d['bookings'] ?? null;
+        if ($bk && $bk['bookings'] > 0) {
+            $best = null;
+            foreach ($d['top_posts'] ?? [] as $tp) {
+                if ((int) ($tp['bookings'] ?? 0) > (int) ($best['bookings'] ?? 0)) {
+                    $best = $tp;
+                }
+            }
+            $out[] = ['السوشيال جاب ' . (int) $bk['bookings'] . ' حجز الشهر ده' . ($best ? '، أعلاهم منشور «' . mb_substr((string) $best['content'], 0, 40) . '…» - اعمل منشورات أكتر بنفس الفكرة.' : '.'),
+                      'Social brought ' . (int) $bk['bookings'] . ' bookings this month' . ($best ? '; the top one came from "' . mb_substr((string) $best['content'], 0, 40) . '…" — create more posts like it.' : '.')];
+        } elseif ($bk !== null && (int) ($bk['clicks'] ?? 0) === 0 && $cur['published'] > 0) {
+            $out[] = ['مفيش روابط تتبّع حجوزات في منشورات الشهر ده. فعّل «روابط تتبّع الحجوزات» وحط رابط موقعك في المنشور عشان تعرف كل بوست جاب كام حجز.',
+                      'No booking-tracking links in this month\'s posts. Enable "Booking-tracking links" and add your website link to see bookings per post.'];
+        }
         if ($cur['published'] < 8) {
             $out[] = ['عدد المنشورات قليل (' . $cur['published'] . '). المعدل الصحي لشركات السياحة من 3 لـ 5 منشورات في الأسبوع على كل منصة.', 'Posting volume is low (' . $cur['published'] . '). A healthy rhythm for tourism brands is 3–5 posts per week per platform.'];
         }
         return array_slice($out, 0, 6);
+    }
+
+    private static function growthHtml(array $growth, callable $t, callable $nf, array $plat): string
+    {
+        $rows = '';
+        foreach ($growth as $g) {
+            if ($g['current'] === null) {
+                continue;
+            }
+            $ch = $g['change'];
+            $rows .= '<tr><td>' . htmlspecialchars(($plat[$g['platform']] ?? $g['platform']) . ' · ' . $g['name'], ENT_QUOTES, 'UTF-8') . '</td><td>' . $nf($g['current']) . '</td><td>'
+                . ($ch === null ? '–' : '<span class="delta ' . ($ch >= 0 ? 'up' : 'down') . '">' . ($ch >= 0 ? '+' : '') . $nf($ch) . ($g['change_pct'] !== null ? ' (' . $g['change_pct'] . '%)' : '') . '</span>') . '</td></tr>';
+        }
+        if ($rows === '') {
+            return '';
+        }
+        return '<section><h2>' . $t('نمو المتابعين', 'Follower growth') . '</h2><div class="scroll"><table><tr><th>' . $t('الحساب', 'Account') . '</th><th>' . $t('المتابعين الحاليين', 'Current followers') . '</th><th>' . $t('التغيير خلال الشهر', 'Change this month') . '</th></tr>' . $rows . '</table></div></section>';
     }
 
     public static function render(array $d, bool $ar): string
@@ -219,6 +263,23 @@ final class SocialReport
             . $kpi($t('متوسط التفاعل للمنشور', 'Avg engagement / post'), $nf($cur['avg_engagement']), $delta((float) $cur['avg_engagement'], (float) $prev['avg_engagement']))
             . $kpi($t('نسبة نجاح النشر', 'Publishing success'), $cur['success_rate'] === null ? '–' : $cur['success_rate'] . '%')
             . $kpi($t('لايك · تعليق · مشاركة', 'Likes · Comments · Shares'), $nf($cur['likes']) . ' · ' . $nf($cur['comments']) . ' · ' . $nf($cur['shares']));
+        $bk = $d['bookings'] ?? null;
+        if ($bk && ($bk['clicks'] || $bk['bookings'])) {
+            $bkPrev = $d['bookings_prev'] ?? ['bookings' => 0, 'revenue' => 0];
+            $fmtMoney = static function ($v, $cur) use ($nf): string {
+                if (class_exists('NumberFormatter') && $cur) {
+                    $f = new NumberFormatter('en', NumberFormatter::CURRENCY);
+                    $out = $f->formatCurrency((float) $v, (string) $cur);
+                    if ($out !== false) {
+                        return $out;
+                    }
+                }
+                return $nf(round((float) $v)) . ($cur ? ' ' . $cur : '');
+            };
+            $kpis .= $kpi($t('نقرات روابط المنشورات', 'Post link clicks'), $nf($bk['clicks']))
+                . $kpi($t('حجوزات من السوشيال', 'Bookings from social'), $nf($bk['bookings']), $delta($bk['bookings'], $bkPrev['bookings']))
+                . $kpi($t('إيراد مؤكد من السوشيال', 'Confirmed social revenue'), htmlspecialchars($fmtMoney($bk['revenue'], $bk['currency']), ENT_QUOTES, 'UTF-8'), $delta($bk['revenue'], $bkPrev['revenue']));
+        }
 
         $platRows = '';
         foreach ($cur['by_platform'] as $k => $v) {
@@ -231,7 +292,7 @@ final class SocialReport
         }
         $topRows = '';
         foreach ($d['top_posts'] as $i => $p) {
-            $topRows .= '<tr><td>' . ($i + 1) . '</td><td class="txt">' . $e(mb_substr((string) $p['content'], 0, 110)) . (!empty($p['permalink']) && preg_match('#^https://#', (string) $p['permalink']) ? ' <a href="' . $e($p['permalink']) . '" target="_blank" rel="noopener">↗</a>' : '') . '</td><td>' . $e($plat[$p['platform']] ?? $p['platform']) . '</td><td>' . $nf((int) $p['likes']) . '</td><td>' . $nf((int) $p['comments']) . '</td><td>' . $nf((int) $p['shares']) . '</td><td>' . $nf($p['reach'] === null ? null : (int) $p['reach']) . '</td></tr>';
+            $topRows .= '<tr><td>' . ($i + 1) . '</td><td class="txt">' . $e(mb_substr((string) $p['content'], 0, 110)) . (!empty($p['permalink']) && preg_match('#^https://#', (string) $p['permalink']) ? ' <a href="' . $e($p['permalink']) . '" target="_blank" rel="noopener">↗</a>' : '') . '</td><td>' . $e($plat[$p['platform']] ?? $p['platform']) . '</td><td>' . $nf((int) $p['likes']) . '</td><td>' . $nf((int) $p['comments']) . '</td><td>' . $nf((int) $p['shares']) . '</td><td>' . $nf($p['reach'] === null ? null : (int) $p['reach']) . '</td><td>' . ((int) ($p['bookings'] ?? 0) ? '<b>' . (int) $p['bookings'] . '</b>' : '–') . '</td></tr>';
         }
         $times = '';
         foreach ($d['best_times'] as $i => $bt) {
@@ -255,7 +316,7 @@ final class SocialReport
         $logo = !empty($brand['logo']) ? '<img src="' . $e($brand['logo']) . '" alt="" class="logo">' : '';
         $dir = $ar ? 'rtl' : 'ltr';
         $lang = $ar ? 'ar' : 'en';
-        $empty = '<tr><td colspan="7" class="muted">' . $t('مفيش بيانات مقاسة في الشهر ده - اضغط "تحديث التفاعل" في صفحة السوشيال.', 'No measured data for this month — press "Refresh engagement" on the Social page.') . '</td></tr>';
+        $empty = '<tr><td colspan="8" class="muted">' . $t('مفيش بيانات مقاسة في الشهر ده - اضغط "تحديث التفاعل" في صفحة السوشيال.', 'No measured data for this month — press "Refresh engagement" on the Social page.') . '</td></tr>';
         $prevMonth = gmdate('Y-m', strtotime($d['month'] . '-01 -1 month'));
         $nextMonth = gmdate('Y-m', strtotime($d['month'] . '-01 +1 month'));
 
@@ -272,8 +333,9 @@ final class SocialReport
             . '<section><h2>' . $t('توصيات للشهر الجاي', 'Recommendations for next month') . '</h2><ul class="ins">' . ($insights ?: '<li class="muted">' . $t('الأداء مستقر - كمّل على نفس الخطة.', 'Performance is stable — keep the current plan.') . '</li>') . '</ul></section>'
             . '<section><h2>' . $t('الأداء حسب المنصة', 'By platform') . '</h2><div class="scroll"><table><tr><th>' . $t('المنصة', 'Platform') . '</th><th>' . $t('منشورات', 'Posts') . '</th><th>' . $t('الوصول', 'Reach') . '</th><th>' . $t('التفاعل', 'Engagement') . '</th><th>' . $t('متوسط/منشور', 'Avg/post') . '</th><th>' . $t('فشل', 'Failed') . '</th></tr>' . ($platRows ?: $empty) . '</table></div></section>'
             . '<section><h2>' . $t('الأداء حسب نوع المحتوى', 'By content format') . '</h2><div class="scroll"><table><tr><th>' . $t('النوع', 'Format') . '</th><th>' . $t('منشورات', 'Posts') . '</th><th>' . $t('متوسط نقاط التفاعل', 'Avg engagement score') . '</th><th>' . $t('متوسط الوصول', 'Avg reach') . '</th></tr>' . ($fmtRows ?: $empty) . '</table></div><p class="muted" style="font-size:12px">' . $t('نقاط التفاعل = لايك + تعليق×2 + مشاركة×3', 'Engagement score = likes + comments×2 + shares×3') . '</p></section>'
-            . '<section><h2>' . $t('أفضل 5 منشورات', 'Top 5 posts') . '</h2><div class="scroll"><table><tr><th>#</th><th>' . $t('المنشور', 'Post') . '</th><th>' . $t('المنصة', 'Platform') . '</th><th>👍</th><th>💬</th><th>🔁</th><th>👁</th></tr>' . ($topRows ?: $empty) . '</table></div></section>'
+            . '<section><h2>' . $t('أفضل 5 منشورات', 'Top 5 posts') . '</h2><div class="scroll"><table><tr><th>#</th><th>' . $t('المنشور', 'Post') . '</th><th>' . $t('المنصة', 'Platform') . '</th><th>👍</th><th>💬</th><th>🔁</th><th>👁</th><th>🧾</th></tr>' . ($topRows ?: $empty) . '</table></div></section>'
             . '<section><h2>' . $t('أفضل مواعيد النشر', 'Best publishing times') . ' <span class="muted" style="font-size:12px">(' . $e($d['timezone']) . ')</span></h2>' . ($times ? '<ul class="times">' . $times . '</ul>' : '<p class="muted">' . $t('محتاجين ' . SocialBestTimes::MIN_MEASURED . ' منشورات متقاسة على الأقل عشان نحدد مواعيدك الفعلية.', 'We need at least ' . SocialBestTimes::MIN_MEASURED . ' measured posts to determine your real best times.') . '</p>') . '</section>'
+            . self::growthHtml($d['growth'] ?? [], $t, $nf, $plat)
             . $commentsHtml
             . '<footer>' . $t('الأرقام من Meta Graph API (الوصول = مشاهدون فريدون). تيك توك ويوتيوب بيتحسبوا في عدد المنشورات بس.', 'Figures from Meta Graph API (reach = unique viewers). TikTok and YouTube count toward post volume only.') . '</footer></div></body></html>';
     }

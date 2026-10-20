@@ -9,7 +9,10 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
 ?>
 <link rel="stylesheet" href="<?= $cssUrl ?>">
 <link rel="stylesheet" href="<?= $monthlyCss ?>">
-<div id="spRoot" class="sp-root" data-lang="<?= $ar ? 'ar' : 'en' ?>">
+<div id="spRoot" class="sp-root" data-lang="<?= $ar ? 'ar' : 'en' ?>" data-can="<?= htmlspecialchars(implode(',', $team['can'] ?? ['view', 'draft', 'publish', 'inbox', 'manage']), ENT_QUOTES, 'UTF-8') ?>" data-role="<?= htmlspecialchars((string) ($team['role'] ?? 'admin'), ENT_QUOTES, 'UTF-8') ?>">
+<?php if (!empty($team['member'])): ?>
+    <div class="alert alert-info sp-small"><?= $t('انت داخل كعضو في فريق الحساب بدور: ', 'You are working as a team member with the role: ') ?><b><?= htmlspecialchars((string) $team['role'], ENT_QUOTES, 'UTF-8') ?></b><?= in_array('publish', $team['can'] ?? [], true) ? '' : $t(' — المنشورات اللي بتعملها بتروح للمدير يعتمدها قبل النشر.', ' — posts you create go to a manager for approval before publishing.') ?></div>
+<?php endif; ?>
 
     <div class="sp-hero">
         <div>
@@ -27,6 +30,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
         <button class="p-tab active" role="tab" data-tab="overview" type="button">📊 <?= $t('نظرة عامة', 'Overview') ?></button>
         <button class="p-tab" role="tab" data-tab="posts" type="button">🗂 <?= $t('المنشورات والتقويم', 'Posts & calendar') ?></button>
         <button class="p-tab" role="tab" data-tab="inbox" type="button">💬 <?= $t('صندوق التعليقات', 'Comments inbox') ?> <span class="sp-badge" id="spInboxBadge" hidden></span></button>
+        <button class="p-tab" role="tab" data-tab="competitors" type="button">🔭 <?= $t('المنافسين', 'Competitors') ?></button>
         <button class="p-tab" role="tab" data-tab="plan" type="button">🗓 <?= $t('الخطة الشهرية', 'Monthly plan') ?></button>
         <button class="p-tab" role="tab" data-tab="accounts" type="button">🔗 <?= $t('الحسابات', 'Accounts') ?></button>
     </nav>
@@ -54,12 +58,14 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
             <div class="p-card stat-tile"><div class="stat-icon orange">🔁</div><div class="stat-info"><div class="stat-value" id="stShares">–</div><div class="stat-label"><?= $t('مشاركات', 'Shares') ?></div></div></div>
         </div>
 
+        <div class="p-card sp-roi" id="spRoi" hidden></div>
         <div class="p-card sp-health" id="spHealth" hidden></div>
 
         <div class="p-grid cols-2 sp-gap">
             <div class="p-card"><div class="p-card-head"><h3>📈 <?= $t('النشر اليومي', 'Daily publishing') ?></h3><span class="p-card-sub" id="spDailySub"></span></div><div class="sp-bars" id="spDaily"></div><div class="sp-axis p-cell-muted" id="spDailyAxis"></div></div>
             <div class="p-card"><div class="p-card-head"><h3>📊 <?= $t('حسب المنصة', 'By platform') ?></h3></div><div id="spPlat" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
         </div>
+        <div class="p-card sp-gap" id="spGrowthCard" hidden><div class="p-card-head"><h3>👥 <?= $t('نمو المتابعين', 'Follower growth') ?></h3><span class="p-card-sub"><?= $t('لقطة يومية لكل حساب', 'Daily snapshot per account') ?></span></div><div id="spGrowth" class="sp-growth"></div></div>
         <div class="p-grid cols-2 sp-gap">
             <div class="p-card"><div class="p-card-head"><h3>⏰ <?= $t('أفضل مواعيد النشر', 'Best times to post') ?></h3><span class="p-card-sub" id="spBestSub"></span></div><div id="spBest" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
             <div class="p-card"><div class="p-card-head"><h3>🏆 <?= $t('أعلى المنشورات تفاعلًا', 'Top posts by engagement') ?></h3></div><div id="spTop" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
@@ -82,7 +88,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                 </select>
                 <select id="spFPlat" class="p-select" aria-label="<?= $t('المنصة', 'Platform') ?>">
                     <option value=""><?= $t('كل المنصات', 'All platforms') ?></option>
-                    <option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="youtube">YouTube</option>
+                    <option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="youtube">YouTube</option><option value="google_business">Google Business</option><option value="threads">Threads</option><option value="linkedin">LinkedIn</option>
                 </select>
             </div>
             <div class="p-table-scroll"><table class="p-table" id="postsTable">
@@ -120,14 +126,59 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                 <button class="p-btn outline" type="button" id="ibSync">↻ <?= $t('اسحب التعليقات الجديدة', 'Fetch new comments') ?></button>
                 <span class="p-cell-muted sp-note" id="ibCounts"></span>
             </div>
+            <details class="sp-autobox" id="ibSettingsBox">
+                <summary>🤖 <?= $t('الرد الخاص التلقائي على أسئلة السعر والحجز', 'Automatic private replies to price & booking questions') ?> <span class="sp-badge" id="ibAutoState"></span></summary>
+                <p class="p-cell-muted sp-small"><?= $t('أول ما حد يكتب "بكام؟" أو "عايز أحجز" تحت منشورك، المنصة تبعتله رسالة خاصة (ماسنجر/دايركت) بالتفاصيل ورابط الحجز، وترد علنيًا إنها بعتتله. ده بيحوّل التعليقات لحجوزات وانت نايم.', 'When someone comments "how much?" or "I want to book", the platform sends them a private message (Messenger/Direct) with details and your booking link, and replies publicly that it did. Comments turn into bookings while you sleep.') ?></p>
+                <label class="sp-check"><input type="checkbox" id="ibAuto"> <b><?= $t('تفعيل الرد الخاص التلقائي', 'Enable automatic private replies') ?></b></label>
+                <div class="sp-row sp-small" id="ibIntents">
+                    <label class="sp-radio"><input type="checkbox" value="price" checked> 💰 <?= $t('أسئلة السعر', 'Price questions') ?></label>
+                    <label class="sp-radio"><input type="checkbox" value="booking" checked> 📅 <?= $t('طلبات الحجز/التفاصيل', 'Booking / details requests') ?></label>
+                    <label class="sp-radio"><input type="checkbox" value="question"> ❓ <?= $t('الأسئلة العامة', 'General questions') ?></label>
+                </div>
+                <label class="sp-field"><?= $t('الرسالة الخاصة', 'Private message') ?> <span class="p-cell-muted sp-small"><?= $t('متغيرات: {name} الاسم، {company} الشركة، {link} رابط الحجز', 'Variables: {name}, {company}, {link}') ?></span><textarea id="ibTemplate" rows="4" class="p-select" maxlength="1500"></textarea></label>
+                <label class="sp-field"><?= $t('الرد العلني القصير', 'Short public reply') ?><input type="text" id="ibAck" class="p-select" maxlength="300"></label>
+                <div class="sp-row sp-gap-s"><button type="button" class="p-btn primary sm" id="ibSaveSettings"><?= $t('حفظ', 'Save') ?></button><span class="p-cell-muted sp-small"><?= $t('محتاج صلاحية رسائل الصفحة من Meta (pages_messaging). Meta بتسمح برسالة خاصة واحدة لكل تعليق خلال 7 أيام.', 'Requires Meta page messaging permission (pages_messaging). Meta allows one private message per comment within 7 days.') ?></span></div>
+            </details>
             <div id="ibNotice"></div>
             <div id="ibList" class="ib-list"><span class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></span></div>
         </div>
     </section>
 
+    <!-- ============ المنافسين ============ -->
+    <section class="sp-panel" data-panel="competitors" hidden>
+        <div class="p-card">
+            <div class="p-card-head"><h3>🔭 <?= $t('مراقبة المنافسين على إنستجرام', 'Instagram competitor monitoring') ?></h3><button class="p-btn outline sm" type="button" id="cpRefresh">↻ <?= $t('تحديث', 'Refresh') ?></button></div>
+            <p class="p-cell-muted sp-small"><?= $t('ضيف لحد 5 حسابات بيزنس منافسة. كل يوم بنجيب متابعينهم ومعدل نشرهم ومتوسط تفاعلهم وأنجح منشوراتهم وهاشتاجاتهم، ونقارنهم بحسابك.', 'Add up to 5 competing business accounts. Every day we fetch their followers, posting rhythm, average engagement, top posts and hashtags, and compare them to your account.') ?></p>
+            <form class="sp-row" id="cpForm" onsubmit="return false">
+                <input type="text" id="cpUser" class="p-select sp-grow" placeholder="<?= $t('اسم الحساب أو الرابط - مثال: @competitor_tours', 'Username or link — e.g. @competitor_tours') ?>" maxlength="80" dir="ltr">
+                <button class="p-btn primary" type="submit" id="cpAdd">＋ <?= $t('إضافة منافس', 'Add competitor') ?></button>
+            </form>
+            <div id="cpInsights"></div>
+            <div id="cpList" class="cp-list"><span class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></span></div>
+        </div>
+    </section>
+
     <!-- ============ الخطة الشهرية ============ -->
     <section class="sp-panel" data-panel="plan" hidden>
+<?php if (!empty($team['member'])): ?>
+        <div class="p-card"><div class="p-empty">🗓 <?= $t('الخطة الشهرية بيجهزها ويعتمدها صاحب الحساب. تقدر تشوف منشوراتها المجدولة في تبويب «المنشورات والتقويم».', 'The monthly plan is prepared and approved by the account owner. You can see its scheduled posts in the "Posts & calendar" tab.') ?></div></div>
+<?php else: ?>
+        <div class="p-card sp-share" id="shareCard">
+            <div class="p-card-head"><h3>🤝 <?= $t('موافقة العميل على الخطة', 'Client approval') ?></h3></div>
+            <p class="p-cell-muted sp-small"><?= $t('ابعت لصاحب الشركة رابط خاص يشوف فيه منشورات الشهر بالصور والنصوص والمواعيد، ويكتب ملاحظاته أو يعتمد الخطة من غير ما يسجّل دخول. كل رد بيوصلك إشعار.', 'Send the business owner a private link to review the month\'s posts with images, captions and dates, leave comments or approve — no login needed. You get notified on every response.') ?></p>
+            <div class="sp-row">
+                <select id="shPlan" class="p-select" aria-label="<?= $t('الخطة', 'Plan') ?>"></select>
+                <input type="text" id="shClient" class="p-select" maxlength="120" placeholder="<?= $t('اسم العميل (اختياري)', 'Client name (optional)') ?>">
+                <select id="shDays" class="p-select"><option value="7">7 <?= $t('أيام', 'days') ?></option><option value="14" selected>14 <?= $t('يوم', 'days') ?></option><option value="30">30 <?= $t('يوم', 'days') ?></option></select>
+                <label class="sp-radio"><input type="checkbox" id="shApprove" checked> <?= $t('يقدر يعتمد الخطة', 'Can approve') ?></label>
+                <button type="button" class="p-btn primary sm" id="shCreate">🔗 <?= $t('اعمل رابط', 'Create link') ?></button>
+            </div>
+            <div id="shNew"></div>
+            <div id="shLinks"></div>
+            <div id="shFeedback"></div>
+        </div>
         <section id="monthlySocialRoot" class="smp-root p-card" data-user-id="<?= (int) $uid ?>" aria-label="<?= $t('الخطة الشهرية', 'Monthly social media plan') ?>"><p><?= $t('جارِ تحميل الخطط الشهرية…', 'Loading monthly plans…') ?></p></section>
+<?php endif; ?>
     </section>
 
     <!-- ============ الحسابات ============ -->
@@ -139,6 +190,9 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                 <a class="sp-conn fb" href="/ads/connect/meta?for=social"><b>Facebook + Instagram</b><span><?= $t('صفحات فيسبوك وحسابات إنستجرام بيزنس: منشورات، ريلز، ألبومات، ستوري، تعليقات', 'Facebook Pages & Instagram Business: posts, reels, albums, stories, comments') ?></span></a>
                 <a class="sp-conn tt" href="/social/connect/tiktok"><b>TikTok</b><span><?= $t('فيديوهات قصيرة بإعدادات الخصوصية المطلوبة من تيك توك', 'Short videos with TikTok\'s required privacy settings') ?></span></a>
                 <a class="sp-conn yt" href="/social/connect/youtube"><b>YouTube Shorts</b><span><?= $t('رفع الفيديوهات القصيرة على قناتك', 'Upload short videos to your channel') ?></span></a>
+                <a class="sp-conn gb" href="/reputation/platforms"><b>Google Business</b><span><?= $t('منشورات على ملفك في خرائط وبحث جوجل (صورة + زرار احجز/اعرف أكتر)', 'Posts on your Google Maps & Search profile (photo + book/learn-more button)') ?></span></a>
+                <a class="sp-conn th" href="/social/connect/threads"><b>Threads</b><span><?= $t('نص وصور وفيديو على Threads (حتى 500 حرف)', 'Text, photos and video on Threads (up to 500 characters)') ?></span></a>
+                <a class="sp-conn li" href="/social/connect/linkedin"><b>LinkedIn</b><span><?= $t('بروفايلك وصفحات شركتك: مناسب لعملاء الشركات والرحلات الجماعية', 'Your profile and company pages — great for corporate & group travel') ?></span></a>
             </div>
             <details class="sp-help">
                 <summary><?= $t('ليه صندوق التعليقات أو أول تعليق مش شغالين؟', 'Why don\'t the comments inbox or first comment work?') ?></summary>
@@ -203,6 +257,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                         <details class="sp-more">
                             <summary><?= $t('خيارات متقدمة: أول تعليق وتتبّع الروابط', 'Advanced: first comment & link tracking') ?></summary>
                             <label class="sp-field"><?= $t('أول تعليق تلقائي (رابط الحجز أو سؤال للجمهور) - فيسبوك وإنستجرام', 'Automatic first comment (booking link or a question) — Facebook & Instagram') ?><textarea id="firstCommentInput" rows="2" class="p-select" maxlength="2000"></textarea></label>
+                            <label class="sp-check"><input type="checkbox" id="trackOn" checked> <?= $t('🔗 روابط تتبّع الحجوزات: روابط موقعك بتتحول لروابط قصيرة، وتعرف كل منشور جاب كام زيارة وكام حجز وكام فلوس', '🔗 Booking-tracking links: your website links become short links so you see visits, bookings and revenue per post') ?></label>
                             <label class="sp-check"><input type="checkbox" id="utmOn" checked> <?= $t('تتبّع روابط موقعي بـ UTM (تعرف الحجوزات جت من أنهي منشور في Google Analytics)', 'Track my website links with UTM (see which post brought bookings in Google Analytics)') ?></label>
                             <label class="sp-field"><?= $t('اسم الحملة', 'Campaign name') ?><input type="text" id="utmCampaign" class="p-select" maxlength="60"></label>
                         </details>
@@ -251,5 +306,5 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
     </div>
 </div>
 <script defer src="<?= $pickerJs ?>"></script>
-<script defer src="<?= $monthlyJs ?>"></script>
+<?php if (empty($team['member'])): ?><script defer src="<?= $monthlyJs ?>"></script><?php endif; ?>
 <script defer src="<?= $jsUrl ?>"></script>

@@ -291,6 +291,17 @@ PROMPT;
         if ($campaign !== '') {
             $post->setAttribute('utm_campaign', $campaign);
         }
+        // روابط قصيرة لتتبّع الحجوزات + بيانات الموافقة (migration 2026_10_21) - بتتكتب بس لو الأعمدة موجودة
+        if (self::growthSchema()) {
+            if (!empty($data['track_links'])) {
+                $post->setAttribute('track_links', 1);
+            }
+            foreach (['approval_state', 'requested_targets_json', 'created_by'] as $k) {
+                if (isset($data[$k]) && $data[$k] !== '') {
+                    $post->setAttribute($k, $data[$k]);
+                }
+            }
+        }
         $post->save();
         $postId = (int) $post->getAttribute('id');
         foreach ($albumIds as $pos => $aid) {
@@ -338,6 +349,32 @@ PROMPT;
         }
     }
 
+    /**
+     * إضافة أهداف نشر لمنشور موجود (اعتماد منشور الفريق): نفس منطق createPost للأهداف بالظبط.
+     * @param array $targets كل عنصر: ['platform_connection_id'=>int,'scheduled_at'=>?string UTC]
+     */
+    public function addTargets(int $postId, array $targets): void
+    {
+        $this->immediateJobIds = [];
+        $queue = Container::getInstance()->make(QueueManager::class);
+        foreach ($targets as $target) {
+            $scheduledAt = $target['scheduled_at'] ?? null;
+            $postTarget = new SocialPostTarget([
+                'social_post_id' => $postId,
+                'platform_connection_id' => $target['platform_connection_id'],
+                'scheduled_at' => $scheduledAt,
+                'status' => 'scheduled',
+            ]);
+            $postTarget->save();
+            $delaySeconds = $scheduledAt ? max(0, strtotime($scheduledAt . ' UTC') - time()) : 0;
+            $jobId = $queue->push(PublishSocialPostJob::class, ['social_post_target_id' => (int) $postTarget->getAttribute('id')], 'social', $delaySeconds);
+            if ($delaySeconds === 0 && $jobId) {
+                $this->immediateJobIds[] = (int) $jobId;
+            }
+        }
+        Database::getInstance()->query("UPDATE social_posts SET status = 'scheduled' WHERE id = ?", [$postId]);
+    }
+
     /** ids الصور المتعددة: أرقام فريدة موجبة بالترتيب. أقل من 2 = مش ألبوم. أكتر من 10 = خطأ (حد فيسبوك/إنستجرام) */
     public static function normalizeAlbumIds($raw): array
     {
@@ -370,6 +407,21 @@ PROMPT;
             }
         }
         return self::$proSchema;
+    }
+
+    private static ?bool $growthSchema = null;
+
+    /** أعمدة تتبّع الحجوزات وموافقة الفريق موجودة؟ (migration 2026_10_21_000001_social_growth) */
+    public static function growthSchema(): bool
+    {
+        if (self::$growthSchema === null) {
+            try {
+                self::$growthSchema = (bool) Database::getInstance()->query("SHOW COLUMNS FROM social_posts LIKE 'approval_state'");
+            } catch (Throwable $e) {
+                self::$growthSchema = false;
+            }
+        }
+        return self::$growthSchema;
     }
 
     public static function albumTableExists(): bool

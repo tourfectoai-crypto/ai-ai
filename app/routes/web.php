@@ -116,6 +116,10 @@ $router->get('/social/connect/tiktok/callback', 'SocialMediaController', 'tikTok
 $router->get('/social/connect/youtube', 'SocialMediaController', 'connectYouTube', ['AuthMiddleware']);
 $router->get('/social/connect/youtube/callback', 'SocialMediaController', 'youTubeOAuthCallback', ['AuthMiddleware']);
 $router->get('/social/report', 'SocialMediaController', 'report', ['AuthMiddleware']);
+$router->get('/social/connect/threads', 'SocialMediaController', 'connectThreads', ['AuthMiddleware']);
+$router->get('/social/connect/threads/callback', 'SocialMediaController', 'threadsCallback', ['AuthMiddleware']);
+$router->get('/social/connect/linkedin', 'SocialMediaController', 'connectLinkedIn', ['AuthMiddleware']);
+$router->get('/social/connect/linkedin/callback', 'SocialMediaController', 'linkedInCallback', ['AuthMiddleware']);
 $router->get('/creative-studio', 'CreativeStudioController', 'index', ['AuthMiddleware']);
 $router->get('/marketing-assistant', 'MarketingAssistantController', 'index', ['AuthMiddleware']);
 $router->get('/agency', 'AgencyController', 'index', ['AuthMiddleware']);
@@ -156,6 +160,10 @@ $router->get('/ads/connect/google', 'AdsController', 'connectGoogleAds', ['AuthM
 $router->get('/ads/connect/google/callback', 'AdsController', 'googleAdsOAuthCallback', ['AuthMiddleware']);
 $router->get('/ads/connect/google/choose', 'AdsController', 'showGoogleAdsAccountPicker', ['AuthMiddleware']);
 $router->get('/r/{code}', 'AdsController', 'redirectUtmClick');
+$router->get('/go/{code}', 'SocialLinkController', 'go');
+$router->get('/review/{token}', 'SocialReviewController', 'show');
+$router->get('/review/{token}/media/{item}', 'SocialReviewController', 'media');
+$router->post('/review/{token}/feedback', 'SocialReviewController', 'feedback');
 $router->get('/crm', 'CrmController', 'index', ['AuthMiddleware']);
 $router->get('/crm/leads', 'CrmController', 'showLeads', ['AuthMiddleware']);
 $router->get('/crm/deals', 'CrmController', 'showDeals', ['AuthMiddleware']);

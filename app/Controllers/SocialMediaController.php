@@ -8,10 +8,18 @@ require_once __DIR__ . '/../Services/SocialMedia/PublishHealthReport.php';
 require_once __DIR__ . '/../Services/SocialMedia/MediaPreflight.php';
 require_once __DIR__ . '/../Services/SocialMedia/MetaSocialAPI.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialLinkTracker.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialAttribution.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialCommentInbox.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialBestTimes.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialReport.php';
 require_once __DIR__ . '/../Jobs/SyncSocialCommentsJob.php';
+require_once __DIR__ . '/../Jobs/SocialDailyInsightsJob.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialGrowth.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialCompetitors.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialPlanShare.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialTeam.php';
+require_once __DIR__ . '/../Services/SocialMedia/ThreadsAPI.php';
+require_once __DIR__ . '/../Services/SocialMedia/LinkedInAPI.php';
 require_once __DIR__ . '/../Jobs/ReconcileUncertainPostsJob.php';
 require_once __DIR__ . '/../Jobs/CheckSocialConnectionsHealthJob.php';
 
@@ -32,6 +40,26 @@ class SocialMediaController extends Controller
         $this->service = new SocialPostService();
     }
 
+    /** @var array|null سياق الفريق (الحساب اللي بنشتغل عليه + الدور) */
+    private ?array $teamCtx = null;
+
+    private function team(): array
+    {
+        return $this->teamCtx ??= SocialTeam::context((int) ($this->user['id'] ?? 0));
+    }
+
+    /** الحساب اللي بيانات السوشيال بتاعته (صاحب الشركة حتى لو اللي داخل عضو في فريقه) */
+    private function uid(): int
+    {
+        return (int) $this->team()['account_id'];
+    }
+
+    /** null = مسموح، أو خطأ 403 لو دور العضو في الفريق ما يسمحش */
+    private function guard(string $permission): ?array
+    {
+        return SocialTeam::can($this->team(), $permission) ? null : $this->error('دورك في فريق الحساب ما بيسمحش بالخطوة دي - اطلبها من مدير الحساب', 403);
+    }
+
     /** GET /social */
     public function index(array $params = []): array
     {
@@ -40,6 +68,7 @@ class SocialMediaController extends Controller
             ReconcileUncertainPostsJob::ensureScheduled();
             CheckSocialConnectionsHealthJob::ensureScheduled();
             SyncSocialCommentsJob::ensureScheduled();
+            SocialDailyInsightsJob::ensureScheduled();
         } catch (Throwable $e) {
         }
         $ar = current_lang() === 'ar';
@@ -52,7 +81,8 @@ class SocialMediaController extends Controller
         };
         $body = $view([
             'ar' => $ar,
-            'uid' => (int) ($this->user['id'] ?? 0),
+            'uid' => $this->uid(),
+            'team' => $this->team(),
             'cssUrl' => $asset('/assets/css/social-pro.css'),
             'jsUrl' => $asset('/assets/js/social-pro.js'),
             'monthlyCss' => $asset('/assets/css/social-monthly-plans.css'),
@@ -76,9 +106,10 @@ class SocialMediaController extends Controller
     {
         if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
         $write=in_array($action,['create','edit','approve','pause','resume','cancel'],true);
+        if($write&&($denied=$this->guard('manage')))return $denied;
         if($write&&($error=$this->verifyCsrf()))return $error;
         if($write&&($error=$this->rateLimitGuard('user',$action==='create'?'social_monthly_ai':'social_monthly_write',$action==='create'?4:40,60)))return $error;
-        $uid=(int)$this->user['id'];$id=(int)($params['id']??0);$service=new SocialMonthlyPlanService();
+        $uid=$this->uid();$id=(int)($params['id']??0);$service=new SocialMonthlyPlanService();
         try {
             if($action==='setup'){$result=$service->setup($uid);$result['csrf_token']=Csrf::token();return $this->success($result);}
             if($action==='list')return $this->success(['plans'=>$service->listPlans($uid)]);
@@ -86,7 +117,7 @@ class SocialMediaController extends Controller
             if($action==='create')return $this->success($service->create($uid,$this->data),'Monthly generation queued',201);
             if($action==='edit')return $this->success($service->edit($uid,$id,(int)($params['item_id']??0),$this->data));
             if($action==='approve'&&$this->get('reviewed')!==true)return $this->error('Confirm review before automatic publishing.',422);
-            if($action==='approve')return $this->success($service->approve($uid,$id,(int)$this->get('version',0)));
+            if($action==='approve')return $this->success($service->approve($uid,$id,(int)$this->get('version',0),is_array($this->get('tiktok'))?$this->get('tiktok'):null));
             return $this->success($service->changeState($uid,$id,$action));
         }catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
         catch(ProviderRequestFailure $e){return $this->error('تعذر إعداد الخطة. حدّث قائمة الخطط قبل المحاولة مجددًا / Could not prepare the plan. Refresh the list before retrying.',502);}
@@ -108,10 +139,13 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
         if ($rateError = $this->rateLimitGuard('user', 'social_upload', 30, 60)) {
             return $rateError;
         }
-        $r = SocialMediaUpload::handle((int) $this->user['id'], $_FILES['file'] ?? null);
+        $r = SocialMediaUpload::handle($this->uid(), $_FILES['file'] ?? null);
         if (!$r['ok']) {
             return $this->error($r['error'], 422);
         }
@@ -124,11 +158,14 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_brand_kit', 20, 60))) {
             return $error;
         }
         try {
-            $kit = (new SocialBrandStudio())->saveKit((int) $this->user['id'], (int) ($_POST['website_id'] ?? $this->get('website_id', 0)), $_FILES['logo'] ?? null, (string) ($_POST['primary'] ?? $this->get('primary', '')), (string) ($_POST['accent'] ?? $this->get('accent', '')));
+            $kit = (new SocialBrandStudio())->saveKit($this->uid(), (int) ($_POST['website_id'] ?? $this->get('website_id', 0)), $_FILES['logo'] ?? null, (string) ($_POST['primary'] ?? $this->get('primary', '')), (string) ($_POST['accent'] ?? $this->get('accent', '')));
             return $this->success(['brand' => $kit], 'اتحفظت هوية الشركة');
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 422);
@@ -144,13 +181,16 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_site_import', 4, 300))) {
             return $error;
         }
         require_once __DIR__ . '/../Services/SocialMedia/SiteImageImporter.php';
         @set_time_limit(90);
         try {
-            $uid = (int) $this->user['id'];
+            $uid = $this->uid();
             $wid = (int) $this->get('website_id', 0);
             $importer = new SiteImageImporter();
             if ($wid > 0) {
@@ -186,12 +226,15 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_site_scan', 10, 300))) {
             return $error;
         }
         require_once __DIR__ . '/../Services/SocialMedia/SiteImageImporter.php';
         @set_time_limit(90);
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $wid = (int) $this->get('website_id', 0);
         if ($wid < 1) {
             $row = $this->db->query('SELECT id FROM websites WHERE user_id = ? ORDER BY id DESC LIMIT 1', [$uid]);
@@ -222,6 +265,9 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_site_pick', 60, 300))) {
             return $error;
         }
@@ -238,7 +284,7 @@ class SocialMediaController extends Controller
             }
         }
         try {
-            return $this->success((new SiteImageImporter())->importItems((int) $this->user['id'], $clean, $this->get('folders') === true));
+            return $this->success((new SiteImageImporter())->importItems($this->uid(), $clean, $this->get('folders') === true));
         } catch (Throwable $e) {
             Logger::error('Selected image import failed', ['error' => $e->getMessage()]);
             return $this->error('مقدرناش نسحب الصور دلوقتي، جرّب تاني', 500);
@@ -251,11 +297,14 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_learn', 40, 60))) {
             return $error;
         }
         try {
-            $v = (new SocialBrandStudio())->learn((int) $this->user['id'], (int) ($params['id'] ?? 0));
+            $v = (new SocialBrandStudio())->learn($this->uid(), (int) ($params['id'] ?? 0));
             return $this->success(['vision' => $v]);
         } catch (InvalidArgumentException $e) {
             return $this->error('الصورة مش موجودة', 404);
@@ -270,6 +319,9 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_design', 20, 60))) {
             return $error;
         }
@@ -277,7 +329,7 @@ class SocialMediaController extends Controller
         if (mb_strlen($headline) < 3 || mb_strlen($headline) > 90) {
             return $this->error('اكتب عنوان قصير للتصميم (من 3 لـ 90 حرف)', 422);
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $mediaId = (int) $this->get('media_id', 0);
         try {
             $studio = new SocialBrandStudio();
@@ -298,7 +350,10 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
+        $uid = $this->uid();
         $postId = (int) ($params['id'] ?? 0);
         if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $uid])) {
             return $this->error('المنشور مش موجود', 404);
@@ -330,8 +385,11 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
         $postId = (int) ($params['id'] ?? 0);
-        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, (int) $this->user['id']])) {
+        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $this->uid()])) {
             return $this->error('المنشور مش موجود', 404);
         }
         if ($this->db->query("SELECT id FROM social_post_targets WHERE social_post_id = ? AND status = 'publishing' LIMIT 1", [$postId])) {
@@ -383,11 +441,14 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
         if ($csrfError = $this->verifyCsrf()) {
             return $csrfError;
         }
         $postId = (int) ($params['id'] ?? 0);
-        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, (int) $this->user['id']])) {
+        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $this->uid()])) {
             return $this->error('المنشور مش موجود', 404);
         }
         if ($rateError = $this->rateLimitGuard('user', 'social_reconcile', 10, 60)) {
@@ -411,11 +472,14 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
         if ($csrfError = $this->verifyCsrf()) {
             return $csrfError;
         }
         $postId = (int) ($params['id'] ?? 0);
-        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, (int) $this->user['id']])) {
+        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $this->uid()])) {
             return $this->error('المنشور مش موجود', 404);
         }
         $resolution = (string) $this->get('resolution', '');
@@ -438,11 +502,14 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
         if ($csrfError = $this->verifyCsrf()) {
             return $csrfError;
         }
         $postId = (int) ($params['id'] ?? 0);
-        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, (int) $this->user['id']])) {
+        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $this->uid()])) {
             return $this->error('المنشور مش موجود', 404);
         }
         $content = trim((string) $this->get('content', ''));
@@ -489,7 +556,7 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $days = max(1, min(90, (int) $this->get('days', 30)));
         try {
             $rows = $this->db->query(
@@ -527,7 +594,7 @@ class SocialMediaController extends Controller
             return $this->success(['installed' => false, 'comments' => [], 'counts' => ['open' => 0, 'hot' => 0]]);
         }
         try {
-            $r = $inbox->list((int) $this->user['id'], (string) $this->get('status', 'open'), (string) $this->get('intent', ''));
+            $r = $inbox->list($this->uid(), (string) $this->get('status', 'open'), (string) $this->get('intent', ''));
             return $this->success(['installed' => true] + $r);
         } catch (Throwable $e) {
             Logger::error('Social inbox list failed', ['message' => $e->getMessage()]);
@@ -541,6 +608,9 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_sync', 6, 300))) {
             return $error;
         }
@@ -550,7 +620,7 @@ class SocialMediaController extends Controller
         }
         @set_time_limit(120);
         try {
-            return $this->success($inbox->sync((int) $this->user['id'], 15));
+            return $this->success($inbox->sync($this->uid(), 15));
         } catch (Throwable $e) {
             Logger::error('Social inbox sync failed', ['message' => $e->getMessage()]);
             return $this->error('تعذر سحب التعليقات من Meta دلوقتي، جرّب تاني', 500);
@@ -563,11 +633,14 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'ai', 30, 60))) {
             return $error;
         }
         try {
-            $uid = (int) $this->user['id'];
+            $uid = $this->uid();
             return $this->success((new SocialCommentInbox())->suggest($uid, (int) ($params['id'] ?? 0), ContentLanguageService::forUser($uid, null)));
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 404);
@@ -583,11 +656,14 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_reply', 60, 60))) {
             return $error;
         }
         try {
-            return $this->success((new SocialCommentInbox())->reply((int) $this->user['id'], (int) ($params['id'] ?? 0), (string) $this->get('text', '')), 'اتبعت الرد');
+            return $this->success((new SocialCommentInbox())->reply($this->uid(), (int) ($params['id'] ?? 0), (string) $this->get('text', '')), 'اتبعت الرد');
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 422);
         } catch (Throwable $e) {
@@ -601,11 +677,14 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_reply', 60, 60))) {
             return $error;
         }
         try {
-            return $this->success((new SocialCommentInbox())->hide((int) $this->user['id'], (int) ($params['id'] ?? 0)), 'اتخفى التعليق');
+            return $this->success((new SocialCommentInbox())->hide($this->uid(), (int) ($params['id'] ?? 0)), 'اتخفى التعليق');
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 422);
         } catch (Throwable $e) {
@@ -619,14 +698,224 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
         if ($error = $this->verifyCsrf()) {
             return $error;
         }
         try {
-            return $this->success((new SocialCommentInbox())->done((int) $this->user['id'], (int) ($params['id'] ?? 0)));
+            return $this->success((new SocialCommentInbox())->done($this->uid(), (int) ($params['id'] ?? 0)));
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 404);
         }
+    }
+
+    /** POST /api/social/inbox/{id}/private  body: {text?} - رد خاص (ماسنجر/دايركت) لصاحب التعليق */
+    public function inboxPrivate(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_reply', 60, 60))) {
+            return $error;
+        }
+        try {
+            $text = $this->get('text');
+            return $this->success((new SocialCommentInbox())->privateReply($this->uid(), (int) ($params['id'] ?? 0), is_string($text) ? $text : null, (bool) $this->get('ack', false)), 'اتبعت الرد الخاص');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            return $this->error(CustomerError::message($e->getMessage(), 502), 502);
+        }
+    }
+
+    /** GET /api/social/inbox-settings */
+    public function inboxSettings(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $inbox = new SocialCommentInbox();
+        return $this->success(['installed' => $inbox->privateReady()] + $inbox->settings($this->uid()));
+    }
+
+    /** POST /api/social/inbox-settings  body: {auto_private, auto_intents[], private_template, public_ack} */
+    public function inboxSettingsSave(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_settings', 20, 60))) {
+            return $error;
+        }
+        $inbox = new SocialCommentInbox();
+        if (!$inbox->privateReady()) {
+            return $this->error('شغّل migration السوشيال (2026_10_21_000001_social_growth.sql) الأول', 422);
+        }
+        try {
+            return $this->success($inbox->saveSettings($this->uid(), $this->data), 'اتحفظت إعدادات الرد');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // رابط موافقة العميل على الخطة الشهرية
+    // ------------------------------------------------------------------
+
+    /** GET /api/social/monthly-plans/{id}/share - الروابط + ملاحظات العميل */
+    public function planShareList(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $share = new SocialPlanShare();
+        try {
+            $uid = $this->uid();
+            $id = (int) ($params['id'] ?? 0);
+            return $this->success(['installed' => $share->ready(), 'links' => $share->links($uid, $id), 'feedback' => $share->feedback($uid, $id)]);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
+        }
+    }
+
+    /** POST /api/social/monthly-plans/{id}/share  body: {can_approve, client_name, days} */
+    public function planShareCreate(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_plan_share', 10, 300))) {
+            return $error;
+        }
+        try {
+            return $this->success((new SocialPlanShare())->create($this->uid(), (int) ($params['id'] ?? 0), (bool) $this->get('can_approve', true), (string) $this->get('client_name', ''), (int) $this->get('days', 14)), 'اتعمل الرابط', 201);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        }
+    }
+
+    /** POST /api/social/monthly-plans/{id}/share/{link_id}/revoke */
+    public function planShareRevoke(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if ($error = $this->verifyCsrf()) {
+            return $error;
+        }
+        try {
+            return $this->success(['links' => (new SocialPlanShare())->revoke($this->uid(), (int) ($params['id'] ?? 0), (int) ($params['link_id'] ?? 0))], 'اتلغى الرابط');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
+        }
+    }
+
+    /** GET /api/social/me - دور المستخدم في فريق الحساب (للواجهة) */
+    public function me(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $t = $this->team();
+        return $this->success(['role' => $t['role'], 'member' => $t['member'], 'can' => $t['can']]);
+    }
+
+    /** GET /api/social/growth?days=30 - نمو المتابعين لكل حساب (لقطة يومية) */
+    public function growth(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $uid = $this->uid();
+        if (!SocialGrowth::ready()) {
+            return $this->success(['installed' => false, 'accounts' => []]);
+        }
+        // أول مرة النهارده: ناخد لقطة لحسابات العميل فورًا بدل ما يستنى المهمة اليومية (حساباته بس - خفيفة)
+        try {
+            SocialGrowth::snapshot($uid, 10);
+        } catch (Throwable $e) {
+        }
+        return $this->success(['installed' => true, 'accounts' => SocialGrowth::series($uid, (int) $this->get('days', 30))]);
+    }
+
+    /** GET /api/social/competitors */
+    public function competitors(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        return $this->success((new SocialCompetitors())->list($this->uid()));
+    }
+
+    /** POST /api/social/competitors  body: {username} */
+    public function competitorAdd(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_competitors', 10, 300))) {
+            return $error;
+        }
+        try {
+            return $this->success((new SocialCompetitors())->add($this->uid(), (string) $this->get('username', '')), 'اتضاف المنافس');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            Logger::warning('Competitor add failed', ['message' => $e->getMessage()]);
+            return $this->error('مقدرناش نوصل لإنستجرام دلوقتي، جرّب تاني بعد شوية', 502);
+        }
+    }
+
+    /** POST /api/social/competitors/refresh */
+    public function competitorRefresh(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_competitors_refresh', 3, 600))) {
+            return $error;
+        }
+        @set_time_limit(90);
+        $svc = new SocialCompetitors();
+        $svc->refreshUser($this->uid());
+        return $this->success($svc->list($this->uid()));
+    }
+
+    /** POST /api/social/competitors/{id}/delete */
+    public function competitorDelete(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if ($error = $this->verifyCsrf()) {
+            return $error;
+        }
+        $svc = new SocialCompetitors();
+        $svc->remove($this->uid(), (int) ($params['id'] ?? 0));
+        return $this->success($svc->list($this->uid()));
     }
 
     /** GET /api/social/best-times?connection_id= - أفضل مواعيد النشر بتوقيت حساب العميل */
@@ -635,7 +924,7 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $cid = (int) $this->get('connection_id', 0) ?: null;
         $tz = (string) (($this->db->query('SELECT timezone FROM users WHERE id = ?', [$uid])[0]['timezone'] ?? '') ?: 'UTC');
         $samples = SocialBestTimes::samples($uid, $cid);
@@ -653,7 +942,7 @@ class SocialMediaController extends Controller
     /** GET /social/report?month=YYYY-MM - تقرير أداء شهري جاهز للطباعة / الحفظ PDF (بهوية الشركة) */
     public function report(array $params = []): void
     {
-        $uid = (int) ($this->user['id'] ?? 0);
+        $uid = $this->uid();
         $month = (string) ($_GET['month'] ?? '');
         if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/D', $month)) {
             $month = gmdate('Y-m', strtotime('first day of last month'));
@@ -718,9 +1007,9 @@ class SocialMediaController extends Controller
             $all = $this->db->query(
                 "SELECT id, platform, external_location_id, external_location_name AS name, status, last_error
                  FROM platform_connections
-                 WHERE (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND platform IN ('facebook', 'instagram', 'tiktok', 'youtube')
+                 WHERE (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND platform IN ('facebook', 'instagram', 'tiktok', 'youtube', 'google_business', 'threads', 'linkedin')
                  ORDER BY (status = 'connected') DESC, id DESC",
-                [$this->user['id'], $this->user['id']]
+                [$this->uid(), $this->uid()]
             );
             $rows = [];
             $broken = [];
@@ -762,17 +1051,17 @@ class SocialMediaController extends Controller
             return $this->error('Unauthorized', 401);
         }
 
-        $this->catchUpOverdue((int) $this->user['id']);
+        $this->catchUpOverdue($this->uid());
 
         $where = ['sp.user_id = ?'];
-        $args = [(int) $this->user['id']];
+        $args = [$this->uid()];
         $status = (string) $this->get('status', '');
         if (in_array($status, ['draft', 'scheduled', 'publishing', 'published', 'failed', 'partial', 'uncertain'], true)) {
             $where[] = 'sp.status = ?';
             $args[] = $status;
         }
         $platform = (string) $this->get('platform', '');
-        if (in_array($platform, ['facebook', 'instagram', 'tiktok', 'youtube'], true)) {
+        if (in_array($platform, ['facebook', 'instagram', 'tiktok', 'youtube', 'google_business', 'threads', 'linkedin'], true)) {
             $where[] = 'EXISTS (SELECT 1 FROM social_post_targets tt JOIN platform_connections cc ON cc.id = tt.platform_connection_id WHERE tt.social_post_id = sp.id AND cc.platform = ?)';
             $args[] = $platform;
         }
@@ -784,13 +1073,13 @@ class SocialMediaController extends Controller
         $limit = max(10, min(100, (int) $this->get('limit', 50)));
 
         $posts = $this->db->query(
-            'SELECT sp.id, sp.content, sp.status, sp.media_item_id, sp.created_at, ' . (SocialPostService::proSchema() ? 'sp.post_format' : "'feed' AS post_format") . ', m.file_path AS media_path, m.type AS media_type, m.user_id AS media_owner, m.deleted_at AS media_deleted, m.status AS media_status
+            'SELECT sp.id, sp.content, sp.status, sp.media_item_id, sp.created_at, ' . (SocialPostService::proSchema() ? 'sp.post_format' : "'feed' AS post_format") . (SocialPostService::growthSchema() ? ', sp.approval_state, sp.review_note, sp.created_by, (SELECT COALESCE(NULLIF(u.display_name, \'\'), u.first_name, u.email) FROM users u WHERE u.id = sp.created_by) AS author' : '') . ', m.file_path AS media_path, m.type AS media_type, m.user_id AS media_owner, m.deleted_at AS media_deleted, m.status AS media_status
                FROM social_posts sp LEFT JOIN media_items m ON m.id = sp.media_item_id
               WHERE ' . implode(' AND ', $where) . ' ORDER BY sp.created_at DESC, sp.id DESC LIMIT ' . $limit,
             $args
         );
         foreach ($posts as &$mediaPost) {
-            if ((int)($mediaPost['media_owner'] ?? 0) !== (int)$this->user['id'] || !empty($mediaPost['media_deleted']) || ($mediaPost['media_status'] ?? '') !== 'completed') {
+            if ((int)($mediaPost['media_owner'] ?? 0) !== $this->uid() || !empty($mediaPost['media_deleted']) || ($mediaPost['media_status'] ?? '') !== 'completed') {
                 $mediaPost['media_path'] = null;
             } elseif (PrivateMedia::valid((string)($mediaPost['media_path'] ?? ''))) {
                 $mediaPost['media_path'] = PrivateMedia::preview((int)$mediaPost['media_item_id']);
@@ -802,7 +1091,7 @@ class SocialMediaController extends Controller
         $byPost = [];
         if ($ids) {
             $extraT = $this->hasColumn('social_post_targets', 'error_category') ? ', t.error_category, t.error_code, t.retry_count, t.next_retry_at, t.fbtrace_id' : '';
-            $extraM = $this->hasColumn('social_post_metrics', 'views') ? ', pm.views, pm.insights_note' : '';
+            $extraM = ($this->hasColumn('social_post_metrics', 'views') ? ', pm.views, pm.insights_note' : '') . ($this->hasColumn('social_post_metrics', 'saves') ? ', pm.saves' : '');
             $rows = $this->db->query(
                 'SELECT t.id AS target_id, t.social_post_id, t.status, t.last_error, t.scheduled_at, t.published_at, t.external_post_id' . $extraT . ',
                         c.platform, c.external_location_name AS name,
@@ -819,8 +1108,10 @@ class SocialMediaController extends Controller
                 $byPost[(int) $r['social_post_id']][] = $r;
             }
         }
+        $attr = SocialAttribution::forPosts($this->uid(), $ids);
         foreach ($posts as &$p) {
             $p['targets'] = $byPost[(int) $p['id']] ?? [];
+            $p['attribution'] = $attr[(int) $p['id']] ?? null;
             if ($p['targets'] && $p['status'] === 'scheduled') {
                 // منشورات قديمة: الحالة ماكانتش بتتحدث - نحسبها من الأهداف
                 $p['status'] = SocialPostService::refreshPostStatus((int) $p['id']);
@@ -840,7 +1131,7 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $days = max(7, min(90, (int) $this->get('days', 30)));
 
         try {
@@ -939,6 +1230,7 @@ class SocialMediaController extends Controller
                 ],
                 'top_posts' => $top,
                 'samples' => $samples,
+                'bookings' => SocialAttribution::totals($uid, gmdate('Y-m-d H:i:s', time() - $days * 86400), gmdate('Y-m-d H:i:s', time() + 60)),
             ]);
         } catch (Throwable $e) {
             Logger::error('Social stats error', ['message' => $e->getMessage(), 'line' => $e->getLine()]);
@@ -958,7 +1250,7 @@ class SocialMediaController extends Controller
         if ($rateError = $this->rateLimitGuard('user', 'social_metrics', 6, 60)) {
             return $rateError;
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $force = (bool) $this->get('force', false);
         @set_time_limit(90);
 
@@ -988,7 +1280,16 @@ class SocialMediaController extends Controller
                 }
                 if ($res['success']) {
                     $ok++;
-                    if ($this->hasColumn('social_post_metrics', 'views')) {
+                    if ($this->hasColumn('social_post_metrics', 'saves')) {
+                        $this->db->query(
+                            "INSERT INTO social_post_metrics (target_id, likes, comments, shares, reach, views, saves, permalink, state, note, insights_note, fetched_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ok', NULL, ?, NOW())
+                             ON DUPLICATE KEY UPDATE likes = VALUES(likes), comments = VALUES(comments), shares = VALUES(shares),
+                                 reach = VALUES(reach), views = VALUES(views), saves = VALUES(saves), permalink = VALUES(permalink), state = 'ok', note = NULL,
+                                 insights_note = VALUES(insights_note), fetched_at = NOW()",
+                            [(int) $r['id'], $res['likes'], $res['comments'], $res['shares'], $res['reach'], $res['views'] ?? null, $res['saves'] ?? null, $res['permalink'], isset($res['insights_error']) ? mb_substr((string) $res['insights_error'], 0, 290) : null]
+                        );
+                    } elseif ($this->hasColumn('social_post_metrics', 'views')) {
                         // reach هنا = مشاهدون فريدون (post_total_media_view_unique)؛ insights_note بيشرح ليه الرقم فاضي بدل null صامت
                         $this->db->query(
                             "INSERT INTO social_post_metrics (target_id, likes, comments, shares, reach, views, permalink, state, note, insights_note, fetched_at)
@@ -1029,7 +1330,10 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
+        $uid = $this->uid();
         $postId = (int) ($params['id'] ?? 0);
         $rows = $this->db->query('SELECT content, media_item_id, website_id, hashtags FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $uid]);
         if (!$rows) {
@@ -1060,7 +1364,10 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
+        $uid = $this->uid();
         $postId = (int) ($params['id'] ?? 0);
         $rows = $this->db->query('SELECT id, status FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $uid]);
         if (!$rows) {
@@ -1076,7 +1383,7 @@ class SocialMediaController extends Controller
         $at = null;
         $atRaw = trim((string) $this->get('scheduled_at', ''));
         if ($atRaw !== '') {
-            try{$ts=InternationalSettingsService::scheduledTimestamp((int)$this->user['id'],$atRaw);}catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
+            try{$ts=InternationalSettingsService::scheduledTimestamp($this->uid(),$atRaw);}catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
             if ($ts === false || $ts < time() - 60 || $ts > time() + 366 * 86400) {
                 return $this->error('موعد النشر لازم يكون في المستقبل (وخلال سنة)', 422);
             }
@@ -1151,6 +1458,9 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
         // الستوري ما لهاش نص على المنصة: النص هنا ملاحظة داخلية اختيارية
         if ((string) $this->get('post_format', '') === 'story' && trim((string) $this->get('content', '')) === '') {
             $this->data['content'] = 'Story';
@@ -1159,13 +1469,13 @@ class SocialMediaController extends Controller
             return $this->error('Missing data', 422, $this->getErrors());
         }
 
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         // 🔒 الصفحات لازم تكون بتاعة العميل نفسه، والموعد بيتحفظ UTC
         $targets = [];
         foreach ((array) $this->get('targets', []) as $t) {
             $cid = (int) ($t['platform_connection_id'] ?? 0);
             $ok = $cid > 0 && $this->db->query(
-                "SELECT id FROM platform_connections WHERE id = ? AND (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND platform IN ('facebook','instagram','tiktok','youtube') AND status = 'connected' LIMIT 1",
+                "SELECT id FROM platform_connections WHERE id = ? AND (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND platform IN ('facebook','instagram','tiktok','youtube','google_business','threads','linkedin') AND status = 'connected' LIMIT 1",
                 [$cid, $uid, $uid]
             );
             if (!$ok) {
@@ -1246,6 +1556,15 @@ class SocialMediaController extends Controller
         $utm = $this->get('utm_campaign', '');
         $utm = is_string($utm) ? SocialLinkTracker::slug($utm) : '';
 
+        // عضو الفريق اللي ما يقدرش ينشر (مبيعات/دعم): المنشور بيتحفظ مسودة "منتظر الاعتماد" والمدير ينشره بنقرة
+        $needsApproval = $targets && !SocialTeam::can($this->team(), 'publish');
+        if ($needsApproval && !SocialPostService::growthSchema()) {
+            return $this->error('شغّل migration السوشيال (2026_10_21_000001_social_growth.sql) عشان أعضاء الفريق يبعتوا منشورات للاعتماد', 422);
+        }
+        $approvalData = $needsApproval
+            ? ['approval_state' => 'pending', 'requested_targets_json' => json_encode(['targets' => $targets, 'tiktok' => $tiktokOpts]), 'created_by' => (int) ($this->user['id'] ?? 0)]
+            : (SocialPostService::growthSchema() ? ['created_by' => (int) ($this->user['id'] ?? 0)] : []);
+
         try {
             $post = $this->service->createPost(
                 $uid,
@@ -1253,9 +1572,20 @@ class SocialMediaController extends Controller
                 ['content' => $this->get('content'), 'website_id' => $websiteId ?: null, 'media_item_id' => $mediaId ?: null,
                  'media_item_ids' => $albumIds ?: null,
                  'hashtags' => $this->cleanHashtags($this->get('hashtags')), 'first_comment' => $this->cleanFirstComment($this->get('first_comment')),
-                 'post_format' => $format, 'utm_campaign' => $utm],
-                $targets
+                 'post_format' => $format, 'utm_campaign' => $utm, 'track_links' => $format !== 'story' && (bool) $this->get('track_links', false)] + $approvalData,
+                $needsApproval ? [] : $targets
             );
+            if ($needsApproval) {
+                foreach (SocialTeam::approvers($uid) as $approver) {
+                    try {
+                        Notification::notify($approver, 'social_post_approval', 'منشور محتاج اعتمادك', ($this->user['name'] ?? $this->user['email'] ?? 'عضو في الفريق') . ': «' . mb_substr((string) $this->get('content'), 0, 80) . '»', '/social#posts');
+                    } catch (Throwable $e) {
+                    }
+                }
+                $out = $post->toArray();
+                $out['approval_state'] = 'pending';
+                return $this->success(['post' => $out, 'pending_approval' => true], 'اتبعت للمدير يعتمده', 201);
+            }
             if ($tiktokOpts) {
                 $pdo = $this->db->getConnection();
                 foreach ($this->db->query('SELECT id FROM social_post_targets WHERE social_post_id = ? AND platform_connection_id IN (' . implode(',', array_map('intval', $tiktokIds)) . ')', [(int) $post->getAttribute('id')]) ?: [] as $row) {
@@ -1276,6 +1606,82 @@ class SocialMediaController extends Controller
             Logger::error('createPost Error', ['message' => $e->getMessage()]);
             return $this->error('Could not create the post', 500);
         }
+    }
+
+    /**
+     * POST /api/social/posts/{id}/review  body: {decision: approve|reject, note}
+     * المدير بيعتمد منشور عضو الفريق (بيتنشر/يتجدول بنفس الصفحات والمواعيد اللي اختارها العضو) أو يرفضه بملاحظة.
+     */
+    public function reviewPost(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
+        if ($error = $this->verifyCsrf()) {
+            return $error;
+        }
+        $uid = $this->uid();
+        $postId = (int) ($params['id'] ?? 0);
+        if (!SocialPostService::growthSchema()) {
+            return $this->error('شغّل migration السوشيال (2026_10_21_000001_social_growth.sql) الأول', 422);
+        }
+        $row = $this->db->query("SELECT id, approval_state, requested_targets_json, created_by, content FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1", [$postId, $uid])[0] ?? null;
+        if (!$row || $row['approval_state'] !== 'pending') {
+            return $this->error('المنشور مش منتظر اعتماد', 422);
+        }
+        $decision = (string) $this->get('decision', '');
+        $note = mb_substr(trim((string) $this->get('note', '')), 0, 500);
+        $reviewer = (int) ($this->user['id'] ?? 0);
+        if ($decision === 'reject') {
+            $this->db->query("UPDATE social_posts SET approval_state = 'rejected', reviewed_by = ?, review_note = ? WHERE id = ?", [$reviewer, $note ?: null, $postId]);
+            if ((int) $row['created_by']) {
+                try {
+                    Notification::notify((int) $row['created_by'], 'social_post_rejected', 'منشورك محتاج تعديل', ($note ?: 'المدير رجّع المنشور للتعديل') . ' — «' . mb_substr((string) $row['content'], 0, 60) . '»', '/social#posts');
+                } catch (Throwable $e) {
+                }
+            }
+            return $this->success(['approval_state' => 'rejected']);
+        }
+        if ($decision !== 'approve') {
+            return $this->error('القرار لازم يكون approve أو reject', 422);
+        }
+        $req = json_decode((string) $row['requested_targets_json'], true) ?: [];
+        $targets = [];
+        foreach ((array) ($req['targets'] ?? []) as $t) {
+            $cid = (int) ($t['platform_connection_id'] ?? 0);
+            if (!$cid || !$this->db->query("SELECT id FROM platform_connections WHERE id = ? AND (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND status = 'connected' LIMIT 1", [$cid, $uid, $uid])) {
+                return $this->error('صفحة من الصفحات المختارة اتفصلت - اربطها تاني أو عدّل المنشور', 422);
+            }
+            $at = $t['scheduled_at'] ?? null;
+            // الميعاد اللي عدّى وقت ما المدير بيعتمد: يتنشر دلوقتي بدل ما يضيع
+            $targets[] = ['platform_connection_id' => $cid, 'scheduled_at' => ($at && strtotime($at . ' UTC') > time() + 60) ? $at : null];
+        }
+        if (!$targets) {
+            return $this->error('المنشور مالوش صفحات نشر', 422);
+        }
+        try {
+            $this->service->addTargets($postId, $targets);
+            if (!empty($req['tiktok'])) {
+                foreach ($this->db->query("SELECT t.id FROM social_post_targets t JOIN platform_connections c ON c.id = t.platform_connection_id WHERE t.social_post_id = ? AND c.platform = 'tiktok'", [$postId]) ?: [] as $tt) {
+                    TikTokAPI::saveOptions($this->db->getConnection(), (int) $tt['id'], $req['tiktok']);
+                }
+            }
+            $this->db->query("UPDATE social_posts SET approval_state = 'approved', reviewed_by = ?, review_note = ? WHERE id = ?", [$reviewer, $note ?: null, $postId]);
+            SocialPostService::runNow($this->service->immediateJobIds);
+        } catch (Throwable $e) {
+            Logger::error('reviewPost approve failed', ['message' => $e->getMessage()]);
+            return $this->error('تعذر اعتماد المنشور', 500);
+        }
+        if ((int) $row['created_by'] && (int) $row['created_by'] !== $reviewer) {
+            try {
+                Notification::notify((int) $row['created_by'], 'social_post_approved', 'منشورك اتعتمد ✅', '«' . mb_substr((string) $row['content'], 0, 60) . '»', '/social#posts');
+            } catch (Throwable $e) {
+            }
+        }
+        return $this->success(['approval_state' => 'approved', 'status' => SocialPostService::refreshPostStatus($postId)]);
     }
 
     /**
@@ -1300,7 +1706,7 @@ class SocialMediaController extends Controller
                  WHERE sp.user_id = ? AND COALESCE(spt.scheduled_at, spt.published_at) IS NOT NULL
                  AND COALESCE(spt.scheduled_at, spt.published_at) BETWEEN DATE_SUB(NOW(), INTERVAL 14 DAY) AND DATE_ADD(NOW(), INTERVAL 35 DAY)
                  ORDER BY COALESCE(spt.scheduled_at, spt.published_at) ASC",
-                [$this->user['id']]
+                [$this->uid()]
             );
             return $this->success(['items' => $rows]);
         } catch (Exception $e) {
@@ -1315,6 +1721,9 @@ class SocialMediaController extends Controller
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
         if ($rateError = $this->rateLimitGuard('user', 'ai', 20, 60)) {
             return $rateError;
         }
@@ -1322,7 +1731,7 @@ class SocialMediaController extends Controller
             return $this->error('Topic is required', 422);
         }
 
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $wid = (int) $this->get('website_id', 0) ?: null;
         if ($wid && !$this->db->query('SELECT id FROM websites WHERE id = ? AND user_id = ? LIMIT 1', [$wid, $uid])) {
             $wid = null;
@@ -1363,7 +1772,7 @@ class SocialMediaController extends Controller
         if ($rateError = $this->rateLimitGuard('user', 'tiktok_creator_info', 30, 60)) {
             return $rateError;
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $cid = (int) $this->get('connection_id', 0);
         $own = $this->db->query("SELECT id FROM platform_connections WHERE id = ? AND platform = 'tiktok' AND status = 'connected' AND (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) LIMIT 1", [$cid, $uid, $uid]);
         $conn = $own ? (new PlatformConnection())->where(['id' => $cid], [], 1) : [];
@@ -1398,6 +1807,10 @@ class SocialMediaController extends Controller
     {
         if (!$this->isAuthenticated()) {
             header('Location: /login?redirect=' . urlencode('/social'));
+            exit;
+        }
+        if (!SocialTeam::can($this->team(), 'manage')) {
+            $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
             exit;
         }
 
@@ -1482,12 +1895,12 @@ class SocialMediaController extends Controller
         $encryption = new Encryption();
 
         $existing = (new PlatformConnection())->where([
-            'user_id'  => (int) $this->user['id'],
+            'user_id'  => $this->uid(),
             'platform' => 'tiktok',
         ], [], 1);
 
         $connData = [
-            'user_id'               => (int) $this->user['id'],
+            'user_id'               => $this->uid(),
             'platform'              => 'tiktok',
             'status'                => 'connected',
             'access_token'          => $encryption->encrypt($accessToken),
@@ -1512,11 +1925,132 @@ class SocialMediaController extends Controller
         exit;
     }
 
+    /** حفظ/تحديث اتصال على مستوى الحساب (Threads/LinkedIn): نفس الحساب الخارجي = نفس الصف */
+    private function saveAccountConnection(string $platform, string $externalId, string $name, string $token, int $expiresIn, ?string $refresh = null): void
+    {
+        $enc = new Encryption();
+        $uid = $this->uid();
+        $row = $this->db->query('SELECT id FROM platform_connections WHERE user_id = ? AND platform = ? AND external_location_id = ? LIMIT 1', [$uid, $platform, $externalId])[0] ?? null;
+        $vals = [$enc->encrypt($token), $refresh ? $enc->encrypt($refresh) : null, mb_substr($name, 0, 120), gmdate('Y-m-d H:i:s', time() + max(3600, $expiresIn))];
+        if ($row) {
+            $this->db->query("UPDATE platform_connections SET access_token = ?, refresh_token = ?, external_location_name = ?, token_expires_at = ?, status = 'connected', last_error = NULL, updated_at = NOW() WHERE id = ?", array_merge($vals, [(int) $row['id']]));
+        } else {
+            $this->db->query("INSERT INTO platform_connections (user_id, platform, access_token, refresh_token, external_location_name, token_expires_at, external_location_id, status, connected_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?, 'connected', NOW(), NOW(), NOW())", array_merge([$uid, $platform], $vals, [$externalId]));
+        }
+    }
+
+    /** GET /social/connect/threads */
+    public function connectThreads(array $params = []): void
+    {
+        if (!$this->isAuthenticated()) {
+            header('Location: /login?redirect=' . urlencode('/social'));
+            exit;
+        }
+        if (!SocialTeam::can($this->team(), 'manage')) {
+            $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
+            exit;
+        }
+        if (!ThreadsAPI::configured()) {
+            $this->renderOAuthError('ربط Threads لسه مش مفعّل على المنصة (THREADS_APP_ID / THREADS_APP_SECRET ناقصين).');
+            exit;
+        }
+        $nonce = bin2hex(random_bytes(16));
+        $_SESSION['threads_oauth_nonce'] = $nonce;
+        header('Location: ' . ThreadsAPI::authorizeUrl(OAuthState::issue(['aud' => 'threads', 'nonce' => $nonce], (int) ($this->user['id'] ?? 0))));
+        exit;
+    }
+
+    /** GET /social/connect/threads/callback */
+    public function threadsCallback(array $params = []): void
+    {
+        if (!$this->isAuthenticated()) {
+            header('Location: /login');
+            exit;
+        }
+        if ($this->get('error') || !$this->get('code')) {
+            $this->renderOAuthError('Threads: الربط اتلغى أو رجع من غير موافقة.');
+            exit;
+        }
+        if (!OAuthState::verify((string) $this->get('state'), (int) ($this->user['id'] ?? 0), $_SESSION['threads_oauth_nonce'] ?? null, 'threads')) {
+            $this->renderOAuthError('الجلسة انتهت أو المحاولة مش موثوقة - جرّب تاني.');
+            exit;
+        }
+        $tok = ThreadsAPI::exchangeCode((string) $this->get('code'));
+        if (empty($tok['success'])) {
+            $this->renderOAuthError('Threads: ' . htmlspecialchars((string) ($tok['error'] ?? 'تعذر الربط'), ENT_QUOTES, 'UTF-8'));
+            exit;
+        }
+        $me = (new ThreadsAPI($tok['access_token']))->me();
+        $id = (string) (($me['id'] ?? '') ?: $tok['user_id']);
+        $this->saveAccountConnection('threads', $id, '@' . (string) (($me['username'] ?? '') ?: 'threads'), $tok['access_token'], (int) $tok['expires_in']);
+        unset($_SESSION['threads_oauth_nonce']);
+        header('Location: /social?connected=threads#accounts');
+        exit;
+    }
+
+    /** GET /social/connect/linkedin */
+    public function connectLinkedIn(array $params = []): void
+    {
+        if (!$this->isAuthenticated()) {
+            header('Location: /login?redirect=' . urlencode('/social'));
+            exit;
+        }
+        if (!SocialTeam::can($this->team(), 'manage')) {
+            $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
+            exit;
+        }
+        if (!LinkedInAPI::configured()) {
+            $this->renderOAuthError('ربط LinkedIn لسه مش مفعّل على المنصة (LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET ناقصين).');
+            exit;
+        }
+        $nonce = bin2hex(random_bytes(16));
+        $_SESSION['linkedin_oauth_nonce'] = $nonce;
+        header('Location: ' . LinkedInAPI::authorizeUrl(OAuthState::issue(['aud' => 'linkedin', 'nonce' => $nonce], (int) ($this->user['id'] ?? 0))));
+        exit;
+    }
+
+    /** GET /social/connect/linkedin/callback - بيربط البروفايل الشخصي + أي صفحة شركة العميل أدمن عليها */
+    public function linkedInCallback(array $params = []): void
+    {
+        if (!$this->isAuthenticated()) {
+            header('Location: /login');
+            exit;
+        }
+        if ($this->get('error') || !$this->get('code')) {
+            $this->renderOAuthError('LinkedIn: الربط اتلغى أو رجع من غير موافقة.');
+            exit;
+        }
+        if (!OAuthState::verify((string) $this->get('state'), (int) ($this->user['id'] ?? 0), $_SESSION['linkedin_oauth_nonce'] ?? null, 'linkedin')) {
+            $this->renderOAuthError('الجلسة انتهت أو المحاولة مش موثوقة - جرّب تاني.');
+            exit;
+        }
+        $tok = LinkedInAPI::exchangeCode((string) $this->get('code'));
+        if (empty($tok['success'])) {
+            $this->renderOAuthError(htmlspecialchars((string) ($tok['error'] ?? 'تعذر الربط'), ENT_QUOTES, 'UTF-8'));
+            exit;
+        }
+        $api = new LinkedInAPI($tok['access_token']);
+        $me = $api->me();
+        if (!empty($me['success'])) {
+            $this->saveAccountConnection('linkedin', $me['urn'], $me['name'] . ' (LinkedIn)', $tok['access_token'], (int) $tok['expires_in'], $tok['refresh_token']);
+        }
+        foreach ($api->organizations() as $org) {
+            $this->saveAccountConnection('linkedin', $org['urn'], $org['name'], $tok['access_token'], (int) $tok['expires_in'], $tok['refresh_token']);
+        }
+        unset($_SESSION['linkedin_oauth_nonce']);
+        header('Location: /social?connected=linkedin#accounts');
+        exit;
+    }
+
     /** GET /social/connect/youtube */
     public function connectYouTube(array $params = []): void
     {
         if (!$this->isAuthenticated()) {
             header('Location: /login?redirect=' . urlencode('/social'));
+            exit;
+        }
+        if (!SocialTeam::can($this->team(), 'manage')) {
+            $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
             exit;
         }
 
@@ -1603,12 +2137,12 @@ class SocialMediaController extends Controller
         $encryption = new Encryption();
 
         $existing = (new PlatformConnection())->where([
-            'user_id'  => (int) $this->user['id'],
+            'user_id'  => $this->uid(),
             'platform' => 'youtube',
         ], [], 1);
 
         $connData = [
-            'user_id'                => (int) $this->user['id'],
+            'user_id'                => $this->uid(),
             'platform'               => 'youtube',
             'status'                 => 'connected',
             'access_token'           => $encryption->encrypt($accessToken),

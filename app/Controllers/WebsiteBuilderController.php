@@ -2051,6 +2051,10 @@ HTML;
 
         $bookingId = (int) $booking['id'];
         $reference = (string) $booking['booking_reference'];
+        // الحجز جه من منشور سوشيال (ومش من إعلان مدفوع): نربطه بالمنشور عشان العميل يشوف أنهي بوست جاب حجز
+        if ($attribution === null && class_exists('SocialAttribution')) {
+            SocialAttribution::attachToBooking($bookingId, $userId);
+        }
 
         // صاحب النشاط ماكانش بيتبلّغ بالحجز الجديد خالص (كان لازم يدخل يدوّر)
         try {

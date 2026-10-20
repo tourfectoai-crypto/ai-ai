@@ -25,7 +25,10 @@ class SocialMonthlyPlanService
         $sites=$this->q('SELECT id,domain,company_name,main_url FROM websites WHERE user_id=? ORDER BY id DESC',[$uid])->fetchAll(PDO::FETCH_ASSOC);
         // لغة المحتوى = لغة جمهور الموقع (مش لغة لوحة التحكم): شركة بتستهدف سياح إنجليز كانت بتاخد بوستات عربي
         foreach($sites as &$site){$site['language']=class_exists('ContentLanguageService')?ContentLanguageService::forWebsite((int)$site['id'],$uid):'en';if(!$site['domain'])$site['domain']=preg_replace('#^https?://(www\.)?#i','',rtrim((string)$site['main_url'],'/'));unset($site['main_url']);}unset($site);
-        $connections=$this->q("SELECT c.id,c.website_id,c.platform,c.external_location_name AS name,c.status,c.token_expires_at FROM platform_connections c JOIN websites w ON w.id=c.website_id WHERE w.user_id=? AND c.platform IN ('facebook','instagram') ORDER BY c.id",[$uid])->fetchAll(PDO::FETCH_ASSOC);
+        $connections=$this->q("SELECT c.id,c.website_id,c.platform,c.external_location_name AS name,c.status,c.token_expires_at FROM platform_connections c JOIN websites w ON w.id=c.website_id WHERE w.user_id=? AND c.platform IN ('facebook','instagram','tiktok','youtube') ORDER BY c.id",[$uid])->fetchAll(PDO::FETCH_ASSOC);
+        // تيك توك ويوتيوب بيتربطوا على مستوى الحساب (من غير موقع): بنعرضهم مع كل موقع عشان يتختاروا في أي خطة
+        $accountLevel=$this->q("SELECT c.id,c.platform,c.external_location_name AS name,c.status,c.token_expires_at FROM platform_connections c WHERE c.user_id=? AND c.website_id IS NULL AND c.platform IN ('tiktok','youtube') ORDER BY c.id",[$uid])->fetchAll(PDO::FETCH_ASSOC);
+        foreach($sites as $site)foreach($accountLevel as $c)$connections[]=['website_id'=>$site['id']]+$c;
         $studio=new SocialBrandStudio($this->pdo);
         foreach($sites as &$site){try{$site['brand']=$studio->kit($uid,(int)$site['id']);}catch(Throwable $e){$site['brand']=null;}}unset($site);
         $media=$this->q("SELECT id,type,prompt,width,height,file_path,generation_meta FROM media_items WHERE user_id=? AND status='completed' AND deleted_at IS NULL ORDER BY id DESC LIMIT 120",[$uid])->fetchAll(PDO::FETCH_ASSOC);
@@ -59,8 +62,8 @@ class SocialMonthlyPlanService
     private function connections(int $uid,int $wid,array $ids): array {
         if(!$this->q('SELECT id FROM websites WHERE id=? AND user_id=?',[$wid,$uid])->fetchColumn())throw new InvalidArgumentException('Website unavailable');
         $out=[];$seen=[];
-        foreach($ids as $id){$r=$this->q("SELECT id,platform,external_location_name AS name,status,token_expires_at,external_location_id,(access_token IS NOT NULL AND access_token<>'') AS has_token FROM platform_connections WHERE id=? AND website_id=?",[$id,$wid])->fetch(PDO::FETCH_ASSOC);
-            if(!$r||empty($r['has_token'])||$r['status']!=='connected'||!in_array($r['platform'],['facebook','instagram'],true))throw new InvalidArgumentException('A selected page is unavailable or disconnected');
+        foreach($ids as $id){$r=$this->q("SELECT id,platform,external_location_name AS name,status,token_expires_at,external_location_id,(access_token IS NOT NULL AND access_token<>'') AS has_token FROM platform_connections WHERE id=? AND (website_id=? OR (website_id IS NULL AND user_id=? AND platform IN ('tiktok','youtube')))",[$id,$wid,$uid])->fetch(PDO::FETCH_ASSOC);
+            if(!$r||empty($r['has_token'])||$r['status']!=='connected'||!in_array($r['platform'],['facebook','instagram','tiktok','youtube'],true))throw new InvalidArgumentException('A selected page is unavailable or disconnected');
             if($r['token_expires_at']&&strtotime($r['token_expires_at'].' UTC')<=time())throw new InvalidArgumentException('Reconnect an expired publishing account');
             $identity=$r['platform'].':'.($r['external_location_id']?:$id);if(isset($seen[$identity]))throw new InvalidArgumentException('The same publishing page was selected twice');$seen[$identity]=true;
             unset($r['external_location_id'],$r['has_token']);$out[]=$r;
@@ -249,19 +252,23 @@ class SocialMonthlyPlanService
             $this->q('UPDATE social_monthly_plans SET version=version+1,updated_at=UTC_TIMESTAMP() WHERE id=?',[$id]);return $this->detail($uid,$id);
         });
     }
-    public function approve(int $uid,int $id,int $version): array {
+    /** $tiktok: إعدادات تيك توك (خصوصية/تفاعل/إفصاح تجاري) اللي صاحب الحساب اختارها وقت الاعتماد - إجبارية لو الخطة فيها تيك توك */
+    public function approve(int $uid,int $id,int $version,?array $tiktok=null): array {
         $this->requireReady();if(!ExternalExecution::lock('social-monthly-plan:'.$id))throw new RuntimeException('Plan is busy; retry shortly');
-        try{return $this->db->transaction(function()use($uid,$id,$version){
+        // جدول إعدادات تيك توك قبل الـ transaction (CREATE TABLE جوّاها بيقفلها بصمت)
+        if(class_exists('TikTokAPI'))TikTokAPI::ensureOptionsTable($this->pdo);
+        try{return $this->db->transaction(function()use($uid,$id,$version,$tiktok){
             $p=$this->ownedPlan($uid,$id,true);if(in_array($p['status'],['active','paused','completed'],true))return $this->detail($uid,$id);
             if($p['status']!=='draft'||(int)$p['version']!==$version)throw new InvalidArgumentException('Plan changed. Reload and review before approval.');
             if(!self::worker()['ready'])throw new InvalidArgumentException('Automatic publishing worker is not running. Enable the every-minute hosting cron first.');
             $items=$this->q('SELECT * FROM social_monthly_plan_items WHERE plan_id=? ORDER BY id FOR UPDATE',[$id])->fetchAll(PDO::FETCH_ASSOC);if(!$items)throw new InvalidArgumentException('Plan has no posts');
+            $ttOpts=null;if(array_filter($items,static fn($i)=>$i['platform']==='tiktok')){$ttOpts=class_exists('TikTokAPI')?TikTokAPI::cleanOptions($tiktok):['error'=>'TikTok unavailable'];if(isset($ttOpts['error']))throw new InvalidArgumentException($ttOpts['error']);}
             $brief=json_decode($p['brief_json'],true);(new BusinessHubService($this->db))->assertRevision($uid,(int)$p['website_id'],$brief);$this->connections($uid,(int)$p['website_id'],$brief['connection_ids']);
             $queue=Container::getInstance()->make(QueueManager::class);
             foreach($items as $i){if(strtotime($i['scheduled_at'].' UTC')<time()+60)throw new InvalidArgumentException('Some dates have passed; edit them before approval');
                 $assets=$this->assets($uid,[(int)$i['media_item_id']]);if(!self::compatible($i['platform'],$assets))throw new InvalidArgumentException('An item requires video');
                 $this->q("INSERT INTO social_posts(user_id,website_id,content,media_item_id,hashtags,status,created_at,updated_at) VALUES(?,?,?,?,NULL,'scheduled',UTC_TIMESTAMP(),UTC_TIMESTAMP())",[$uid,$p['website_id'],$i['content'],$i['media_item_id']]);$postId=(int)$this->pdo->lastInsertId();
-                $this->q("INSERT INTO social_post_targets(social_post_id,platform_connection_id,scheduled_at,status,created_at) VALUES(?,?,?,'scheduled',UTC_TIMESTAMP())",[$postId,$i['connection_id'],$i['scheduled_at']]);$targetId=(int)$this->pdo->lastInsertId();
+                $this->q("INSERT INTO social_post_targets(social_post_id,platform_connection_id,scheduled_at,status,created_at) VALUES(?,?,?,'scheduled',UTC_TIMESTAMP())",[$postId,$i['connection_id'],$i['scheduled_at']]);$targetId=(int)$this->pdo->lastInsertId();if($i['platform']==='tiktok'&&$ttOpts)TikTokAPI::saveOptions($this->pdo,$targetId,$ttOpts);
                 $job=$queue->push(PublishSocialPostJob::class,['social_post_target_id'=>$targetId],'social',max(0,strtotime($i['scheduled_at'].' UTC')-time()));if(!$job)throw new RuntimeException('Publishing queue unavailable');
                 $this->q('UPDATE jobs SET available_at=? WHERE id=?',[$i['scheduled_at'],$job]);
                 if(in_array($i['platform'],['facebook','instagram'],true))foreach([86400,604800] as $after){

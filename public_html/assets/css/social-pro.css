@@ -20,12 +20,20 @@
 .sp-grow { flex: 1; min-width: 180px; }
 .sp-end { margin-inline-start: auto; }
 .sp-health { margin-top: 14px; }
+.sp-roi { margin-top: 14px; padding: 14px 16px; border-color: var(--panel-accent); }
+.sp-roi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.sp-roi-grid > div { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; }
+.sp-roi-grid span { grid-row: span 2; font-size: 22px; }
+.sp-roi-grid b { font-size: 20px; }
+.sp-roi-grid small { color: var(--panel-text-muted); font-size: 12px; }
+.sp-roi-line { font-size: 12px; margin-bottom: 4px; color: var(--panel-accent); }
 .sp-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; margin-top: 10px; }
 .sp-field .p-select, .sp-field textarea { width: 100%; }
 .sp-check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; margin-top: 10px; }
 .sp-radio { display: inline-flex; gap: 6px; align-items: center; }
 .sp-thumb { width: 38px; height: 38px; object-fit: cover; border-radius: 6px; vertical-align: middle; margin-inline-end: 6px; }
 .sp-actions { white-space: nowrap; }
+.sp-appr { margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
 /* الإحصائيات */
 .sp-bars { display: flex; align-items: flex-end; gap: 2px; height: 110px; padding-top: 6px; }
@@ -48,6 +56,24 @@
 .sp-hrow .nm { min-width: 150px; font-weight: 600; }
 .sp-hp { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 12px; background: var(--sp-soft); }
 .sp-hp.ok { background: rgba(34,197,94,.2); } .sp-hp.warn { background: rgba(245,158,11,.25); } .sp-hp.bad { background: rgba(239,68,68,.22); }
+
+/* نمو المتابعين */
+.sp-growth { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.sp-gacc { border: 1px solid var(--panel-border); border-radius: 12px; padding: 12px; }
+.sp-gh { font-size: 13px; }
+.sp-gv { font-size: 22px; font-weight: 700; margin-top: 4px; }
+.sp-gv small { font-size: 12px; font-weight: 400; color: var(--panel-text-muted); }
+.sp-gd { font-size: 12px; font-weight: 600; }
+.sp-gd.up { color: var(--sp-ok); } .sp-gd.down { color: var(--sp-bad); }
+.sp-spark { width: 100%; height: 46px; color: var(--panel-accent); margin-top: 6px; display: block; }
+
+/* المنافسين */
+.cp-list { margin-top: 12px; }
+.cp-me td { background: var(--panel-accent-light, var(--sp-soft)); }
+.cp-top td { font-size: 12.5px; padding-top: 0; border-top: 0; }
+.cp-post { display: inline-block; border: 1px solid var(--panel-border); border-radius: 8px; padding: 2px 8px; margin: 2px 4px 2px 0; }
+.cp-ins { margin: 10px 0 0; padding-inline-start: 20px; font-size: 13px; }
+.cp-ins li { margin: 4px 0; }
 
 /* المنشورات */
 .sp-tgt { display: inline-flex; align-items: center; gap: 4px; margin: 2px 0; font-size: 12px; white-space: nowrap; flex-wrap: wrap; }
@@ -72,6 +98,7 @@
 .sp-conn:hover { border-color: var(--panel-accent); }
 .sp-conn span { font-size: 12.5px; color: var(--panel-text-muted); }
 .sp-conn.fb b::before { content: "📘📸 "; } .sp-conn.tt b::before { content: "🎵 "; } .sp-conn.yt b::before { content: "▶️ "; }
+.sp-conn.gb b::before { content: "📍 "; } .sp-conn.th b::before { content: "🧵 "; } .sp-conn.li b::before { content: "💼 "; }
 .sp-help { margin-top: 14px; font-size: 13px; }
 .sp-help summary { cursor: pointer; font-weight: 600; }
 
@@ -154,6 +181,8 @@
 
 /* صندوق التعليقات */
 .ib-list { display: grid; gap: 10px; }
+.sp-autobox { border: 1px solid var(--panel-border); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; }
+.sp-autobox summary { cursor: pointer; font-weight: 600; }
 .ib-item { border: 1px solid var(--panel-border); border-radius: 12px; padding: 12px; }
 .ib-item.done { opacity: .75; }
 .ib-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }

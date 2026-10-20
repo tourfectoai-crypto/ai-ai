@@ -701,6 +701,9 @@ $router->post('/api/social/monthly-plans/{id}/approve', 'SocialMediaController',
 $router->post('/api/social/monthly-plans/{id}/pause', 'SocialMediaController', 'monthlyPause', ['AuthMiddleware']);
 $router->post('/api/social/monthly-plans/{id}/resume', 'SocialMediaController', 'monthlyResume', ['AuthMiddleware']);
 $router->post('/api/social/monthly-plans/{id}/cancel', 'SocialMediaController', 'monthlyCancel', ['AuthMiddleware']);
+$router->get('/api/social/monthly-plans/{id}/share', 'SocialMediaController', 'planShareList', ['AuthMiddleware']);
+$router->post('/api/social/monthly-plans/{id}/share', 'SocialMediaController', 'planShareCreate', ['AuthMiddleware']);
+$router->post('/api/social/monthly-plans/{id}/share/{link_id}/revoke', 'SocialMediaController', 'planShareRevoke', ['AuthMiddleware']);
 $router->get('/api/social/connections', 'SocialMediaController', 'listConnections', ['AuthMiddleware']);
 $router->get('/api/social/tiktok/creator-info', 'SocialMediaController', 'tikTokCreatorInfo', ['AuthMiddleware']);
 $router->get('/api/social/posts', 'SocialMediaController', 'listPosts', ['AuthMiddleware']);
@@ -724,6 +727,8 @@ $router->post('/api/social/posts/{id}/update', 'SocialMediaController', 'updateP
 $router->post('/api/social/posts/{id}/reconcile', 'SocialMediaController', 'reconcilePost', ['AuthMiddleware']);
 $router->post('/api/social/posts/{id}/resolve', 'SocialMediaController', 'resolvePost', ['AuthMiddleware']);
 $router->post('/api/social/posts/{id}/edit-published', 'SocialMediaController', 'editPublishedPost', ['AuthMiddleware']);
+$router->post('/api/social/posts/{id}/review', 'SocialMediaController', 'reviewPost', ['AuthMiddleware']);
+$router->get('/api/social/me', 'SocialMediaController', 'me', ['AuthMiddleware']);
 $router->get('/api/social/health', 'SocialMediaController', 'publishHealth', ['AuthMiddleware']);
 // صندوق التعليقات: تعليقات منشوراتنا على فيسبوك/إنستجرام + رد بالذكاء الاصطناعي
 $router->get('/api/social/inbox', 'SocialMediaController', 'inboxList', ['AuthMiddleware']);
@@ -732,6 +737,14 @@ $router->post('/api/social/inbox/{id}/suggest', 'SocialMediaController', 'inboxS
 $router->post('/api/social/inbox/{id}/reply', 'SocialMediaController', 'inboxReply', ['AuthMiddleware']);
 $router->post('/api/social/inbox/{id}/hide', 'SocialMediaController', 'inboxHide', ['AuthMiddleware']);
 $router->post('/api/social/inbox/{id}/done', 'SocialMediaController', 'inboxDone', ['AuthMiddleware']);
+$router->post('/api/social/inbox/{id}/private', 'SocialMediaController', 'inboxPrivate', ['AuthMiddleware']);
+$router->get('/api/social/inbox-settings', 'SocialMediaController', 'inboxSettings', ['AuthMiddleware']);
+$router->get('/api/social/growth', 'SocialMediaController', 'growth', ['AuthMiddleware']);
+$router->get('/api/social/competitors', 'SocialMediaController', 'competitors', ['AuthMiddleware']);
+$router->post('/api/social/competitors', 'SocialMediaController', 'competitorAdd', ['AuthMiddleware']);
+$router->post('/api/social/competitors/refresh', 'SocialMediaController', 'competitorRefresh', ['AuthMiddleware']);
+$router->post('/api/social/competitors/{id}/delete', 'SocialMediaController', 'competitorDelete', ['AuthMiddleware']);
+$router->post('/api/social/inbox-settings', 'SocialMediaController', 'inboxSettingsSave', ['AuthMiddleware']);
 // تقرير الأداء الشهري (للطباعة / PDF من المتصفح) وأفضل مواعيد النشر لكل صفحة
 $router->get('/api/social/best-times', 'SocialMediaController', 'bestTimes', ['AuthMiddleware']);
 // callbacks الخصوصية من Meta (عامة: من غير login/CSRF - الأمان من توقيع signed_request). مطلوبة في App Review.

@@ -10,6 +10,8 @@
  *  - نفس المدخلات = نفس الناتج دايمًا (المصالحة بتعيد التركيب وتطابق النص).
  * @version 1.0.0
  */
+require_once __DIR__ . '/SocialAttribution.php';
+
 final class SocialLinkTracker
 {
     /**
@@ -22,7 +24,7 @@ final class SocialLinkTracker
         if ($campaign === '' || !$hosts || $message === '') {
             return $message;
         }
-        $source = preg_replace('/[^a-z]/', '', strtolower($platform)) ?: 'social';
+        $source = preg_replace('/[^a-z_]/', '', strtolower($platform)) ?: 'social';
         return (string) preg_replace_callback('~https?://[^\s<>"\'()\[\]]+~iu', static function (array $m) use ($hosts, $source, $campaign): string {
             $url = $m[0];
             // علامات الترقيم في آخر الجملة مش جزء من الرابط
@@ -102,15 +104,28 @@ final class SocialLinkTracker
         return array_values($out);
     }
 
-    /** النص النهائي اللي بيتنشر فعلًا على منصة معيّنة: المحتوى + الهاشتاجات + UTM. مصدر واحد للنشر والمصالحة. */
-    public static function finalMessage(SocialPost $post, string $platform): string
+    /**
+     * النص النهائي اللي بيتنشر فعلًا على منصة معيّنة: المحتوى + الهاشتاجات + UTM + (لو مفعّل) روابط قصيرة لتتبّع الحجوزات.
+     * مصدر واحد للنشر والمصالحة: نفس الهدف = نفس الروابط القصيرة.
+     */
+    public static function finalMessage(SocialPost $post, string $platform, ?int $targetId = null): string
     {
         $message = PublishPolicy::composeMessage((string) $post->getAttribute('content'), (string) $post->getAttribute('hashtags'));
         $campaign = (string) ($post->getAttribute('utm_campaign') ?? '');
-        if ($campaign === '') {
+        $track = (int) ($post->getAttribute('track_links') ?? 0) === 1 && $targetId;
+        if ($campaign === '' && !$track) {
             return $message;
         }
+        $uid = (int) $post->getAttribute('user_id');
         $wid = (int) $post->getAttribute('website_id');
-        return self::apply($message, $platform, $campaign, self::hostsFor((int) $post->getAttribute('user_id'), $wid > 0 ? $wid : null));
+        $hosts = self::hostsFor($uid, $wid > 0 ? $wid : null);
+        if ($campaign !== '') {
+            $message = self::apply($message, $platform, $campaign, $hosts);
+        }
+        if ($track && class_exists('SocialAttribution')) {
+            $postId = (int) $post->getAttribute('id');
+            $message = SocialAttribution::replaceOwnLinks($message, $hosts, static fn (string $url): string => SocialAttribution::shortLink($uid, $postId, (int) $targetId, $platform, $url));
+        }
+        return $message;
     }
 }

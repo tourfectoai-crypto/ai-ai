@@ -110,6 +110,8 @@ final class SocialCommentInbox
         ) ?: [];
         $enc = new Encryption();
         $hotSamples = [];
+        $settings = $this->privateReady() ? $this->settings($userId) : null;
+        $autoSent = 0;
         foreach ($rows as $r) {
             $platform = (string) $r['platform'];
             if (isset($out['errors'][$platform]) && $out['needs_permission']) {
@@ -159,6 +161,19 @@ final class SocialCommentInbox
                      mb_substr($c['message'], 0, 5000), $ts ? gmdate('Y-m-d H:i:s', $ts) : null, $c['like_count'], $intent, $status]
                 );
                 $out['new']++;
+                $newId = (int) $this->db->getConnection()->lastInsertId();
+                // رد خاص تلقائي (لو العميل مفعّله): العميل اللي بيسأل عن السعر بيوصله الرد في الخاص فورًا
+                if ($status === 'new' && $settings && $settings['auto_private'] && in_array($intent, $settings['auto_intents'], true)
+                    && $ts && $ts > time() - 6 * 86400 && $autoSent < self::AUTO_PER_SYNC) {
+                    try {
+                        $this->privateReply($userId, $newId, null, true);
+                        $autoSent++;
+                        $out['auto_private'] = ($out['auto_private'] ?? 0) + 1;
+                        continue;
+                    } catch (Throwable $e) {
+                        $out['errors']['private_' . $platform] = $e->getMessage();
+                    }
+                }
                 if ($status === 'new' && in_array($intent, self::HOT, true)) {
                     $out['hot']++;
                     $hotSamples[] = mb_substr($c['message'], 0, 60);
@@ -173,6 +188,137 @@ final class SocialCommentInbox
             }
         }
         return $out;
+    }
+
+    // ------------------------------------------------------------------
+    // الرد الخاص (Private Reply)
+    // ------------------------------------------------------------------
+
+    public const AUTO_PER_SYNC = 20;
+    public const DEFAULT_TEMPLATE_AR = "أهلًا {name} 👋 شكرًا لسؤالك! ابعتلنا عدد الأفراد والتاريخ اللي يناسبك ونبعتلك السعر والتفاصيل كاملة.\nتقدر تحجز مباشرة من هنا: {link}\n{company}";
+    public const DEFAULT_TEMPLATE_EN = "Hi {name} 👋 thanks for asking! Send us your travel date and number of guests and we'll share the exact price and details.\nYou can also book directly here: {link}\n{company}";
+    public const DEFAULT_ACK_AR = 'بعتنالك التفاصيل في رسالة خاصة 📩';
+    public const DEFAULT_ACK_EN = 'We sent you the details in a private message 📩';
+
+    public function privateReady(): bool
+    {
+        try {
+            return (bool) $this->db->query("SHOW COLUMNS FROM social_comments LIKE 'private_replied_at'");
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
+    /** إعدادات الرد الخاص للعميل (بقيم افتراضية بلغة المحتوى لو لسه ما اتحفظتش) */
+    public function settings(int $userId): array
+    {
+        $row = null;
+        try {
+            $row = $this->db->query('SELECT * FROM social_inbox_settings WHERE user_id = ? LIMIT 1', [$userId])[0] ?? null;
+        } catch (Throwable $e) {
+        }
+        $ar = (class_exists('ContentLanguageService') ? ContentLanguageService::forUser($userId, null) : 'ar') === 'ar';
+        $intents = array_values(array_intersect(self::INTENTS, explode(',', (string) ($row['auto_intents'] ?? 'price,booking'))));
+        return [
+            'auto_private' => (bool) ($row['auto_private'] ?? false),
+            'auto_intents' => $intents ?: ['price', 'booking'],
+            'private_template' => (string) (($row['private_template'] ?? '') ?: ($ar ? self::DEFAULT_TEMPLATE_AR : self::DEFAULT_TEMPLATE_EN)),
+            'public_ack' => (string) (($row['public_ack'] ?? '') ?: ($ar ? self::DEFAULT_ACK_AR : self::DEFAULT_ACK_EN)),
+            'saved' => (bool) $row,
+        ];
+    }
+
+    public function saveSettings(int $userId, array $in): array
+    {
+        $template = trim((string) ($in['private_template'] ?? ''));
+        $ack = trim((string) ($in['public_ack'] ?? ''));
+        if (mb_strlen($template) > 1500 || mb_strlen($ack) > 300) {
+            throw new InvalidArgumentException('الرسالة أطول من المسموح (الخاصة 1500 حرف، العلنية 300)');
+        }
+        $intents = array_values(array_intersect(['price', 'booking', 'question', 'complaint'], (array) ($in['auto_intents'] ?? ['price', 'booking'])));
+        $this->db->query(
+            'INSERT INTO social_inbox_settings (user_id, auto_private, auto_intents, private_template, public_ack) VALUES (?,?,?,?,?)
+             ON DUPLICATE KEY UPDATE auto_private = VALUES(auto_private), auto_intents = VALUES(auto_intents), private_template = VALUES(private_template), public_ack = VALUES(public_ack)',
+            [$userId, !empty($in['auto_private']) ? 1 : 0, implode(',', $intents ?: ['price', 'booking']), $template !== '' ? $template : null, $ack !== '' ? $ack : null]
+        );
+        return $this->settings($userId);
+    }
+
+    /** تعبئة القالب (نقية): {name} أول اسم، {company} اسم الشركة، {link} رابط الحجز. السطور الفاضية بتتشال */
+    public static function fillTemplate(string $template, ?string $authorName, ?string $company, ?string $link): string
+    {
+        $first = trim((string) preg_split('/\s+/u', trim((string) $authorName))[0]);
+        if ($first === '' || preg_match('/^[._0-9]+$/', $first)) {
+            $first = '';
+        }
+        $out = strtr($template, ['{name}' => $first, '{company}' => (string) $company, '{link}' => (string) $link]);
+        $out = preg_replace('/[ \t]+([,،!؟?.])/u', '$1', $out);
+        $out = preg_replace('/[ \t]{2,}/u', ' ', $out);
+        $lines = array_filter(array_map('trim', preg_split('/\R/u', $out)), static fn ($l) => $l !== '' && !preg_match('/[:：]\s*$/u', $l));
+        return trim(implode("\n", $lines));
+    }
+
+    /**
+     * يبعت رد خاص لصاحب التعليق. $text = null يعني من القالب. $auto = true: كمان رد علني قصير ("بعتنالك في الخاص").
+     * @return array ['status'=>'replied','private'=>true,'public_ack'=>bool]
+     */
+    public function privateReply(int $userId, int $id, ?string $text, bool $withAck = false): array
+    {
+        if (!$this->privateReady()) {
+            throw new InvalidArgumentException('شغّل migration السوشيال (2026_10_21_000001_social_growth.sql) لتفعيل الرد الخاص');
+        }
+        $c = $this->owned($userId, $id);
+        if (!empty($c['private_replied_at'])) {
+            throw new InvalidArgumentException('اتبعت رد خاص على التعليق ده قبل كده (Meta بتسمح برسالة خاصة واحدة لكل تعليق)');
+        }
+        if (!empty($c['commented_at']) && strtotime($c['commented_at'] . ' UTC') < time() - 7 * 86400) {
+            throw new InvalidArgumentException('Meta بتسمح بالرد الخاص خلال 7 أيام بس من التعليق - رد علنيًا بدل كده');
+        }
+        $settings = $this->settings($userId);
+        if ($text === null || trim($text) === '') {
+            $ctx = SocialPostService::brandContext($userId, null);
+            $text = self::fillTemplate($settings['private_template'], $c['author_name'] ?? '', $ctx['company']['name'] ?? '', $this->bookingLink($userId));
+        }
+        $text = trim($text);
+        if ($text === '' || mb_strlen($text) > 1900) {
+            throw new InvalidArgumentException('الرسالة الخاصة لازم تكون من 1 لـ 1900 حرف');
+        }
+        $token = $this->token((int) $c['platform_connection_id']);
+        $api = $this->api($token);
+        $res = $api->sendPrivateReply((string) $c['external_comment_id'], $token, $text);
+        if (!$res['success']) {
+            $msg = self::readableError($res, 'تعذر الوصول لـ Meta دلوقتي (عطل مؤقت أو مشكلة اتصال). جرّب تاني بعد شوية.');
+            if (in_array((string) ($res['category'] ?? ''), [MetaApiError::PERMISSION, MetaApiError::TOKEN], true)) {
+                $msg .= ' — الرد الخاص محتاج صلاحية الرسائل (pages_messaging / instagram_manage_messages): اربط الصفحة تاني ووافق على صلاحيات الرسائل.';
+            }
+            throw new RuntimeException($msg);
+        }
+        $acked = false;
+        if ($withAck && $settings['public_ack'] !== '') {
+            $pub = $api->replyToComment((string) $c['platform'], (string) $c['external_comment_id'], $token, $settings['public_ack']);
+            $acked = !empty($pub['success']);
+        }
+        $this->db->query(
+            "UPDATE social_comments SET status = 'replied', private_replied_at = UTC_TIMESTAMP(), private_reply_text = ?, auto_handled = ?,
+                    reply_text = COALESCE(?, reply_text), replied_at = COALESCE(replied_at, UTC_TIMESTAMP()) WHERE id = ?",
+            [$text, $withAck ? 1 : 0, $acked ? $settings['public_ack'] : null, $id]
+        );
+        return ['status' => 'replied', 'private' => true, 'public_ack' => $acked];
+    }
+
+    /** رابط الحجز اللي بيتحط في الرد الخاص: موقع العميل */
+    private function bookingLink(int $userId): string
+    {
+        try {
+            $row = $this->db->query('SELECT main_url, domain FROM websites WHERE user_id = ? ORDER BY id DESC LIMIT 1', [$userId])[0] ?? null;
+        } catch (Throwable $e) {
+            return '';
+        }
+        $url = trim((string) (($row['main_url'] ?? '') ?: ($row['domain'] ?? '')));
+        if ($url !== '' && !preg_match('#^https?://#i', $url)) {
+            $url = 'https://' . $url;
+        }
+        return $url;
     }
 
     /** قائمة التعليقات: الأولوية (عملاء محتملين) الأول، وبعدين الأحدث */
@@ -191,7 +337,7 @@ final class SocialCommentInbox
             $args[] = $intent;
         }
         $rows = $this->db->query(
-            "SELECT sc.id, sc.platform, sc.author_name, sc.message, sc.commented_at, sc.like_count, sc.intent, sc.status, sc.ai_suggestion, sc.reply_text, sc.replied_at,
+            "SELECT sc.id, sc.platform, sc.author_name, sc.message, sc.commented_at, sc.like_count, sc.intent, sc.status, sc.ai_suggestion, sc.reply_text, sc.replied_at, " . ($this->privateReady() ? 'sc.private_replied_at, sc.private_reply_text, sc.auto_handled,' : '') . "
                     c.external_location_name AS page_name, sp.content AS post_content, pm.permalink
                FROM social_comments sc
                LEFT JOIN platform_connections c ON c.id = sc.platform_connection_id
@@ -323,7 +469,7 @@ final class SocialCommentInbox
         if (in_array($cat, [MetaApiError::TRANSIENT, MetaApiError::UNKNOWN, ''], true) || !empty($res['not_sent'])) {
             return $transientMessage;
         }
-        return (string) ($res['friendly'] ?? $res['error'] ?? $transientMessage);
+        return (string) ((($res['friendly'] ?? '') ?: ($res['error'] ?? '')) ?: $transientMessage);
     }
 
     private static function permissionHint(array $res): string

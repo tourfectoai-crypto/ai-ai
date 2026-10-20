@@ -12,6 +12,9 @@
     const AR = (document.documentElement.lang || 'ar').slice(0, 2) === 'ar';
     const T = (a, e) => (AR ? a : e);
     const $ = id => document.getElementById(id);
+    // صلاحيات الدور في فريق الحساب
+    const CAN = new Set(((document.getElementById('spRoot') || {}).dataset || {}).can ? document.getElementById('spRoot').dataset.can.split(',') : ['view', 'draft', 'publish', 'inbox', 'manage']);
+    const can = p => CAN.has(p);
     const jsonPost = (url, body) => fetchJSON(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
     const nf = n => Number(n || 0).toLocaleString(AR ? 'ar-EG' : 'en-GB');
     const spLocal = s => (P.formatDate ? P.formatDate(s) : (s || '-'));
@@ -20,8 +23,8 @@
     // روابط جاية من المنصات: https بس (ما نحطش javascript: أو روابط غريبة في href)
     const safeUrl = u => (/^https:\/\//i.test(String(u || '')) ? String(u) : '');
 
-    const PF = { facebook: '📘', instagram: '📸', tiktok: '🎵', youtube: '▶️' };
-    const PN = { facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
+    const PF = { facebook: '📘', instagram: '📸', tiktok: '🎵', youtube: '▶️', google_business: '📍', threads: '🧵', linkedin: '💼' };
+    const PN = { facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube', google_business: 'Google Business', threads: 'Threads', linkedin: 'LinkedIn' };
     const DAYS = AR ? ['الأحد', 'الاتنين', 'التلات', 'الأربع', 'الخميس', 'الجمعة', 'السبت'] : ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const ST = {
         draft: ['pill', T('مسودة', 'Draft')], scheduled: ['pill', T('مجدول', 'Scheduled')], pending: ['pill', T('مجدول', 'Scheduled')],
@@ -30,7 +33,8 @@
     };
     const pill = s => ST[s] ? '<span class="' + ST[s][0] + '">' + ST[s][1] + '</span>' : esc(s || '');
     // حدود النص لكل منصة (كابشن)
-    const LIMITS = { facebook: 63206, instagram: 2200, tiktok: 2200, youtube: 5000 };
+    const LIMITS = { facebook: 63206, instagram: 2200, tiktok: 2200, youtube: 5000, google_business: 1500, threads: 500, linkedin: 3000 };
+    const NEEDS_MEDIA = ['instagram', 'tiktok', 'youtube'];
 
     // ================= التبويبات =================
     const tabs = document.querySelectorAll('.sp-tabs .p-tab');
@@ -42,8 +46,10 @@
         if (!loaded[name]) {
             loaded[name] = true;
             if (name === 'posts') { load(); loadCalendar(); }
-            if (name === 'inbox') loadInbox();
+            if (name === 'inbox') { loadInbox(); loadInboxSettings(); }
             if (name === 'accounts') loadAccounts();
+            if (name === 'competitors') loadCompetitors();
+            if (name === 'plan' && $('shPlan')) loadShare();
         }
         if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
     }
@@ -88,7 +94,7 @@
     function submitLabel() {
         const later = (document.querySelector('input[name=spWhen]:checked') || {}).value === 'later';
         const any = checkedTargets().length > 0;
-        $('spSubmit').textContent = !any ? T('حفظ كمسودة', 'Save as draft') : (later ? T('جدولة', 'Schedule') : T('انشر دلوقتي', 'Publish now'));
+        $('spSubmit').textContent = !any ? T('حفظ كمسودة', 'Save as draft') : (!can('publish') ? T('إرسال للمدير للاعتماد', 'Send for approval') : (later ? T('جدولة', 'Schedule') : T('انشر دلوقتي', 'Publish now')));
     }
 
     document.addEventListener('change', e => {
@@ -176,7 +182,7 @@
         if (connections.length) {
             box.innerHTML = '<div class="sp-chips">' + connections.map(c => '<label class="sp-tchip"><input type="checkbox" class="targetCheckbox" value="' + c.id + '" data-platform="' + esc(c.platform) + '" data-name="' + esc(c.name || '') + '"> ' + (PF[c.platform] || '•') + ' <span>' + esc(c.name || PN[c.platform] || c.platform) + '</span> <small>' + esc(PN[c.platform] || c.platform) + '</small></label>').join('') + '</div>' + offHtml;
         } else {
-            box.innerHTML = '<div class="alert alert-warning">' + T('مفيش صفحات قابلة للنشر لسه. اربط حساباتك وانت بتختار الصفحات وبتوافق على كل الصلاحيات.', 'No publishable pages yet. Connect your accounts, select the pages and accept all permissions.') + '</div><div class="sp-row"><a class="p-btn primary sm" href="/ads/connect/meta?for=social">Facebook + Instagram</a><a class="p-btn outline sm" href="/social/connect/tiktok">TikTok</a><a class="p-btn outline sm" href="/social/connect/youtube">YouTube</a></div>' + offHtml;
+            box.innerHTML = '<div class="alert alert-warning">' + T('مفيش صفحات قابلة للنشر لسه. اربط حساباتك وانت بتختار الصفحات وبتوافق على كل الصلاحيات.', 'No publishable pages yet. Connect your accounts, select the pages and accept all permissions.') + '</div><div class="sp-row"><a class="p-btn primary sm" href="/ads/connect/meta?for=social">Facebook + Instagram</a><a class="p-btn outline sm" href="/social/connect/tiktok">TikTok</a><a class="p-btn outline sm" href="/social/connect/youtube">YouTube</a><a class="p-btn outline sm" href="/social/connect/threads">Threads</a><a class="p-btn outline sm" href="/social/connect/linkedin">LinkedIn</a></div>' + offHtml;
         }
         applyFormat();
     }
@@ -250,7 +256,7 @@
         // فحص الجودة
         const checks = [];
         const add = (ok, a, e) => checks.push('<li class="' + (ok === true ? 'ok' : ok === false ? 'bad' : 'warn') + '">' + (ok === true ? '✓' : ok === false ? '✕' : '!') + ' ' + T(a, e) + '</li>');
-        const needsMedia = story || plats.some(p => p !== 'facebook');
+        const needsMedia = story || plats.some(p => NEEDS_MEDIA.includes(p));
         add(media ? true : (needsMedia ? false : null), 'صورة أو فيديو' + (needsMedia ? ' (إجباري هنا)' : ' (بتضاعف التفاعل)'), 'Image or video' + (needsMedia ? ' (required here)' : ' (boosts engagement)'));
         if (plats.some(p => p === 'tiktok' || p === 'youtube')) add(!!(media && media.is_video), 'تيك توك ويوتيوب فيديو بس', 'TikTok & YouTube need a video');
         if (!story) {
@@ -357,7 +363,8 @@
         const albumIds = !story && album.length >= 2 ? album.map(a => a.id) : null;
         if (story && !media) { P.toast(T('الستوري محتاجة صورة أو فيديو', 'A story needs an image or video'), 'error'); return; }
         if (albumIds && checked.some(cb => ['tiktok', 'youtube'].includes(cb.dataset.platform))) { P.toast(T('الصور المتعددة لفيسبوك وإنستجرام بس - شيل تيك توك/يوتيوب أو اختار صورة واحدة', 'Multiple photos are for Facebook & Instagram only — untick TikTok/YouTube or pick one image'), 'error'); return; }
-        if (!media && checked.some(cb => cb.dataset.platform !== 'facebook')) { P.toast(T('إنستجرام وتيك توك ويوتيوب محتاجين صورة أو فيديو', 'Instagram, TikTok and YouTube need an image or video'), 'error'); return; }
+        if (!media && checked.some(cb => NEEDS_MEDIA.includes(cb.dataset.platform))) { P.toast(T('إنستجرام وتيك توك ويوتيوب محتاجين صورة أو فيديو', 'Instagram, TikTok and YouTube need an image or video'), 'error'); return; }
+        if (media && media.is_video && checked.some(cb => ['google_business', 'linkedin'].includes(cb.dataset.platform))) { P.toast(T('Google Business وLinkedIn بيقبلوا صور بس من هنا - شيلهم أو اختار صورة', 'Google Business and LinkedIn accept images only here — untick them or pick an image'), 'error'); return; }
         if (checked.some(cb => ['tiktok', 'youtube'].includes(cb.dataset.platform)) && !(media && media.is_video)) { P.toast(T('تيك توك ويوتيوب فيديو بس', 'TikTok and YouTube accept video only'), 'error'); return; }
         const ttOpts = story ? { ok: true, value: null } : tikTokOptions();
         if (!ttOpts.ok) { P.toast(ttOpts.error, 'error'); return; }
@@ -367,6 +374,7 @@
             media_item_id: media ? media.id : null, media_item_ids: albumIds, tiktok: ttOpts.value,
             hashtags: story ? null : hashtagList(), first_comment: story ? null : $('firstCommentInput').value.trim(),
             utm_campaign: !story && $('utmOn').checked ? $('utmCampaign').value.trim() : '',
+            track_links: !story && $('trackOn').checked,
             website_id: P.getCurrentWebsiteId ? P.getCurrentWebsiteId() : null
         };
         const btn = $('spSubmit'); btn.disabled = true; const lbl = btn.textContent; btn.textContent = targets.length && !later ? T('بينشر…', 'Publishing…') : T('بيحفظ…', 'Saving…');
@@ -374,6 +382,12 @@
         btn.disabled = false; btn.textContent = lbl;
         if (!res.success) { P.toast(res.error || T('فشل الحفظ', 'Save failed'), 'error'); return; }
         closeComposer();
+        if (res.data.pending_approval) {
+            P.toast(T('اتبعت للمدير يعتمده ✔ هتوصلك إشعار لما يتنشر', 'Sent for approval ✔ you will be notified when it is published'), 'success');
+            ['contentInput', 'topicInput', 'hashtagsInput', 'firstCommentInput'].forEach(id => { $(id).value = ''; });
+            clearMedia(); loadStats(); if (!document.querySelector('.sp-panel[data-panel="posts"]').hidden) load();
+            return;
+        }
         const st = res.data.post && res.data.post.status;
         P.toast(!targets.length ? T('اتحفظ كمسودة', 'Saved as draft') : (later ? T('اتجدول ✔', 'Scheduled ✔') : st === 'published' ? T('اتنشر ✔', 'Published ✔') : st === 'failed' ? T('النشر فشل - شوف السبب في جدول المنشورات', 'Publishing failed — see the reason in Posts') : T('بيتنشر… هتلاقي النتيجة في جدول المنشورات', 'Publishing… check the result in Posts')), st === 'failed' ? 'error' : 'success');
         ['contentInput', 'topicInput', 'hashtagsInput', 'firstCommentInput'].forEach(id => { $(id).value = ''; });
@@ -387,11 +401,17 @@
     // ================= المنشورات =================
     let postsById = {};
     let autoRefreshed = false;
+    // عملة الحجز نفسها (مش عملة اللوحة) عشان الإيراد يطلع بالرقم الحقيقي
+    const money = (v, cur) => { try { return new Intl.NumberFormat(AR ? 'ar-EG' : 'en-GB', { style: 'currency', currency: cur || window.TF_CURRENCY || 'USD', maximumFractionDigits: 0 }).format(+v || 0); } catch (e) { return nf(v) + (cur ? ' ' + cur : ''); } };
+    function roiLine(a) {
+        if (!a || (!a.clicks && !a.bookings)) return '';
+        return '<div class="sp-roi-line">🔗 ' + nf(a.clicks) + T(' نقرة', ' clicks') + (a.bookings ? ' · 🧾 <b>' + nf(a.bookings) + T(' حجز', ' bookings') + '</b>' + (a.revenue ? ' · ' + esc(money(a.revenue, a.currency)) : '') : '') + '</div>';
+    }
     function engCell(p) {
         const t = (p.targets || []).filter(x => x.status === 'published');
-        if (!t.length) return '<span class="p-cell-muted">-</span>';
-        return '<div class="sp-eng">' + t.map(x => {
-            if (x.metrics_state === 'ok') return (PF[x.platform] || '•') + ' 👍 ' + nf(x.likes) + ' · 💬 ' + nf(x.comments) + ' · 🔁 ' + nf(x.shares) + (x.reach !== null && x.reach !== undefined ? ' · 👁 ' + nf(x.reach) : '');
+        if (!t.length) return '<span class="p-cell-muted">-</span>' + roiLine(p.attribution);
+        return '<div class="sp-eng">' + roiLine(p.attribution) + t.map(x => {
+            if (x.metrics_state === 'ok') return (PF[x.platform] || '•') + ' 👍 ' + nf(x.likes) + ' · 💬 ' + nf(x.comments) + ' · 🔁 ' + nf(x.shares) + (x.reach !== null && x.reach !== undefined ? ' · 👁 ' + nf(x.reach) : '') + (x.saves ? ' · 🔖 ' + nf(x.saves) : '') + (x.views ? ' · ▶️ ' + nf(x.views) : '');
             if (x.metrics_state === 'unavailable') return (PF[x.platform] || '•') + ' <span class="p-cell-muted" title="' + esc(x.metrics_note || '') + '">' + T('غير متاح', 'Unavailable') + '</span>';
             return (PF[x.platform] || '•') + ' <span class="p-cell-muted">' + (x.platform === 'facebook' || x.platform === 'instagram' ? T('بيتحدّث…', 'Updating…') : '-') + '</span>';
         }).join('<br>') + '</div>';
@@ -425,12 +445,15 @@
                 const story = p.post_format === 'story';
                 const editable = !story && ((['draft', 'scheduled', 'failed'].includes(p.status) && !busy) || ts.some(x => x.status === 'published' && x.platform === 'facebook'));
                 const thumb = p.media_path ? ((p.media_type === 'short_video' || isVid(p.media_path)) ? '🎬 ' : '<img src="' + esc(p.media_path) + '" alt="" class="sp-thumb">') : '';
-                return '<tr><td>' + thumb + (story ? '<span class="pill">◎ ' + T('ستوري', 'Story') + '</span>' : esc((p.content || '').slice(0, 90))) + '</td><td>' + targetsCell(p) + '</td><td>' + engCell(p) + '</td><td>' + pill(p.status) + '</td><td class="p-cell-muted">' + esc(spLocal(p.created_at)) + '</td><td class="sp-actions">'
-                    + (failed ? '<button class="p-btn outline xs" onclick="retryPost(' + p.id + ', this)">↻ ' + T('إعادة', 'Retry') + '</button> ' : '')
-                    + (uncertain ? '<button class="p-btn outline xs" onclick="reconcilePost(' + p.id + ', this)" title="' + T('نسأل المنصة: المنشور اتنشر فعلًا؟', 'Ask the platform whether it was published') + '">🔍 ' + T('تحقق', 'Verify') + '</button> <button class="p-btn ghost xs" onclick="resolvePost(' + p.id + ')" title="' + T('حسم يدوي', 'Resolve manually') + '">✋</button> ' : '')
-                    + (editable ? '<button class="p-btn ghost xs" onclick="editPost(' + p.id + ')" title="' + T('تعديل', 'Edit') + '">✏️</button>' : '')
-                    + '<button class="p-btn ghost xs" onclick="duplicatePost(' + p.id + ')" title="' + T('نسخة كمسودة', 'Duplicate as draft') + '">📄</button>'
-                    + (!busy ? '<button class="p-btn ghost xs" onclick="deletePost(' + p.id + ')" title="' + T('مسح', 'Delete') + '">🗑</button>' : '') + '</td></tr>';
+                const pending = p.approval_state === 'pending';
+                const approval = pending ? '<div class="sp-appr"><span class="pill orange">⏳ ' + T('منتظر الاعتماد', 'Awaiting approval') + '</span>' + (p.author ? ' <span class="p-cell-muted sp-small">' + T('من ', 'by ') + esc(p.author) + '</span>' : '') + (can('publish') ? ' <button class="p-btn primary xs" onclick="reviewPost(' + p.id + ', \'approve\')">✔ ' + T('اعتماد ونشر', 'Approve & publish') + '</button> <button class="p-btn ghost xs" onclick="reviewPost(' + p.id + ', \'reject\')">↩ ' + T('رجّعه بملاحظة', 'Send back') + '</button>' : '') + '</div>'
+                    : (p.approval_state === 'rejected' ? '<div class="sp-appr"><span class="pill red">↩ ' + T('محتاج تعديل', 'Needs changes') + '</span>' + (p.review_note ? ' <span class="sp-small">' + esc(p.review_note) + '</span>' : '') + '</div>' : '');
+                return '<tr><td>' + thumb + (story ? '<span class="pill">◎ ' + T('ستوري', 'Story') + '</span>' : esc((p.content || '').slice(0, 90))) + approval + '</td><td>' + targetsCell(p) + '</td><td>' + engCell(p) + '</td><td>' + pill(p.status) + '</td><td class="p-cell-muted">' + esc(spLocal(p.created_at)) + '</td><td class="sp-actions">'
+                    + (failed && can('publish') ? '<button class="p-btn outline xs" onclick="retryPost(' + p.id + ', this)">↻ ' + T('إعادة', 'Retry') + '</button> ' : '')
+                    + (uncertain && can('publish') ? '<button class="p-btn outline xs" onclick="reconcilePost(' + p.id + ', this)" title="' + T('نسأل المنصة: المنشور اتنشر فعلًا؟', 'Ask the platform whether it was published') + '">🔍 ' + T('تحقق', 'Verify') + '</button> <button class="p-btn ghost xs" onclick="resolvePost(' + p.id + ')" title="' + T('حسم يدوي', 'Resolve manually') + '">✋</button> ' : '')
+                    + (editable && can('publish') ? '<button class="p-btn ghost xs" onclick="editPost(' + p.id + ')" title="' + T('تعديل', 'Edit') + '">✏️</button>' : '')
+                    + (can('draft') ? '<button class="p-btn ghost xs" onclick="duplicatePost(' + p.id + ')" title="' + T('نسخة كمسودة', 'Duplicate as draft') + '">📄</button>' : '')
+                    + (!busy && can('publish') ? '<button class="p-btn ghost xs" onclick="deletePost(' + p.id + ')" title="' + T('مسح', 'Delete') + '">🗑</button>' : '') + '</td></tr>';
             }).join('');
             if (res.data.posts.some(p => p.status === 'publishing')) loadTimer = setTimeout(load, 8000);
             const needs = res.data.posts.some(p => (p.targets || []).some(x => x.status === 'published' && (x.platform === 'facebook' || x.platform === 'instagram') && !x.metrics_at));
@@ -513,6 +536,14 @@
         const res = await jsonPost('/api/social/posts/' + id + '/delete', { remote });
         if (res.success) { P.toast(T('اتمسح', 'Deleted'), 'success'); load(); loadCalendar(); loadStats(); } else P.toast(res.error || T('تعذر', 'Failed'), 'error');
     };
+    window.reviewPost = async function (id, decision) {
+        let note = '';
+        if (decision === 'reject') { note = prompt(T('اكتب للعضو إيه المطلوب تعديله:', 'Tell the team member what to change:')) || ''; if (!note.trim()) return; }
+        else if (!confirm(T('اعتماد المنشور؟ هيتنشر على الصفحات وفي المواعيد اللي اختارها العضو.', 'Approve this post? It will publish to the pages and times the member chose.'))) return;
+        const res = await jsonPost('/api/social/posts/' + id + '/review', { decision, note });
+        if (res.success) { P.toast(decision === 'approve' ? T('اتعتمد ✔', 'Approved ✔') : T('اترجع للعضو', 'Sent back'), 'success'); load(); loadStats(); loadCalendar(); }
+        else P.toast(res.error || T('تعذر', 'Failed'), 'error');
+    };
     window.reconcilePost = async function (id, btn) {
         if (btn) { btn.disabled = true; btn.textContent = '…'; }
         const res = await jsonPost('/api/social/posts/' + id + '/reconcile');
@@ -573,6 +604,7 @@
     }
     async function loadStats() {
         loadHealth();
+        loadGrowth();
         const days = +$('spDays').value || 30;
         const res = await fetchJSON('/api/social/stats?days=' + days);
         const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
@@ -597,6 +629,14 @@
             const tot = Math.max(1, v.total);
             return '<div class="sp-prow"><span class="nm">' + (PF[k] || '•') + ' ' + esc(PN[k] || k) + '</span><div class="sp-meter" title="' + T('اتنشر ', 'Published ') + v.published + ' · ' + T('فشل ', 'Failed ') + v.failed + ' · ' + T('مجدول ', 'Scheduled ') + v.scheduled + '"><b style="width:' + v.published / tot * 100 + '%;background:#22c55e"></b><b style="width:' + v.scheduled / tot * 100 + '%;background:#6366f1"></b><b style="width:' + v.failed / tot * 100 + '%;background:#ef4444"></b></div><span class="sp-num-r">' + nf(v.total) + '</span></div>';
         }).join('') + '<div class="p-cell-muted sp-small">🟢 ' + T('اتنشر', 'Published') + ' &nbsp;🟣 ' + T('مجدول', 'Scheduled') + ' &nbsp;🔴 ' + T('فشل', 'Failed') + '</div>' : '<span class="p-cell-muted">' + T('مفيش بيانات في الفترة دي', 'No data in this period') + '</span>';
+        // العائد من السوشيال: نقرات روابط التتبع والحجوزات اللي جت منها
+        const bk = d.bookings || {};
+        const roi = $('spRoi');
+        if (bk.clicks || bk.bookings) {
+            roi.hidden = false;
+            roi.innerHTML = '<div class="sp-roi-grid"><div><span>🔗</span><b>' + nf(bk.clicks) + '</b><small>' + T('نقرة على روابط منشوراتك', 'clicks on your post links') + '</small></div><div><span>🧾</span><b>' + nf(bk.bookings) + '</b><small>' + T('حجز جه من السوشيال', 'bookings from social') + '</small></div><div><span>💰</span><b>' + esc(money(bk.revenue || 0, bk.currency)) + '</b><small>' + T('إيراد مؤكد من السوشيال', 'confirmed social revenue') + '</small></div>'
+                + (bk.clicks ? '<div><span>📈</span><b>' + (bk.clicks ? (Math.round(bk.bookings / bk.clicks * 1000) / 10) : 0) + '%</b><small>' + T('نسبة التحويل', 'conversion rate') + '</small></div>' : '') + '</div>';
+        } else roi.hidden = true;
         const top = d.top_posts || [];
         $('spTop').innerHTML = top.length ? top.map(x => '<div class="sp-prow"><span>' + (PF[x.platform] || '•') + '</span><span class="sp-ellipsis">' + esc(x.content) + '</span><span class="sp-eng">👍 ' + nf(x.likes) + ' · 💬 ' + nf(x.comments) + ' · 🔁 ' + nf(x.shares) + '</span></div>').join('') : '<span class="p-cell-muted">' + T('لسه مفيش بيانات تفاعل. اضغط «تحديث التفاعل من Meta».', 'No engagement data yet. Press "Refresh engagement from Meta".') + '</span>';
     }
@@ -611,6 +651,111 @@
         } else if (manual) P.toast(res.error || T('تعذر التحديث', 'Could not refresh'), 'error');
     };
     $('spDays').addEventListener('change', loadStats);
+
+    // ================= نمو المتابعين =================
+    function spark(points) {
+        if (!points || points.length < 2) return '';
+        const w = 220, h = 46, vals = points.map(p => p.followers), min = Math.min(...vals), max = Math.max(...vals), span = Math.max(1, max - min);
+        const xy = points.map((p, i) => (i / (points.length - 1) * w).toFixed(1) + ',' + (h - 4 - (p.followers - min) / span * (h - 8)).toFixed(1)).join(' ');
+        return '<svg class="sp-spark" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" aria-hidden="true"><polyline points="' + xy + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
+    }
+    async function loadGrowth() {
+        const res = await fetchJSON('/api/social/growth?days=' + (+$('spDays').value || 30));
+        const card = $('spGrowthCard');
+        if (!res.success || !res.data.installed || !(res.data.accounts || []).length) { card.hidden = true; return; }
+        card.hidden = false;
+        $('spGrowth').innerHTML = res.data.accounts.map(a => {
+            const ch = a.change;
+            const cls = ch > 0 ? 'up' : (ch < 0 ? 'down' : '');
+            return '<div class="sp-gacc"><div class="sp-gh">' + (PF[a.platform] || '•') + ' <b>' + esc(a.name || '') + '</b></div><div class="sp-gv">' + (a.current !== null ? nf(a.current) : '–') + ' <small>' + T('متابع', 'followers') + '</small></div>'
+                + '<div class="sp-gd ' + cls + '">' + (ch === null ? '' : (ch > 0 ? '▲ +' : ch < 0 ? '▼ ' : '') + nf(ch) + (a.change_pct !== null ? ' (' + a.change_pct + '%)' : '')) + '</div>'
+                + (a.points.length >= 2 ? spark(a.points) : '<div class="p-cell-muted sp-small">' + T('المنحنى بيظهر بعد يومين من اللقطات اليومية', 'The curve appears after two daily snapshots') + '</div>') + '</div>';
+        }).join('');
+    }
+
+    // ================= المنافسين =================
+    const MIX = { reels: T('ريلز', 'Reels'), photo: T('صور', 'Photos'), carousel: T('كاروسيل', 'Carousels'), other: T('أخرى', 'Other') };
+    function renderCompetitors(d) {
+        const list = $('cpList');
+        if (!d.installed) { list.innerHTML = '<div class="alert alert-warning">' + T('شغّل ملف قاعدة البيانات 2026_10_21_000001_social_growth.sql الأول.', 'Run the 2026_10_21_000001_social_growth.sql migration first.') + '</div>'; return; }
+        $('cpInsights').innerHTML = (d.insights || []).length ? '<ul class="cp-ins">' + d.insights.map(x => '<li>' + esc(AR ? x[0] : x[1]) + '</li>').join('') + '</ul>' : '';
+        const me = d.me;
+        const head = '<tr><th>' + T('الحساب', 'Account') + '</th><th>' + T('المتابعين', 'Followers') + '</th><th>' + T('منشور/أسبوع', 'Posts/week') + '</th><th>' + T('متوسط التفاعل', 'Avg engagement') + '</th><th>' + T('أنواع المحتوى', 'Content mix') + '</th><th></th></tr>';
+        const meRow = me ? '<tr class="cp-me"><td><b>⭐ @' + esc(me.username || '') + '</b> <span class="p-cell-muted">' + T('(انت)', '(you)') + '</span></td><td>' + (me.followers !== null ? nf(me.followers) : '–') + '</td><td>' + (me.posts_per_week ?? '–') + '</td><td>' + (me.avg_engagement ?? '–') + '</td><td></td><td></td></tr>' : '';
+        const rows = (d.competitors || []).map(c => {
+            const mix = Object.entries(c.mix || {}).map(([k, v]) => esc(MIX[k] || k) + ' ' + v).join(' · ');
+            const ch = c.followers_change_30d;
+            return '<tr><td><a href="https://instagram.com/' + encodeURIComponent(c.username) + '" target="_blank" rel="noopener">@' + esc(c.username) + '</a>' + (c.display_name ? '<div class="p-cell-muted sp-small">' + esc(c.display_name) + '</div>' : '') + (c.last_error ? '<div class="sp-err">' + esc(c.last_error) + '</div>' : '') + '</td>'
+                + '<td>' + (c.followers !== null ? nf(c.followers) : '–') + (ch ? ' <span class="sp-gd ' + (ch > 0 ? 'up' : 'down') + '">' + (ch > 0 ? '+' : '') + nf(ch) + '</span>' : '') + '</td><td>' + (c.posts_per_week ?? '–') + '</td><td>' + (c.avg_engagement ?? '–') + '</td><td class="sp-small">' + mix + '</td>'
+                + '<td><button class="p-btn ghost xs" data-cpdel="' + c.id + '" title="' + T('شيل', 'Remove') + '">🗑</button></td></tr>'
+                + ((c.top || []).length ? '<tr class="cp-top"><td colspan="6">' + T('🏆 أنجح منشوراتهم: ', '🏆 Their top posts: ') + c.top.map(tp => '<span class="cp-post">' + (safeUrl(tp.permalink) ? '<a href="' + esc(safeUrl(tp.permalink)) + '" target="_blank" rel="noopener">' : '') + esc((tp.caption || '').slice(0, 70) || '—') + (safeUrl(tp.permalink) ? '</a>' : '') + ' <b>' + nf(tp.engagement) + '</b></span>').join('') + ((c.hashtags || []).length ? '<div class="p-cell-muted sp-small">#' + c.hashtags.map(esc).join(' #') + '</div>' : '') + '</td></tr>' : '');
+        }).join('');
+        list.innerHTML = (rows || meRow) ? '<div class="p-table-scroll"><table class="p-table">' + head + meRow + rows + '</table></div>' + (!rows ? '<p class="p-cell-muted">' + T('لسه ما ضفتش منافسين.', 'No competitors added yet.') + '</p>' : '') : '<p class="p-cell-muted">' + T('لسه ما ضفتش منافسين.', 'No competitors added yet.') + '</p>';
+    }
+    async function loadCompetitors() {
+        const res = await fetchJSON('/api/social/competitors');
+        if (res.success) renderCompetitors(res.data); else $('cpList').textContent = res.error || T('تعذر التحميل', 'Could not load');
+    }
+    $('cpForm').addEventListener('submit', async () => {
+        const u = $('cpUser').value.trim(); if (!u) return;
+        const btn = $('cpAdd'); btn.disabled = true;
+        const res = await jsonPost('/api/social/competitors', { username: u });
+        btn.disabled = false;
+        if (res.success) { $('cpUser').value = ''; renderCompetitors(res.data); P.toast(T('اتضاف ✔', 'Added ✔'), 'success'); } else P.toast(res.error || T('تعذر', 'Failed'), 'error');
+    });
+    $('cpRefresh').addEventListener('click', async () => {
+        const btn = $('cpRefresh'); btn.disabled = true;
+        const res = await jsonPost('/api/social/competitors/refresh');
+        btn.disabled = false;
+        if (res.success) { renderCompetitors(res.data); P.toast(T('اتحدّث ✔', 'Refreshed ✔'), 'success'); } else P.toast(res.error || T('تعذر', 'Failed'), 'error');
+    });
+    $('cpList').addEventListener('click', async e => {
+        const b = e.target.closest('[data-cpdel]'); if (!b) return;
+        if (!confirm(T('تشيل المنافس ده؟', 'Remove this competitor?'))) return;
+        const res = await jsonPost('/api/social/competitors/' + b.dataset.cpdel + '/delete');
+        if (res.success) renderCompetitors(res.data);
+    });
+
+    // ================= موافقة العميل =================
+    const PLAN_ST = { draft: T('مسودة', 'Draft'), active: T('شغالة', 'Active'), paused: T('متوقفة', 'Paused'), completed: T('خلصت', 'Completed'), queued: T('بتتجهز', 'Preparing'), generating: T('بتتجهز', 'Preparing'), failed: T('فشلت', 'Failed'), cancelled: T('ملغية', 'Cancelled') };
+    async function loadShare() {
+        const res = await fetchJSON('/api/social/monthly-plans');
+        const sel = $('shPlan');
+        const plans = (res.success && res.data.plans) || [];
+        const keep = sel.value;
+        sel.innerHTML = plans.length ? plans.map(p => '<option value="' + p.id + '">' + esc(p.month_key) + ' · ' + esc(PLAN_ST[p.status] || p.status) + '</option>').join('') : '<option value="">' + T('مفيش خطط لسه', 'No plans yet') + '</option>';
+        if (keep && plans.some(p => String(p.id) === keep)) sel.value = keep;
+        $('shCreate').disabled = !plans.length;
+        loadShareLinks();
+    }
+    async function loadShareLinks() {
+        const id = $('shPlan').value;
+        if (!id) { $('shLinks').innerHTML = $('shFeedback').innerHTML = ''; return; }
+        const res = await fetchJSON('/api/social/monthly-plans/' + id + '/share');
+        if (!res.success) return;
+        const d = res.data;
+        if (!d.installed) { $('shLinks').innerHTML = '<div class="alert alert-warning sp-small">' + T('شغّل ملف قاعدة البيانات 2026_10_21_000001_social_growth.sql الأول.', 'Run the 2026_10_21_000001_social_growth.sql migration first.') + '</div>'; return; }
+        $('shLinks').innerHTML = (d.links || []).length ? '<div class="sp-small sp-gap-s"><b>' + T('الروابط', 'Links') + '</b>' + d.links.map(l => '<div class="sp-hrow">' + (+l.active ? '🟢' : '⚪') + ' ' + esc(l.client_name || T('عميل', 'Client')) + ' · ' + (+l.can_approve ? T('مراجعة واعتماد', 'review & approve') : T('مراجعة بس', 'review only')) + ' · ' + T('لحد ', 'until ') + esc(spLocal(l.expires_at)) + (l.last_viewed_at ? ' · 👁 ' + T('اتفتح ', 'opened ') + esc(spLocal(l.last_viewed_at)) : '') + (+l.active ? ' <button class="p-btn ghost xs" data-revoke="' + l.id + '">' + T('إلغاء', 'Revoke') + '</button>' : '') + '</div>').join('') + '</div>' : '';
+        const FB = { approved: '✅ ' + T('اعتمد', 'Approved'), changes: '✏️ ' + T('طلب تعديلات', 'Requested changes'), comment: '💬 ' + T('ملاحظة', 'Comment') };
+        $('shFeedback').innerHTML = (d.feedback || []).length ? '<div class="sp-small sp-gap-s"><b>' + T('ردود العميل', 'Client responses') + '</b>' + d.feedback.map(f => '<div class="sp-hrow"><span>' + (FB[f.decision] || '') + '</span><b>' + esc(f.author_name || '') + '</b>' + (f.item_id ? '<span class="p-cell-muted">' + T('على منشور #', 'on post #') + f.item_id + '</span>' : '') + '<span>' + esc(f.message || '') + '</span><span class="p-cell-muted">' + esc(spLocal(f.created_at)) + '</span></div>').join('') + '</div>' : '';
+    }
+    if ($('shPlan')) $('shPlan').addEventListener('change', loadShareLinks);
+    if ($('shCreate')) $('shCreate').addEventListener('click', async () => {
+        const id = $('shPlan').value; if (!id) return;
+        const btn = $('shCreate'); btn.disabled = true;
+        const res = await jsonPost('/api/social/monthly-plans/' + id + '/share', { can_approve: $('shApprove').checked, client_name: $('shClient').value.trim(), days: +$('shDays').value });
+        btn.disabled = false;
+        if (!res.success) { P.toast(res.error || T('تعذر', 'Failed'), 'error'); return; }
+        $('shNew').innerHTML = '<div class="alert alert-success sp-gap-s"><div class="sp-small">' + T('ابعت الرابط ده للعميل (بيظهر مرة واحدة بس - احفظه):', 'Send this link to your client (shown once — keep it):') + '</div><div class="sp-row"><input class="p-select sp-grow" readonly dir="ltr" id="shUrl" value="' + esc(res.data.url) + '"><button type="button" class="p-btn outline sm" id="shCopy">📋 ' + T('نسخ', 'Copy') + '</button><a class="p-btn outline sm" target="_blank" rel="noopener" href="' + esc(res.data.url) + '">' + T('معاينة ↗', 'Preview ↗') + '</a><a class="p-btn outline sm" target="_blank" rel="noopener" href="https://wa.me/?text=' + encodeURIComponent(res.data.url) + '">WhatsApp</a></div></div>';
+        $('shCopy').onclick = () => { $('shUrl').select(); try { navigator.clipboard.writeText($('shUrl').value); } catch (e) { document.execCommand('copy'); } P.toast(T('اتنسخ ✔', 'Copied ✔'), 'success'); };
+        loadShareLinks();
+    });
+    if ($('shLinks')) $('shLinks').addEventListener('click', async e => {
+        const b = e.target.closest('[data-revoke]'); if (!b) return;
+        if (!confirm(T('إلغاء الرابط؟ العميل مش هيقدر يفتحه تاني.', 'Revoke this link? The client will no longer be able to open it.'))) return;
+        const res = await jsonPost('/api/social/monthly-plans/' + $('shPlan').value + '/share/' + b.dataset.revoke + '/revoke');
+        if (res.success) loadShareLinks(); else P.toast(res.error || T('تعذر', 'Failed'), 'error');
+    });
 
     // ================= الحسابات =================
     async function loadAccounts() {
@@ -650,10 +795,12 @@
                 + '<div class="ib-head"><span class="ib-tag ' + it[2] + '">' + it[0] + ' ' + it[1] + '</span><b>' + esc(c.author_name || T('مستخدم', 'User')) + '</b><span class="p-cell-muted">' + (PF[c.platform] || '') + ' ' + esc(c.page_name || '') + ' · ' + esc(c.commented_at ? spLocal(c.commented_at) : '') + '</span>' + (c.like_count ? '<span class="p-cell-muted">👍 ' + nf(c.like_count) + '</span>' : '') + '</div>'
                 + '<div class="ib-msg">' + esc(c.message) + '</div>'
                 + (c.post_content ? '<div class="ib-post p-cell-muted">↳ ' + esc(c.post_content) + (safeUrl(c.permalink) ? ' <a href="' + esc(safeUrl(c.permalink)) + '" target="_blank" rel="noopener">' + T('افتح المنشور ↗', 'Open post ↗') + '</a>' : '') + '</div>' : '')
+                + (c.private_replied_at ? '<div class="ib-reply-done">📩 ' + (+c.auto_handled ? T('اتبعتله رسالة خاصة تلقائيًا: ', 'Auto private message sent: ') : T('اتبعتله رسالة خاصة: ', 'Private message sent: ')) + esc((c.private_reply_text || '').slice(0, 160)) + '</div>' : '')
                 + (c.status === 'replied' && c.reply_text ? '<div class="ib-reply-done">✔ ' + T('ردّك: ', 'Your reply: ') + esc(c.reply_text) + '</div>' : '')
-                + (c.status === 'new' ? '<div class="ib-compose"><textarea class="p-select" rows="2" maxlength="2000" placeholder="' + T('اكتب ردك…', 'Write your reply…') + '">' + esc(c.ai_suggestion || '') + '</textarea><div class="sp-row">'
+                + (c.status === 'new' && can('inbox') ? '<div class="ib-compose"><textarea class="p-select" rows="2" maxlength="2000" placeholder="' + T('اكتب ردك…', 'Write your reply…') + '">' + esc(c.ai_suggestion || '') + '</textarea><div class="sp-row">'
                     + '<button type="button" class="p-btn outline xs" data-ib="suggest">✨ ' + T('اقترح رد', 'Suggest reply') + '</button>'
                     + '<button type="button" class="p-btn primary xs" data-ib="reply">' + T('إرسال الرد', 'Send reply') + '</button>'
+                    + (!c.private_replied_at && ['facebook', 'instagram'].includes(c.platform) ? '<button type="button" class="p-btn outline xs" data-ib="private" title="' + T('رسالة خاصة (ماسنجر/دايركت) بالنص اللي فوق، أو بقالب الرد الخاص لو فاضي', 'Private message (Messenger/Direct) with the text above, or your private template if empty') + '">📩 ' + T('رد في الخاص', 'Reply privately') + '</button>' : '')
                     + '<button type="button" class="p-btn ghost xs" data-ib="hide" title="' + T('إخفاء التعليق من الجمهور (سبام/إساءة)', 'Hide from the public (spam/abuse)') + '">🙈 ' + T('إخفاء', 'Hide') + '</button>'
                     + '<button type="button" class="p-btn ghost xs" data-ib="done" title="' + T('اتعامل معاه (مثلًا رديت في الخاص)', 'Handled (e.g. answered privately)') + '">✓ ' + T('تم', 'Done') + '</button></div></div>' : '')
                 + '</article>';
@@ -678,6 +825,13 @@
             if (res.success) { ta.value = res.data.reply; ta.focus(); } else P.toast(res.error || T('تعذر', 'Failed'), 'error');
             return;
         }
+        if (act === 'private') {
+            if (!confirm(T('هيتبعت رسالة خاصة واحدة لصاحب التعليق' + (ta.value.trim() ? ' بالنص المكتوب' : ' بقالب الرد الخاص') + '، ومعاها رد علني قصير إنك بعتله. نكمّل؟', 'Send one private message to the commenter' + (ta.value.trim() ? ' with the text above' : ' using your private template') + ', plus a short public reply saying so. Continue?'))) { btn.disabled = false; return; }
+            res = await jsonPost('/api/social/inbox/' + id + '/private', { text: ta.value.trim() || null, ack: true });
+            btn.disabled = false;
+            if (res.success) { P.toast(T('اتبعت الرد الخاص ✔', 'Private reply sent ✔'), 'success'); loadInbox(); } else P.toast(res.error || T('تعذر', 'Failed'), 'error');
+            return;
+        }
         if (act === 'reply') {
             if (!ta.value.trim()) { btn.disabled = false; P.toast(T('اكتب الرد الأول', 'Write a reply first'), 'error'); return; }
             res = await jsonPost('/api/social/inbox/' + id + '/reply', { text: ta.value.trim() });
@@ -692,6 +846,26 @@
         else P.toast(res.error || T('تعذر', 'Failed'), 'error');
     });
     ['ibStatus', 'ibIntent'].forEach(id => $(id).addEventListener('change', loadInbox));
+    // ---- إعدادات الرد الخاص التلقائي
+    async function loadInboxSettings() {
+        const res = await fetchJSON('/api/social/inbox-settings');
+        if (!res.success) return;
+        const d = res.data;
+        $('ibAuto').checked = !!d.auto_private;
+        document.querySelectorAll('#ibIntents input').forEach(cb => { cb.checked = (d.auto_intents || []).includes(cb.value); });
+        $('ibTemplate').value = d.private_template || '';
+        $('ibAck').value = d.public_ack || '';
+        const st = $('ibAutoState');
+        st.textContent = d.auto_private ? T('مفعّل', 'On') : T('مقفول', 'Off');
+        st.classList.toggle('hot', !!d.auto_private);
+        if (!d.installed) $('ibSaveSettings').disabled = true;
+    }
+    $('ibSaveSettings').addEventListener('click', async () => {
+        const btn = $('ibSaveSettings'); btn.disabled = true;
+        const res = await jsonPost('/api/social/inbox-settings', { auto_private: $('ibAuto').checked, auto_intents: [...document.querySelectorAll('#ibIntents input:checked')].map(cb => cb.value), private_template: $('ibTemplate').value, public_ack: $('ibAck').value });
+        btn.disabled = false;
+        if (res.success) { P.toast(T('اتحفظت الإعدادات ✔', 'Settings saved ✔'), 'success'); loadInboxSettings(); } else P.toast(res.error || T('تعذر الحفظ', 'Could not save'), 'error');
+    });
     $('ibSync').addEventListener('click', async () => {
         const btn = $('ibSync'); const lbl = btn.textContent; btn.disabled = true; btn.textContent = T('بيسحب من Meta…', 'Fetching from Meta…');
         const res = await jsonPost('/api/social/inbox/sync');
@@ -702,9 +876,47 @@
         note.innerHTML = r.needs_permission
             ? '<div class="alert alert-warning">' + T('Meta رفضت قراءة التعليقات: الصلاحيات ناقصة. شوف تبويب «الحسابات» ← «ليه صندوق التعليقات مش شغال؟».', 'Meta refused to read comments: missing permissions. See Accounts → "Why don\'t the comments inbox… work?".') + (Object.values(r.errors || {})[0] ? '<div class="p-cell-muted sp-small">' + esc(Object.values(r.errors)[0]) + '</div>' : '') + '</div>'
             : (Object.keys(r.errors || {}).length ? '<div class="alert alert-warning sp-small">' + esc(Object.values(r.errors).join(' | ')) + '</div>' : '');
-        P.toast(T('اتفحص ', 'Checked ') + nf(r.checked) + T(' منشور · ', ' posts · ') + nf(r.new) + T(' تعليق جديد', ' new comments'), 'success');
+        P.toast(T('اتفحص ', 'Checked ') + nf(r.checked) + T(' منشور · ', ' posts · ') + nf(r.new) + T(' تعليق جديد', ' new comments') + (r.auto_private ? T(' · اتبعت ', ' · ') + nf(r.auto_private) + T(' رد خاص تلقائي', ' auto private replies') : ''), 'success');
         loadInbox();
     });
+
+    // ================= إعدادات تيك توك عند اعتماد الخطة الشهرية =================
+    // تيك توك بيشترط إن صاحب الحساب يختار الخصوصية وإعدادات التفاعل بنفسه ويوافق على سياسة الموسيقى قبل النشر.
+    window.TFSocialTikTokOptions = function (connectionId) {
+        return new Promise(async resolve => {
+            const res = await fetchJSON('/api/social/tiktok/creator-info?connection_id=' + encodeURIComponent(connectionId));
+            if (!res.success) { P.toast(res.error || T('تعذر الوصول لتيك توك - اربطه تاني', 'Could not reach TikTok — reconnect it'), 'error'); resolve(null); return; }
+            const c = res.data;
+            const ov = document.createElement('div');
+            ov.className = 'p-modal-overlay open';
+            const box = (k, label, off) => '<label class="sp-radio' + (off ? ' off' : '') + '"><input type="checkbox" data-k="' + k + '"' + (off ? ' disabled' : ' checked') + '> ' + label + '</label>';
+            ov.innerHTML = '<div class="p-modal" role="dialog" aria-modal="true"><div class="p-modal-head"><h3>🎵 ' + T('إعدادات النشر على تيك توك', 'TikTok posting settings') + '</h3></div><div class="p-modal-body">'
+                + '<p class="sp-small">' + T('هتتطبق على كل فيديوهات تيك توك في الخطة دي، على حساب: ', 'Applies to every TikTok video in this plan, on account: ') + '<b>' + esc(c.nickname || '') + '</b></p>'
+                + '<label class="sp-field">' + T('مين يقدر يشوف الفيديوهات؟', 'Who can view the videos?') + '<select class="p-select" data-k="privacy"><option value="">' + T('اختار…', 'Select…') + '</option>' + (c.privacy_level_options || []).map(o => '<option value="' + esc(o) + '">' + esc(TT_PRIV[o] || o) + '</option>').join('') + '</select></label>'
+                + '<div class="sp-row sp-gap-s">' + box('comment', T('السماح بالتعليقات', 'Allow comments'), c.comment_disabled) + box('duet', 'Duet', c.duet_disabled) + box('stitch', 'Stitch', c.stitch_disabled) + '</div>'
+                + '<label class="sp-check"><input type="checkbox" data-k="brand_organic"> ' + T('الفيديوهات بتروّج لنشاطك (Promotional content)', 'Videos promote your own business (Promotional content)') + '</label>'
+                + '<p class="p-cell-muted sp-small">' + T('بالاعتماد انت موافق على ', 'By approving, you agree to TikTok\'s ') + '<a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a>' + T(' الخاصة بتيك توك.', '.') + '</p>'
+                + '</div><div class="p-modal-foot"><button type="button" class="p-btn outline" data-x="cancel">' + T('إلغاء', 'Cancel') + '</button><button type="button" class="p-btn primary" data-x="ok">' + T('اعتماد', 'Approve') + '</button></div></div>';
+            document.body.appendChild(ov);
+            const q = k => ov.querySelector('[data-k="' + k + '"]');
+            ov.addEventListener('click', e => {
+                const x = e.target.closest('[data-x]'); if (!x) return;
+                if (x.dataset.x === 'cancel') { ov.remove(); resolve(null); return; }
+                if (!q('privacy').value) { P.toast(T('اختار مين يقدر يشوف الفيديوهات', 'Choose who can view the videos'), 'error'); return; }
+                const org = q('brand_organic').checked;
+                ov.remove();
+                resolve({ privacy_level: q('privacy').value, allow_comment: q('comment').checked, allow_duet: q('duet').checked, allow_stitch: q('stitch').checked, commercial: org, brand_organic: org, brand_content: false });
+            });
+        });
+    };
+
+    // ================= إخفاء اللي مش مسموح للدور =================
+    if (!can('draft')) document.querySelectorAll('.sp-hero-actions .p-btn:not(#spReportBtn)').forEach(b => { b.hidden = true; });
+    if (!can('manage')) {
+        ['ibSettingsBox', 'shareCard', 'cpForm'].forEach(id => { const el = $(id); if (el) el.hidden = true; });
+        document.querySelectorAll('.sp-connect, #cpRefresh').forEach(el => { el.hidden = true; });
+    }
+    if (!can('inbox')) $('ibSync').hidden = true;
 
     // ================= البداية =================
     loadStats();
