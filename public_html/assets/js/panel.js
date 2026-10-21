@@ -53,6 +53,8 @@
     }
 
     async function fetchJSON(url, options) {
+        // رسايل الشبكة بلغة الواجهة (الحسابات الإنجليزي كانت بتشوفها بالعربي)
+        const L = (ar, en) => (document.documentElement.lang || 'ar').toLowerCase().startsWith('ar') ? ar : en;
         const opts = options || {};
         const method = String(opts.method || 'GET').toUpperCase();
         const readOnly = method === 'GET' || method === 'HEAD';
@@ -66,17 +68,17 @@
             }));
         } catch (e) {
             return { success: false, error: readOnly
-                ? 'تعذر الاتصال. تحقق من اتصال الإنترنت ثم أعد المحاولة.'
-                : 'تعذر التأكد من نتيجة العملية. حدّث البيانات للتحقق قبل تكرار الطلب.',
+                ? L('تعذر الاتصال. تحقق من اتصال الإنترنت ثم أعد المحاولة.', 'Connection failed. Check your internet connection and try again.')
+                : L('تعذر التأكد من نتيجة العملية. حدّث البيانات للتحقق قبل تكرار الطلب.', 'Could not confirm the result. Refresh to check before repeating the request.'),
                 network_error: true, retry_safe: readOnly };
         }
         let body;
         try { body = await res.json(); } catch (e) {
-            return { success: false, error: readOnly ? 'تعذر تحميل البيانات الآن. حاول مرة أخرى.'
-                : 'تعذر التأكد من نتيجة العملية. تحقق من البيانات قبل تكرار الطلب.', retry_safe: readOnly };
+            return { success: false, error: readOnly ? L('تعذر تحميل البيانات الآن. حاول مرة أخرى.', 'Could not load data right now. Please try again.')
+                : L('تعذر التأكد من نتيجة العملية. تحقق من البيانات قبل تكرار الطلب.', 'Could not confirm the result. Check before repeating the request.'), retry_safe: readOnly, http_status: res.status };
         }
         if (!body || typeof body !== 'object' || Array.isArray(body)) {
-            return { success: false, error: 'تعذر قراءة البيانات. حاول مرة أخرى.', retry_safe: readOnly };
+            return { success: false, error: L('تعذر قراءة البيانات. حاول مرة أخرى.', 'Could not read the response. Please try again.'), retry_safe: readOnly };
         }
         if (!res.ok) {
             body.success = false;

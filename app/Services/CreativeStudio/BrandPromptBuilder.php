@@ -84,7 +84,8 @@ class BrandPromptBuilder
         $learn = self::learnings((int) $bp->getAttribute('id'));
 
         $parts = [$base . '.'];
-        $parts[] = 'Brand: ' . ($bp->getAttribute('brand_name') ?: '') . ' (' . ($d['business_type'] ?? 'business') . ').';
+        // اسم العلامة مابيدخلش الوصف: موديلات الصور بترسمه ككتابة على الصورة (اتشاف "TOURFECTO TRAVEL" مرسوم على شراع فلوكة)
+        $parts[] = 'Made for a ' . mb_substr((string) ($d['business_type'] ?? 'travel business'), 0, 80) . '. Do not write any brand name, words or letters anywhere in the scene (no signage, sails, shirts or boats with text).';
         if (!in_array($style, ['photo', 'product'], true) && !empty($d['visual_style'])) {
             $parts[] = 'Art direction: ' . $d['visual_style'] . '.';
         }

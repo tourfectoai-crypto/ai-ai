@@ -42,13 +42,36 @@ class CreativeQualityGate
         if(!$jpeg)$jpeg=self::smallJpeg($binary);
         if(!$jpeg)return $none;
         try{
-            if($this->reviewer)$r=($this->reviewer)($jpeg,self::instruction($brief));
-            else{
-                if(!class_exists('GeminiClient')||(class_exists('AiServiceRouting')&&AiServiceRouting::apiKey('gemini')===''))return $none;
-                $r=(new GeminiClient())->describeImage($jpeg,'image/jpeg',self::instruction($brief),['user_id'=>$userId,'responseMimeType'=>'application/json','maxOutputTokens'=>400]);
+            if($this->reviewer)return self::parse(($this->reviewer)($jpeg,self::instruction($brief)));
+            // Gemini أولًا؛ لو مارجعش تقييم صالح نجرب موديل رؤية من OpenAI (الفحص كان بيتعدّى "unchecked" على الاستضافة)
+            $out=$none;$why=[];
+            if(class_exists('GeminiClient')&&(!class_exists('AiServiceRouting')||AiServiceRouting::apiKey('gemini')!=='')){
+                // موديلات Gemini الحديثة بتصرف جزء من الحد على "التفكير"؛ 400 كانت بتقطع الرد قبل الـ JSON
+                $r=(new GeminiClient())->describeImage($jpeg,'image/jpeg',self::instruction($brief),['user_id'=>$userId,'responseMimeType'=>'application/json','maxOutputTokens'=>4096,'temperature'=>0.1]);
+                $out=self::parse($r);if(!$out['checked'])$why[]='gemini:'.mb_substr((string)($r['error']??'unparsed'),0,120);
             }
-        }catch(Throwable $e){return $none;}
-        return self::parse($r);
+            if(!$out['checked']){$r=self::openAiReview($jpeg,self::instruction($brief));$out=self::parse($r);if(!$out['checked'])$why[]='openai:'.mb_substr((string)($r['error']??'unparsed'),0,120);}
+            if(!$out['checked']&&class_exists('Logger'))Logger::warning('Creative QA unavailable',['reasons'=>$why]);
+            return $out;
+        }catch(Throwable $e){if(class_exists('Logger'))Logger::warning('Creative QA error',['error'=>mb_substr($e->getMessage(),0,200)]);return $none;}
+    }
+
+    /** مراجعة بموديل رؤية من OpenAI (OPENAI_VISION_MODEL، افتراضي gpt-4o-mini) @return array{success:bool,data?:string,error?:string} */
+    public static function openAiReview(string $jpeg,string $instruction): array
+    {
+        $key=class_exists('AiServiceRouting')?AiServiceRouting::apiKey('openai'):(defined('OPENAI_API_KEY')?(string)OPENAI_API_KEY:'');
+        if($key==='')return ['success'=>false,'error'=>'openai not configured'];
+        $env=static fn(string $k,string $d)=>(function_exists('env')&&is_string(env($k))&&env($k)!=='')?(string)env($k):$d;
+        $base=rtrim($env('OPENAI_API_BASE_URL','https://api.openai.com/v1'),'/');$model=$env('OPENAI_VISION_MODEL','gpt-4o-mini');
+        if(!preg_match('/^[A-Za-z0-9._-]{1,80}$/D',$model))$model='gpt-4o-mini';
+        $payload=['model'=>$model,'temperature'=>0.1,'max_tokens'=>400,'response_format'=>['type'=>'json_object'],'messages'=>[['role'=>'user','content'=>[['type'=>'text','text'=>$instruction],['type'=>'image_url','image_url'=>['url'=>'data:image/jpeg;base64,'.base64_encode($jpeg),'detail'=>'low']]]]]];
+        $ch=curl_init($base.'/chat/completions');
+        curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>json_encode($payload),CURLOPT_HTTPHEADER=>['Authorization: Bearer '.$key,'Content-Type: application/json'],CURLOPT_TIMEOUT=>45,CURLOPT_CONNECTTIMEOUT=>10,CURLOPT_SSL_VERIFYPEER=>true]);
+        $resp=curl_exec($ch);$http=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);$err=curl_error($ch);curl_close($ch);
+        if($err!=='')return ['success'=>false,'error'=>'network'];
+        $d=json_decode((string)$resp,true);$text=$d['choices'][0]['message']['content']??null;
+        if($http<200||$http>=300||!is_string($text))return ['success'=>false,'error'=>'HTTP '.$http];
+        return ['success'=>true,'data'=>$text];
     }
 
     public static function parse($r): array

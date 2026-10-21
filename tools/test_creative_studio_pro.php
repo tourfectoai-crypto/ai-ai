@@ -151,4 +151,12 @@ ok($a!==$b&&str_contains($a,'Nile Cruise'),'website item prompts vary by index')
 ok(str_contains(WebsiteBuilderService::itemImagePrompt(['name'=>'Deluxe Suite'],'Hotel','hotel'),'hotel room'),'hotel items use a room prompt');
 ok(!str_contains($a,'<')&&str_contains($a,'no text'),'website prompt is sanitised and text-free');
 
+// 13) اسم العلامة مايتكتبش في وصف الصورة (الموديل كان بيرسمه على الشراع)
+require_once $root.'/app/Core/Model.php';require_once $root.'/app/Models/BrandProfile.php';
+final class OfflineBrandProfile extends BrandProfile { public function __construct(array $a){$this->attributes=$a;} }
+$bp=new OfflineBrandProfile(['id'=>5,'brand_name'=>'Tourfecto Travel','profile_json'=>json_encode(['business_type'=>'Egypt tour operator']),'palette_json'=>json_encode(['primary'=>'#0F4C81'])]);
+$bpPrompt=BrandPromptBuilder::build('A felucca on the Nile at sunrise','photo',$bp,'1:1');
+ok(stripos($bpPrompt,'Tourfecto')===false,'brand name never sent to the image model');
+ok(str_contains($bpPrompt,'Egypt tour operator')&&str_contains($bpPrompt,'Do not write any brand name'),'business type kept with a no-text instruction');
+
 echo PHP_EOL.'All '.$passed.' Creative Studio Pro checks passed.'.PHP_EOL;
