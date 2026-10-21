@@ -20,21 +20,21 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
             <p class="sp-hero-sub"><?= $t('اكتب وصمّم وانشر وجدول، ورد على تعليقات عملائك، وتابع النتائج - من مكان واحد.', 'Write, design, publish and schedule, answer your customers\' comments, and track results — all in one place.') ?></p>
         </div>
         <div class="sp-hero-actions">
-            <button class="p-btn primary" type="button" onclick="openNewPost()">＋ <?= $t('منشور جديد', 'New post') ?></button>
-            <button class="p-btn outline" type="button" onclick="openNewPost('story')">◎ <?= $t('ستوري جديدة', 'New story') ?></button>
-            <a class="p-btn outline" id="spReportBtn" href="/social/report" target="_blank" rel="noopener">📄 <?= $t('تقرير الشهر', 'Monthly report') ?></a>
+            <button class="p-btn primary" type="button" onclick="openNewPost()"><i data-ico="plus"></i> <?= $t('منشور جديد', 'New post') ?></button>
+            <button class="p-btn outline" type="button" onclick="openNewPost('story')"><i data-ico="story"></i> <?= $t('ستوري جديدة', 'New story') ?></button>
+            <a class="p-btn outline" id="spReportBtn" href="/social/report" target="_blank" rel="noopener"><i data-ico="report"></i> <?= $t('تقرير الشهر', 'Monthly report') ?></a>
             <button class="sp-pkg-chip" id="spPkgChip" type="button" hidden></button>
         </div>
     </div>
 
     <nav class="p-tabs sp-tabs" role="tablist" aria-label="<?= $t('أقسام السوشيال', 'Social sections') ?>">
-        <button class="p-tab active" role="tab" data-tab="overview" type="button">📊 <?= $t('نظرة عامة', 'Overview') ?></button>
-        <button class="p-tab" role="tab" data-tab="posts" type="button">🗂 <?= $t('المنشورات والتقويم', 'Posts & calendar') ?></button>
-        <button class="p-tab" role="tab" data-tab="inbox" type="button">💬 <?= $t('صندوق التعليقات', 'Comments inbox') ?> <span class="sp-badge" id="spInboxBadge" hidden></span></button>
-        <button class="p-tab" role="tab" data-tab="competitors" type="button">🔭 <?= $t('المنافسين', 'Competitors') ?></button>
-        <button class="p-tab" role="tab" data-tab="plan" type="button">🗓 <?= $t('الخطة الشهرية', 'Monthly plan') ?></button>
-        <button class="p-tab" role="tab" data-tab="accounts" type="button">🔗 <?= $t('الحسابات', 'Accounts') ?></button>
-        <button class="p-tab" role="tab" data-tab="package" type="button">💎 <?= $t('الباقة', 'Plan') ?></button>
+        <button class="p-tab active" role="tab" data-tab="overview" type="button"><i data-ico="overview"></i> <?= $t('نظرة عامة', 'Overview') ?></button>
+        <button class="p-tab" role="tab" data-tab="posts" type="button"><i data-ico="posts"></i> <?= $t('المنشورات والتقويم', 'Posts & calendar') ?></button>
+        <button class="p-tab" role="tab" data-tab="inbox" type="button"><i data-ico="chat"></i> <?= $t('صندوق التعليقات', 'Comments inbox') ?> <span class="sp-badge" id="spInboxBadge" hidden></span></button>
+        <button class="p-tab" role="tab" data-tab="competitors" type="button"><i data-ico="target"></i> <?= $t('المنافسين', 'Competitors') ?></button>
+        <button class="p-tab" role="tab" data-tab="plan" type="button"><i data-ico="planCheck"></i> <?= $t('الخطة الشهرية', 'Monthly plan') ?></button>
+        <button class="p-tab" role="tab" data-tab="accounts" type="button"><i data-ico="link"></i> <?= $t('الحسابات', 'Accounts') ?></button>
+        <button class="p-tab" role="tab" data-tab="package" type="button"><i data-ico="gem"></i> <?= $t('الباقة', 'Plan') ?></button>
     </nav>
     <div id="spUpgradeBar" class="sp-upbar" hidden></div>
 
@@ -46,32 +46,32 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                 <option value="30" selected><?= $t('آخر 30 يوم', 'Last 30 days') ?></option>
                 <option value="90"><?= $t('آخر 90 يوم', 'Last 90 days') ?></option>
             </select>
-            <button class="p-btn outline" type="button" id="spMetricsBtn" onclick="refreshMetrics(true)">↻ <?= $t('تحديث التفاعل من Meta', 'Refresh engagement from Meta') ?></button>
+            <button class="p-btn outline" type="button" id="spMetricsBtn" onclick="refreshMetrics(true)"><i data-ico="refresh"></i> <?= $t('تحديث التفاعل من Meta', 'Refresh engagement from Meta') ?></button>
             <span class="p-cell-muted sp-note" id="spMetricsNote"></span>
         </div>
 
         <div class="p-grid cols-4" id="spStats">
-            <div class="p-card stat-tile"><div class="stat-icon blue">📝</div><div class="stat-info"><div class="stat-value" id="stTotal">–</div><div class="stat-label"><?= $t('إجمالي المنشورات', 'Total posts') ?></div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon green">✅</div><div class="stat-info"><div class="stat-value" id="stPub">–</div><div class="stat-label"><?= $t('اتنشرت', 'Published') ?> <span id="stRate" class="p-cell-muted"></span></div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon purple">🗓</div><div class="stat-info"><div class="stat-value" id="stSched">–</div><div class="stat-label"><?= $t('مجدولة / مسودات', 'Scheduled / drafts') ?></div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon orange">⚠️</div><div class="stat-info"><div class="stat-value" id="stFail">–</div><div class="stat-label"><?= $t('فشلت', 'Failed') ?></div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon blue">👁</div><div class="stat-info"><div class="stat-value" id="stReach">–</div><div class="stat-label"><?= $t('الوصول (مشاهدون فريدون)', 'Reach (unique viewers)') ?></div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon green">👍</div><div class="stat-info"><div class="stat-value" id="stLikes">–</div><div class="stat-label"><?= $t('إعجابات', 'Likes') ?></div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon purple">💬</div><div class="stat-info"><div class="stat-value" id="stComments">–</div><div class="stat-label"><?= $t('تعليقات', 'Comments') ?></div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon orange">🔁</div><div class="stat-info"><div class="stat-value" id="stShares">–</div><div class="stat-label"><?= $t('مشاركات', 'Shares') ?></div></div></div>
+            <div class="p-card stat-tile"><div class="stat-icon blue"><i data-ico="layers"></i></div><div class="stat-info"><div class="stat-value" id="stTotal">–</div><div class="stat-label"><?= $t('إجمالي المنشورات', 'Total posts') ?></div></div></div>
+            <div class="p-card stat-tile"><div class="stat-icon green"><i data-ico="check"></i></div><div class="stat-info"><div class="stat-value" id="stPub">–</div><div class="stat-label"><?= $t('اتنشرت', 'Published') ?> <span id="stRate" class="p-cell-muted"></span></div></div></div>
+            <div class="p-card stat-tile"><div class="stat-icon purple"><i data-ico="calendar"></i></div><div class="stat-info"><div class="stat-value" id="stSched">–</div><div class="stat-label"><?= $t('مجدولة / مسودات', 'Scheduled / drafts') ?></div></div></div>
+            <div class="p-card stat-tile"><div class="stat-icon orange"><i data-ico="alert"></i></div><div class="stat-info"><div class="stat-value" id="stFail">–</div><div class="stat-label"><?= $t('فشلت', 'Failed') ?></div></div></div>
+            <div class="p-card stat-tile"><div class="stat-icon blue"><i data-ico="eye"></i></div><div class="stat-info"><div class="stat-value" id="stReach">–</div><div class="stat-label"><?= $t('الوصول (مشاهدون فريدون)', 'Reach (unique viewers)') ?></div></div></div>
+            <div class="p-card stat-tile"><div class="stat-icon green"><i data-ico="thumb"></i></div><div class="stat-info"><div class="stat-value" id="stLikes">–</div><div class="stat-label"><?= $t('إعجابات', 'Likes') ?></div></div></div>
+            <div class="p-card stat-tile"><div class="stat-icon purple"><i data-ico="chat"></i></div><div class="stat-info"><div class="stat-value" id="stComments">–</div><div class="stat-label"><?= $t('تعليقات', 'Comments') ?></div></div></div>
+            <div class="p-card stat-tile"><div class="stat-icon orange"><i data-ico="share"></i></div><div class="stat-info"><div class="stat-value" id="stShares">–</div><div class="stat-label"><?= $t('مشاركات', 'Shares') ?></div></div></div>
         </div>
 
         <div class="p-card sp-roi" id="spRoi" hidden></div>
         <div class="p-card sp-health" id="spHealth" hidden></div>
 
         <div class="p-grid cols-2 sp-gap">
-            <div class="p-card"><div class="p-card-head"><h3>📈 <?= $t('النشر اليومي', 'Daily publishing') ?></h3><span class="p-card-sub" id="spDailySub"></span></div><div class="sp-bars" id="spDaily"></div><div class="sp-axis p-cell-muted" id="spDailyAxis"></div></div>
-            <div class="p-card"><div class="p-card-head"><h3>📊 <?= $t('حسب المنصة', 'By platform') ?></h3></div><div id="spPlat" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
+            <div class="p-card"><div class="p-card-head"><h3><i data-ico="trend"></i> <?= $t('النشر اليومي', 'Daily publishing') ?></h3><span class="p-card-sub" id="spDailySub"></span></div><div class="sp-bars" id="spDaily"></div><div class="sp-axis p-cell-muted" id="spDailyAxis"></div></div>
+            <div class="p-card"><div class="p-card-head"><h3><i data-ico="bars"></i> <?= $t('حسب المنصة', 'By platform') ?></h3></div><div id="spPlat" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
         </div>
-        <div class="p-card sp-gap" id="spGrowthCard" hidden><div class="p-card-head"><h3>👥 <?= $t('نمو المتابعين', 'Follower growth') ?></h3><span class="p-card-sub"><?= $t('لقطة يومية لكل حساب', 'Daily snapshot per account') ?></span></div><div id="spGrowth" class="sp-growth"></div></div>
+        <div class="p-card sp-gap" id="spGrowthCard" hidden><div class="p-card-head"><h3><i data-ico="users"></i> <?= $t('نمو المتابعين', 'Follower growth') ?></h3><span class="p-card-sub"><?= $t('لقطة يومية لكل حساب', 'Daily snapshot per account') ?></span></div><div id="spGrowth" class="sp-growth"></div></div>
         <div class="p-grid cols-2 sp-gap">
-            <div class="p-card"><div class="p-card-head"><h3>⏰ <?= $t('أفضل مواعيد النشر', 'Best times to post') ?></h3><span class="p-card-sub" id="spBestSub"></span></div><div id="spBest" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
-            <div class="p-card"><div class="p-card-head"><h3>🏆 <?= $t('أعلى المنشورات تفاعلًا', 'Top posts by engagement') ?></h3></div><div id="spTop" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
+            <div class="p-card"><div class="p-card-head"><h3><i data-ico="clock"></i> <?= $t('أفضل مواعيد النشر', 'Best times to post') ?></h3><span class="p-card-sub" id="spBestSub"></span></div><div id="spBest" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
+            <div class="p-card"><div class="p-card-head"><h3><i data-ico="trophy"></i> <?= $t('أعلى المنشورات تفاعلًا', 'Top posts by engagement') ?></h3></div><div id="spTop" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
         </div>
     </section>
 
@@ -79,7 +79,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
     <section class="sp-panel" data-panel="posts" hidden>
         <div class="p-card no-pad">
             <div class="p-toolbar sp-bar sp-pad">
-                <input type="search" id="spQ" class="p-select" placeholder="🔎 <?= $t('ابحث في النصوص…', 'Search posts…') ?>">
+                <input type="search" id="spQ" class="p-select" placeholder="<?= $t('ابحث في النصوص…', 'Search posts…') ?>">
                 <select id="spFStatus" class="p-select" aria-label="<?= $t('الحالة', 'Status') ?>">
                     <option value=""><?= $t('كل الحالات', 'All statuses') ?></option>
                     <option value="published"><?= $t('اتنشر', 'Published') ?></option>
@@ -94,13 +94,11 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                     <option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="youtube">YouTube</option><option value="google_business">Google Business</option><option value="threads">Threads</option><option value="linkedin">LinkedIn</option>
                 </select>
             </div>
-            <div class="p-table-scroll"><table class="p-table" id="postsTable">
-                <thead><tr><th><?= $t('المحتوى', 'Content') ?></th><th><?= $t('اتنشر على', 'Published on') ?></th><th><?= $t('التفاعل', 'Engagement') ?></th><th><?= $t('الحالة', 'Status') ?></th><th><?= $t('التاريخ', 'Date') ?></th><th></th></tr></thead>
-                <tbody><tr class="p-loading-row"><td colspan="6"><?= $t('جارِ التحميل…', 'Loading…') ?></td></tr></tbody>
-            </table></div>
+            <div id="postsList" class="sp-posts"><div class="p-cell-muted sp-pad"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
+            <div class="sp-more"><button type="button" class="p-btn outline sm" id="spMore" hidden><?= $t('عرض المزيد', 'Show more') ?></button></div>
         </div>
         <div class="p-card no-pad sp-gap">
-            <div class="p-card-head sp-pad"><h3>📅 <?= $t('تقويم المحتوى', 'Content calendar') ?></h3><span class="p-card-sub"><?= $t('الأسبوع اللي فات + الشهر الجاي', 'Last week + next month') ?></span></div>
+            <div class="p-card-head sp-pad"><h3><i data-ico="calendar"></i> <?= $t('تقويم المحتوى', 'Content calendar') ?></h3><span class="p-card-sub"><?= $t('الأسبوع اللي فات + الشهر الجاي', 'Last week + next month') ?></span></div>
             <div class="sp-cal" id="calendarGrid"><span class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></span></div>
         </div>
     </section>
@@ -118,25 +116,25 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                 </select>
                 <select id="ibIntent" class="p-select" aria-label="<?= $t('النوع', 'Type') ?>">
                     <option value=""><?= $t('كل الأنواع', 'All types') ?></option>
-                    <option value="price">💰 <?= $t('سؤال عن السعر', 'Price question') ?></option>
-                    <option value="booking">📅 <?= $t('حجز / تفاصيل', 'Booking / details') ?></option>
-                    <option value="question">❓ <?= $t('سؤال', 'Question') ?></option>
-                    <option value="complaint">⚠️ <?= $t('شكوى', 'Complaint') ?></option>
-                    <option value="praise">💚 <?= $t('مدح', 'Praise') ?></option>
-                    <option value="spam">🚫 <?= $t('سبام', 'Spam') ?></option>
+                    <option value="price"><?= $t('سؤال عن السعر', 'Price question') ?></option>
+                    <option value="booking"><?= $t('حجز / تفاصيل', 'Booking / details') ?></option>
+                    <option value="question"><?= $t('سؤال', 'Question') ?></option>
+                    <option value="complaint"><?= $t('شكوى', 'Complaint') ?></option>
+                    <option value="praise"><?= $t('مدح', 'Praise') ?></option>
+                    <option value="spam"><?= $t('سبام', 'Spam') ?></option>
                     <option value="other"><?= $t('غير ذلك', 'Other') ?></option>
                 </select>
-                <button class="p-btn outline" type="button" id="ibSync">↻ <?= $t('اسحب التعليقات الجديدة', 'Fetch new comments') ?></button>
+                <button class="p-btn outline" type="button" id="ibSync"><i data-ico="refresh"></i> <?= $t('اسحب التعليقات الجديدة', 'Fetch new comments') ?></button>
                 <span class="p-cell-muted sp-note" id="ibCounts"></span>
             </div>
             <details class="sp-autobox" id="ibSettingsBox">
-                <summary>🤖 <?= $t('الرد الخاص التلقائي على أسئلة السعر والحجز', 'Automatic private replies to price & booking questions') ?> <span class="sp-badge" id="ibAutoState"></span></summary>
+                <summary><i data-ico="bot"></i> <?= $t('الرد الخاص التلقائي على أسئلة السعر والحجز', 'Automatic private replies to price & booking questions') ?> <span class="sp-badge" id="ibAutoState"></span></summary>
                 <p class="p-cell-muted sp-small"><?= $t('أول ما حد يكتب "بكام؟" أو "عايز أحجز" تحت منشورك، المنصة تبعتله رسالة خاصة (ماسنجر/دايركت) بالتفاصيل ورابط الحجز، وترد علنيًا إنها بعتتله. ده بيحوّل التعليقات لحجوزات وانت نايم.', 'When someone comments "how much?" or "I want to book", the platform sends them a private message (Messenger/Direct) with details and your booking link, and replies publicly that it did. Comments turn into bookings while you sleep.') ?></p>
                 <label class="sp-check"><input type="checkbox" id="ibAuto"> <b><?= $t('تفعيل الرد الخاص التلقائي', 'Enable automatic private replies') ?></b></label>
                 <div class="sp-row sp-small" id="ibIntents">
-                    <label class="sp-radio"><input type="checkbox" value="price" checked> 💰 <?= $t('أسئلة السعر', 'Price questions') ?></label>
-                    <label class="sp-radio"><input type="checkbox" value="booking" checked> 📅 <?= $t('طلبات الحجز/التفاصيل', 'Booking / details requests') ?></label>
-                    <label class="sp-radio"><input type="checkbox" value="question"> ❓ <?= $t('الأسئلة العامة', 'General questions') ?></label>
+                    <label class="sp-radio"><input type="checkbox" value="price" checked> <?= $t('أسئلة السعر', 'Price questions') ?></label>
+                    <label class="sp-radio"><input type="checkbox" value="booking" checked> <?= $t('طلبات الحجز/التفاصيل', 'Booking / details requests') ?></label>
+                    <label class="sp-radio"><input type="checkbox" value="question"> <?= $t('الأسئلة العامة', 'General questions') ?></label>
                 </div>
                 <label class="sp-field"><?= $t('الرسالة الخاصة', 'Private message') ?> <span class="p-cell-muted sp-small"><?= $t('متغيرات: {name} الاسم، {company} الشركة، {link} رابط الحجز', 'Variables: {name}, {company}, {link}') ?></span><textarea id="ibTemplate" rows="4" class="p-select" maxlength="1500"></textarea></label>
                 <label class="sp-field"><?= $t('الرد العلني القصير', 'Short public reply') ?><input type="text" id="ibAck" class="p-select" maxlength="300"></label>
@@ -150,11 +148,11 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
     <!-- ============ المنافسين ============ -->
     <section class="sp-panel" data-panel="competitors" hidden>
         <div class="p-card">
-            <div class="p-card-head"><h3>🔭 <?= $t('مراقبة المنافسين على إنستجرام', 'Instagram competitor monitoring') ?></h3><button class="p-btn outline sm" type="button" id="cpRefresh">↻ <?= $t('تحديث', 'Refresh') ?></button></div>
+            <div class="p-card-head"><h3><i data-ico="target"></i> <?= $t('مراقبة المنافسين على إنستجرام', 'Instagram competitor monitoring') ?></h3><button class="p-btn outline sm" type="button" id="cpRefresh"><i data-ico="refresh"></i> <?= $t('تحديث', 'Refresh') ?></button></div>
             <p class="p-cell-muted sp-small"><?= $t('ضيف لحد 5 حسابات بيزنس منافسة. كل يوم بنجيب متابعينهم ومعدل نشرهم ومتوسط تفاعلهم وأنجح منشوراتهم وهاشتاجاتهم، ونقارنهم بحسابك.', 'Add up to 5 competing business accounts. Every day we fetch their followers, posting rhythm, average engagement, top posts and hashtags, and compare them to your account.') ?></p>
             <form class="sp-row" id="cpForm" onsubmit="return false">
                 <input type="text" id="cpUser" class="p-select sp-grow" placeholder="<?= $t('اسم الحساب أو الرابط - مثال: @competitor_tours', 'Username or link — e.g. @competitor_tours') ?>" maxlength="80" dir="ltr">
-                <button class="p-btn primary" type="submit" id="cpAdd">＋ <?= $t('إضافة منافس', 'Add competitor') ?></button>
+                <button class="p-btn primary" type="submit" id="cpAdd"><i data-ico="plus"></i> <?= $t('إضافة منافس', 'Add competitor') ?></button>
             </form>
             <div id="cpInsights"></div>
             <div id="cpList" class="cp-list"><span class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></span></div>
@@ -164,17 +162,17 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
     <!-- ============ الخطة الشهرية ============ -->
     <section class="sp-panel" data-panel="plan" hidden>
 <?php if (!empty($team['member'])): ?>
-        <div class="p-card"><div class="p-empty">🗓 <?= $t('الخطة الشهرية بيجهزها ويعتمدها صاحب الحساب. تقدر تشوف منشوراتها المجدولة في تبويب «المنشورات والتقويم».', 'The monthly plan is prepared and approved by the account owner. You can see its scheduled posts in the "Posts & calendar" tab.') ?></div></div>
+        <div class="p-card"><div class="p-empty"><i data-ico="planCheck"></i> <?= $t('الخطة الشهرية بيجهزها ويعتمدها صاحب الحساب. تقدر تشوف منشوراتها المجدولة في تبويب «المنشورات والتقويم».', 'The monthly plan is prepared and approved by the account owner. You can see its scheduled posts in the "Posts & calendar" tab.') ?></div></div>
 <?php else: ?>
         <div class="p-card sp-share" id="shareCard">
-            <div class="p-card-head"><h3>🤝 <?= $t('موافقة العميل على الخطة', 'Client approval') ?></h3></div>
+            <div class="p-card-head"><h3><i data-ico="hand"></i> <?= $t('موافقة العميل على الخطة', 'Client approval') ?></h3></div>
             <p class="p-cell-muted sp-small"><?= $t('ابعت لصاحب الشركة رابط خاص يشوف فيه منشورات الشهر بالصور والنصوص والمواعيد، ويكتب ملاحظاته أو يعتمد الخطة من غير ما يسجّل دخول. كل رد بيوصلك إشعار.', 'Send the business owner a private link to review the month\'s posts with images, captions and dates, leave comments or approve — no login needed. You get notified on every response.') ?></p>
             <div class="sp-row">
                 <select id="shPlan" class="p-select" aria-label="<?= $t('الخطة', 'Plan') ?>"></select>
                 <input type="text" id="shClient" class="p-select" maxlength="120" placeholder="<?= $t('اسم العميل (اختياري)', 'Client name (optional)') ?>">
                 <select id="shDays" class="p-select"><option value="7">7 <?= $t('أيام', 'days') ?></option><option value="14" selected>14 <?= $t('يوم', 'days') ?></option><option value="30">30 <?= $t('يوم', 'days') ?></option></select>
                 <label class="sp-radio"><input type="checkbox" id="shApprove" checked> <?= $t('يقدر يعتمد الخطة', 'Can approve') ?></label>
-                <button type="button" class="p-btn primary sm" id="shCreate">🔗 <?= $t('اعمل رابط', 'Create link') ?></button>
+                <button type="button" class="p-btn primary sm" id="shCreate"><i data-ico="link"></i> <?= $t('اعمل رابط', 'Create link') ?></button>
             </div>
             <div id="shNew"></div>
             <div id="shLinks"></div>
@@ -186,17 +184,21 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
 
     <!-- ============ الحسابات ============ -->
     <section class="sp-panel" data-panel="accounts" hidden>
-        <div class="p-card">
-            <div class="p-card-head"><h3>🔗 <?= $t('الحسابات المربوطة', 'Connected accounts') ?></h3></div>
-            <div id="spAccounts" class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div>
+        <div class="p-card sp-pad">
+            <div class="p-card-head"><h3><i data-ico="users"></i> <?= $t('حساباتك', 'Your accounts') ?></h3><span class="p-card-sub" id="spSlots"></span></div>
+            <p class="p-cell-muted sp-small"><?= $t('اختار الصفحات اللي هتشتغل عليها: الصفحة الموقوفة بتختفي من النشر وما بتتحسبش من حسابات باقتك، وتقدر تشغّلها تاني في أي وقت.', 'Choose the pages you work with: a paused page is hidden from publishing and does not count toward your plan, and you can turn it back on any time.') ?></p>
+            <div id="spAccounts" class="sp-acc-grid"><span class="p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></span></div>
+        </div>
+        <div class="p-card sp-pad sp-gap">
+            <div class="p-card-head"><h3><i data-ico="plug"></i> <?= $t('اربط حساب جديد', 'Connect an account') ?></h3></div>
             <div class="sp-connect">
-                <a class="sp-conn fb" href="/ads/connect/meta?for=social"><b>Facebook + Instagram</b><span><?= $t('صفحات فيسبوك وحسابات إنستجرام بيزنس: منشورات، ريلز، ألبومات، ستوري، تعليقات', 'Facebook Pages & Instagram Business: posts, reels, albums, stories, comments') ?></span></a>
-                <a class="sp-conn tt" href="/social/connect/tiktok"><b>TikTok</b><span><?= $t('فيديوهات قصيرة بإعدادات الخصوصية المطلوبة من تيك توك', 'Short videos with TikTok\'s required privacy settings') ?></span></a>
-                <a class="sp-conn yt" href="/social/connect/youtube"><b>YouTube Shorts</b><span><?= $t('رفع الفيديوهات القصيرة على قناتك', 'Upload short videos to your channel') ?></span></a>
-                <a class="sp-conn gb" href="/reputation/platforms"><b>Google Business</b><span><?= $t('منشورات على ملفك في خرائط وبحث جوجل (صورة + زرار احجز/اعرف أكتر)', 'Posts on your Google Maps & Search profile (photo + book/learn-more button)') ?></span></a>
-                <a class="sp-conn th" href="/social/connect/threads"><b>Threads</b><span><?= $t('نص وصور وفيديو على Threads (حتى 500 حرف)', 'Text, photos and video on Threads (up to 500 characters)') ?></span></a>
+                <a class="sp-conn" data-plats="facebook,instagram" href="/ads/connect/meta?for=social"><span class="sp-conn-ic"><i data-brand="facebook" data-size="34"></i><i data-brand="instagram" data-size="34"></i></span><b>Facebook + Instagram</b><span><?= $t('صفحات فيسبوك وحسابات إنستجرام بيزنس: منشورات، ريلز، ألبومات، ستوري، تعليقات', 'Facebook Pages & Instagram Business: posts, reels, albums, stories, comments') ?></span><em><?= $t('اربط واختار الصفحات', 'Connect & pick pages') ?></em></a>
+                <a class="sp-conn" data-plats="tiktok" href="/social/connect/tiktok"><span class="sp-conn-ic"><i data-brand="tiktok" data-size="34"></i></span><b>TikTok</b><span><?= $t('فيديوهات قصيرة بإعدادات الخصوصية المطلوبة من تيك توك', 'Short videos with TikTok\'s required privacy settings') ?></span><em><?= $t('اربط', 'Connect') ?></em></a>
+                <a class="sp-conn" data-plats="youtube" href="/social/connect/youtube"><span class="sp-conn-ic"><i data-brand="youtube" data-size="34"></i></span><b>YouTube Shorts</b><span><?= $t('رفع الفيديوهات القصيرة على قناتك', 'Upload short videos to your channel') ?></span><em><?= $t('اربط', 'Connect') ?></em></a>
+                <a class="sp-conn" data-plats="google_business" href="/reputation/platforms"><span class="sp-conn-ic"><i data-brand="google_business" data-size="34"></i></span><b>Google Business</b><span><?= $t('منشورات على ملفك في خرائط وبحث جوجل (صورة + زرار احجز/اعرف أكتر)', 'Posts on your Google Maps & Search profile (photo + book/learn-more button)') ?></span><em><?= $t('اربط', 'Connect') ?></em></a>
+                <a class="sp-conn" data-plats="threads" href="/social/connect/threads"><span class="sp-conn-ic"><i data-brand="threads" data-size="34"></i></span><b>Threads</b><span><?= $t('نص وصور وفيديو على Threads (حتى 500 حرف)', 'Text, photos and video on Threads (up to 500 characters)') ?></span><em><?= $t('اربط', 'Connect') ?></em></a>
 <?php if (in_array('linkedin', SocialPackages::config()['platforms_enabled'], true)): ?>
-                <a class="sp-conn li" href="/social/connect/linkedin"><b>LinkedIn</b><span><?= $t('بروفايلك وصفحات شركتك: مناسب لعملاء الشركات والرحلات الجماعية', 'Your profile and company pages — great for corporate & group travel') ?></span></a>
+                <a class="sp-conn" data-plats="linkedin" href="/social/connect/linkedin"><span class="sp-conn-ic"><i data-brand="linkedin" data-size="34"></i></span><b>LinkedIn</b><span><?= $t('بروفايلك وصفحات شركتك: مناسب لعملاء الشركات والرحلات الجماعية', 'Your profile and company pages — great for corporate & group travel') ?></span><em><?= $t('اربط', 'Connect') ?></em></a>
 <?php endif; ?>
             </div>
             <details class="sp-help">
@@ -218,24 +220,24 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
             <div class="p-modal-body sp-cmp-grid">
                 <div class="sp-cmp-main">
                     <div class="sp-seg" role="radiogroup" aria-label="<?= $t('نوع المحتوى', 'Content type') ?>">
-                        <label><input type="radio" name="spFormat" value="feed" checked> 📝 <?= $t('منشور', 'Post') ?></label>
-                        <label><input type="radio" name="spFormat" value="story"> ◎ <?= $t('ستوري', 'Story') ?></label>
+                        <label><input type="radio" name="spFormat" value="feed" checked> <i data-ico="posts"></i> <?= $t('منشور', 'Post') ?></label>
+                        <label><input type="radio" name="spFormat" value="story"> <i data-ico="story"></i> <?= $t('ستوري', 'Story') ?></label>
                     </div>
 
                     <div class="sp-step"><span class="sp-num">1</span><b><?= $t('هتنشر فين؟', 'Where to publish?') ?></b>
-                        <button type="button" class="p-btn ghost xs" onclick="refreshSocialTargets()">↻ <?= $t('تحديث الصفحات', 'Refresh pages') ?></button></div>
+                        <button type="button" class="p-btn ghost xs" onclick="refreshSocialTargets()"><i data-ico="refresh"></i> <?= $t('تحديث الصفحات', 'Refresh pages') ?></button></div>
                     <div id="targetsList" class="sp-targets p-cell-muted"><?= $t('جارِ تحميل الصفحات المربوطة…', 'Loading connected pages…') ?></div>
                     <div id="ttPanel" class="tt-panel" hidden></div>
 
                     <div class="sp-step"><span class="sp-num">2</span><b><?= $t('الصورة أو الفيديو', 'Image or video') ?></b></div>
                     <div class="sp-media">
-                        <div class="sp-prev" id="spPrev">🖼️</div>
+                        <div class="sp-prev" id="spPrev"><i data-ico="image" data-size="30"></i></div>
                         <div class="sp-media-actions">
                             <div class="sp-row">
-                                <label class="p-btn outline sm sp-file">⬆️ <?= $t('ارفع من جهازك', 'Upload') ?><input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" hidden></label>
-                                <button type="button" class="p-btn outline sm" onclick="toggleLib()">🎨 <?= $t('من المكتبة', 'From library') ?></button>
-                                <button type="button" class="p-btn outline sm" id="spAlbumBtn" onclick="toggleAlbumMode()" title="<?= $t('من 2 لـ 10 صور (ألبوم فيسبوك / كاروسيل إنستجرام)', '2–10 photos (Facebook album / Instagram carousel)') ?>">🖼️ <?= $t('صور متعددة', 'Multiple photos') ?></button>
-                                <a class="p-btn outline sm" href="/creative-studio" target="_blank" rel="noopener">✨ <?= $t('صمّم بالذكاء الاصطناعي ↗', 'Create with AI ↗') ?></a>
+                                <label class="p-btn outline sm sp-file"><i data-ico="upload"></i> <?= $t('ارفع من جهازك', 'Upload') ?><input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" hidden></label>
+                                <button type="button" class="p-btn outline sm" onclick="toggleLib()"><i data-ico="folder"></i> <?= $t('من المكتبة', 'From library') ?></button>
+                                <button type="button" class="p-btn outline sm" id="spAlbumBtn" onclick="toggleAlbumMode()" title="<?= $t('من 2 لـ 10 صور (ألبوم فيسبوك / كاروسيل إنستجرام)', '2–10 photos (Facebook album / Instagram carousel)') ?>"><i data-ico="images"></i> <?= $t('صور متعددة', 'Multiple photos') ?></button>
+                                <a class="p-btn outline sm" href="/creative-studio" target="_blank" rel="noopener"><i data-ico="sparkles"></i> <?= $t('صمّم بالذكاء الاصطناعي', 'Create with AI') ?> <i data-ico="external" data-size="13"></i></a>
                                 <button type="button" class="p-btn ghost sm" id="spClear" hidden onclick="clearMedia()"><?= $t('إزالة', 'Remove') ?></button>
                             </div>
                             <div id="spAlbumStrip" class="sp-album"></div>
@@ -255,7 +257,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                                 <select id="aiGoal" class="p-select" aria-label="<?= $t('الهدف', 'Goal') ?>">
                                     <option value="engagement"><?= $t('تفاعل', 'Engagement') ?></option><option value="bookings"><?= $t('حجوزات', 'Bookings') ?></option><option value="offer"><?= $t('عرض', 'Offer') ?></option><option value="awareness"><?= $t('انتشار', 'Awareness') ?></option><option value="trust"><?= $t('ثقة', 'Trust') ?></option>
                                 </select>
-                                <button class="p-btn outline" type="button" id="aiCapBtn" onclick="generateCaption()">✨ <?= $t('اكتب 3 نسخ', 'Write 3 versions') ?></button>
+                                <button class="p-btn outline" type="button" id="aiCapBtn" onclick="generateCaption()"><i data-ico="sparkles"></i> <?= $t('اكتب 3 نسخ', 'Write 3 versions') ?></button>
                             </div>
                             <div id="aiVariants" class="sp-variants" hidden></div>
                         </div>
@@ -267,7 +269,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                         <details class="sp-more">
                             <summary><?= $t('خيارات متقدمة: أول تعليق وتتبّع الروابط', 'Advanced: first comment & link tracking') ?></summary>
                             <label class="sp-field"><?= $t('أول تعليق تلقائي (رابط الحجز أو سؤال للجمهور) - فيسبوك وإنستجرام', 'Automatic first comment (booking link or a question) — Facebook & Instagram') ?><textarea id="firstCommentInput" rows="2" class="p-select" maxlength="2000"></textarea></label>
-                            <label class="sp-check"><input type="checkbox" id="trackOn" checked> <?= $t('🔗 روابط تتبّع الحجوزات: روابط موقعك بتتحول لروابط قصيرة، وتعرف كل منشور جاب كام زيارة وكام حجز وكام فلوس', '🔗 Booking-tracking links: your website links become short links so you see visits, bookings and revenue per post') ?></label>
+                            <label class="sp-check"><input type="checkbox" id="trackOn" checked> <?= $t('روابط تتبّع الحجوزات: روابط موقعك بتتحول لروابط قصيرة، وتعرف كل منشور جاب كام زيارة وكام حجز وكام فلوس', 'Booking-tracking links: your website links become short links so you see visits, bookings and revenue per post') ?></label>
                             <label class="sp-check"><input type="checkbox" id="utmOn" checked> <?= $t('تتبّع روابط موقعي بـ UTM (تعرف الحجوزات جت من أنهي منشور في Google Analytics)', 'Track my website links with UTM (see which post brought bookings in Google Analytics)') ?></label>
                             <label class="sp-field"><?= $t('اسم الحملة', 'Campaign name') ?><input type="text" id="utmCampaign" class="p-select" maxlength="60"></label>
                         </details>
@@ -279,7 +281,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                         <label class="sp-radio"><input type="radio" name="spWhen" value="now" checked> <?= $t('دلوقتي', 'Now') ?></label>
                         <label class="sp-radio"><input type="radio" name="spWhen" value="later"> <?= $t('جدولة', 'Schedule') ?></label>
                         <input type="datetime-local" id="spAt" class="p-select" hidden>
-                        <button type="button" class="p-btn ghost sm" id="spBestBtn" hidden onclick="pickBestTime()">⏰ <?= $t('أفضل ميعاد', 'Best time') ?></button>
+                        <button type="button" class="p-btn ghost sm" id="spBestBtn" hidden onclick="pickBestTime()"><i data-ico="clock"></i> <?= $t('أفضل ميعاد', 'Best time') ?></button>
                     </div>
                     <div class="p-cell-muted sp-small" id="spWhenNote"><?= $t('المواعيد بتوقيت حسابك. لو ما اخترتش صفحة، المنشور هيتحفظ مسودة.', 'Times use your account timezone. With no page selected the post is saved as a draft.') ?></div>
                 </div>
@@ -317,4 +319,5 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
 </div>
 <script defer src="<?= $pickerJs ?>"></script>
 <?php if (empty($team['member'])): ?><script defer src="<?= $monthlyJs ?>"></script><?php endif; ?>
+<script defer src="<?= $iconsJs ?>"></script>
 <script defer src="<?= $jsUrl ?>"></script>

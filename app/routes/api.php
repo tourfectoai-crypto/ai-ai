@@ -705,6 +705,7 @@ $router->get('/api/social/monthly-plans/{id}/share', 'SocialMediaController', 'p
 $router->post('/api/social/monthly-plans/{id}/share', 'SocialMediaController', 'planShareCreate', ['AuthMiddleware']);
 $router->post('/api/social/monthly-plans/{id}/share/{link_id}/revoke', 'SocialMediaController', 'planShareRevoke', ['AuthMiddleware']);
 $router->get('/api/social/connections', 'SocialMediaController', 'listConnections', ['AuthMiddleware']);
+$router->post('/api/social/connections/{id}/active', 'SocialMediaController', 'connectionActive', ['AuthMiddleware']);
 // باقات السوشيال: الباقة الحالية + الاشتراك/الترقية/الإضافات من المحفظة
 $router->get('/api/social/package', 'SocialMediaController', 'package', ['AuthMiddleware']);
 $router->post('/api/social/package/subscribe', 'SocialMediaController', 'packageSubscribe', ['AuthMiddleware']);

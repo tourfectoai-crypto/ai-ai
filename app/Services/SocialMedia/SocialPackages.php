@@ -19,6 +19,8 @@
  * كل الأسعار بالدولار؛ العرض بأي عملة عن طريق CurrencyService.
  * @version 1.0.0
  */
+require_once __DIR__ . '/SocialAccounts.php';
+
 final class SocialPackageLimit extends InvalidArgumentException
 {
     public string $feature;
@@ -614,11 +616,11 @@ final class SocialPackages
         return gmdate('Y-m');
     }
 
-    /** الحسابات المربوطة (الأقدم الأول) - نفس شرط الملكية بتاع النشر */
+    /** الحسابات المربوطة (الأقدم الأول) - نفس شرط الملكية بتاع النشر. active=0: العميل وقّفها من تبويب الحسابات */
     public static function connections(int $account): array
     {
         try {
-            return Database::getInstance()->query(
+            $rows = Database::getInstance()->query(
                 "SELECT id, platform, external_location_name AS name FROM platform_connections
                  WHERE (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?))
                    AND platform IN ('" . implode("','", self::PLATFORMS) . "') AND status = 'connected' ORDER BY id",
@@ -627,9 +629,14 @@ final class SocialPackages
         } catch (Throwable $e) {
             return [];
         }
+        $off = class_exists('SocialAccounts') ? array_flip(SocialAccounts::inactiveIds($account)) : [];
+        foreach ($rows as &$r) {
+            $r['active'] = !isset($off[(int) $r['id']]);
+        }
+        return $rows;
     }
 
-    /** id => سبب القفل ('platform' المنصة مش في الباقة | 'accounts' فوق عدد الحسابات) */
+    /** id => سبب القفل ('inactive' العميل وقّفها | 'platform' المنصة مش في الباقة | 'accounts' فوق عدد الحسابات) */
     public static function locked(int $account, ?array $ent = null): array
     {
         $ent = $ent ?? self::entitlements($account);
@@ -637,6 +644,10 @@ final class SocialPackages
         $n = 0;
         $max = $ent['limits']['accounts'];
         foreach (self::connections($account) as $c) {
+            if (empty($c['active'])) {
+                $out[(int) $c['id']] = 'inactive';
+                continue;
+            }
             if (!in_array($c['platform'], $ent['platforms'], true)) {
                 $out[(int) $c['id']] = 'platform';
                 continue;
@@ -665,7 +676,7 @@ final class SocialPackages
         }
         $accounts = 0;
         foreach (self::connections($account) as $c) {
-            if (in_array($c['platform'], $ent['platforms'], true)) {
+            if (!empty($c['active']) && in_array($c['platform'], $ent['platforms'], true)) {
                 $accounts++;
             }
         }
@@ -730,6 +741,9 @@ final class SocialPackages
             }
             $p = (string) (Database::getInstance()->query('SELECT platform FROM platform_connections WHERE id = ? LIMIT 1', [$cid])[0]['platform'] ?? '');
             $name = self::PLATFORM_NAMES[$p] ?? $p;
+            if ($locked[$cid] === 'inactive') {
+                throw new SocialPackageLimit('حساب ' . $name . ' ده موقوف من تبويب «الحسابات» - شغّله الأول عشان تنشر عليه', 'inactive');
+            }
             if ($locked[$cid] === 'platform' && !in_array($p, self::config()['platforms_enabled'], true)) {
                 throw new SocialPackageLimit('النشر على ' . $name . ' مش متاح على المنصة دلوقتي', 'platform');
             }
@@ -774,7 +788,7 @@ final class SocialPackages
         if ($max < 0) {
             return;
         }
-        $mine = array_filter(self::connections($account), static fn($c) => in_array($c['platform'], $ent['platforms'], true));
+        $mine = array_filter(self::connections($account), static fn($c) => !empty($c['active']) && in_array($c['platform'], $ent['platforms'], true));
         $samePlatform = array_filter($mine, static fn($c) => $c['platform'] === $platform);
         // إعادة ربط حساب موجود (تجديد التوكن) مسموحة حتى لو وصل للحد
         if (count($mine) >= $max && !$samePlatform) {

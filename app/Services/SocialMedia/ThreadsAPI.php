@@ -82,8 +82,9 @@ final class ThreadsAPI
 
     public function me(): array
     {
-        $r = self::call('GET', self::BASE . '/v1.0/me?' . http_build_query(['fields' => 'id,username,name', 'access_token' => $this->token]));
-        return $r['success'] ? ['success' => true, 'id' => (string) ($r['data']['id'] ?? ''), 'username' => (string) ($r['data']['username'] ?? '')] : $r;
+        $r = self::call('GET', self::BASE . '/v1.0/me?' . http_build_query(['fields' => 'id,username,name,threads_profile_picture_url', 'access_token' => $this->token]));
+        $pic = (string) ($r['data']['threads_profile_picture_url'] ?? '');
+        return $r['success'] ? ['success' => true, 'id' => (string) ($r['data']['id'] ?? ''), 'username' => (string) ($r['data']['username'] ?? ''), 'avatar' => str_starts_with($pic, 'https://') ? $pic : null] : $r;
     }
 
     /** إنشاء container: نص بس، أو صورة، أو فيديو. بيرجّع container_id */

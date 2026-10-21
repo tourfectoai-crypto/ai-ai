@@ -97,8 +97,6 @@
 .sp-conn { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--panel-border); border-radius: 12px; padding: 14px; text-decoration: none; color: var(--panel-text); transition: border-color .15s; }
 .sp-conn:hover { border-color: var(--panel-accent); }
 .sp-conn span { font-size: 12.5px; color: var(--panel-text-muted); }
-.sp-conn.fb b::before { content: "📘📸 "; } .sp-conn.tt b::before { content: "🎵 "; } .sp-conn.yt b::before { content: "▶️ "; }
-.sp-conn.gb b::before { content: "📍 "; } .sp-conn.th b::before { content: "🧵 "; } .sp-conn.li b::before { content: "💼 "; }
 .sp-help { margin-top: 14px; font-size: 13px; }
 .sp-help summary { cursor: pointer; font-weight: 600; }
 
@@ -263,3 +261,79 @@
 .pk-b-sum { position: sticky; top: 12px; border: 1px solid var(--panel-accent); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
 .pk-b-sum h5 { margin: 0; }
 @media (max-width: 800px) { .pk-b-grid { grid-template-columns: 1fr; } .pk-b-sum { position: static; } }
+/* ===== أيقونات SVG ===== */
+.sp-root .spi { display: inline-block; vertical-align: -3px; flex: none; }
+.sp-root .spb { display: inline-block; vertical-align: -4px; flex: none; border-radius: 6px; }
+.sp-tabs .p-tab .spi { margin-inline-end: 2px; opacity: .85; }
+.sp-root .stat-icon .spi { width: 22px; height: 22px; vertical-align: middle; }
+.sp-root .p-card-head h3 .spi { color: var(--panel-accent); vertical-align: -2px; }
+.sp-prev .spi { opacity: .45; }
+
+/* ===== صورة الصفحة ===== */
+.sp-avt { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 50%; background: linear-gradient(135deg, #64748b, #334155); color: #fff; font-weight: 700; }
+.sp-avt[data-p="facebook"] { background: linear-gradient(135deg, #4f8ef7, #1877F2); }
+.sp-avt[data-p="instagram"] { background: linear-gradient(135deg, #FA7E1E, #D62976 60%, #962FBF); }
+.sp-avt[data-p="tiktok"], .sp-avt[data-p="threads"] { background: linear-gradient(135deg, #3a3a3a, #000); }
+.sp-avt[data-p="youtube"] { background: linear-gradient(135deg, #ff5a5f, #FF0033); }
+.sp-avt[data-p="google_business"] { background: linear-gradient(135deg, #5b9cf6, #1A73E8); }
+.sp-avt img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+.sp-avt .bdg { position: absolute; bottom: -3px; inset-inline-end: -3px; line-height: 0; border-radius: 7px; box-shadow: 0 0 0 2px var(--panel-card-bg, #fff); }
+.sp-av { position: relative; overflow: hidden; }
+.sp-av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+/* ===== اختيار الصفحات في المحرر ===== */
+.sp-pick-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.sp-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.sp-pick-it { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1.5px solid var(--panel-border); border-radius: 12px; cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
+.sp-pick-it:hover { border-color: var(--panel-accent); }
+.sp-pick-it input { position: absolute; opacity: 0; pointer-events: none; }
+.sp-pick-tx { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.sp-pick-tx b { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-pick-tx small { font-size: 11.5px; color: var(--panel-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-pick-ck { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--panel-border); display: inline-flex; align-items: center; justify-content: center; color: transparent; flex: none; }
+.sp-pick-it:has(input:checked) { border-color: var(--panel-accent); background: var(--panel-accent-light, var(--sp-soft)); box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+.sp-pick-it:has(input:checked) .sp-pick-ck { background: var(--panel-accent); border-color: var(--panel-accent); color: #fff; }
+.sp-pick-it:has(input:focus-visible) { outline: 2px solid var(--panel-accent); outline-offset: 2px; }
+.sp-pick-it.locked { opacity: .5; cursor: not-allowed; }
+.sp-pick-ck.lk { color: var(--panel-text-muted); }
+
+/* ===== تبويب الحسابات ===== */
+.sp-acc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 10px; }
+.sp-acc { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--panel-border); border-radius: 14px; background: var(--panel-card-bg, transparent); }
+.sp-acc.off, .sp-acc.lock { opacity: .7; }
+.sp-acc.bad { border-color: var(--panel-danger, #ef4444); }
+.sp-acc-tx { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px; }
+.sp-acc-tx b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-acc-tx small { color: var(--panel-text-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-acc-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--panel-text-muted); margin-top: 2px; }
+.sp-acc-st { border-radius: 999px; padding: 1px 9px; font-size: 11.5px; background: var(--sp-soft); }
+.sp-acc-st.ok { background: rgba(34,197,94,.14); color: #15803d; }
+.sp-acc-st.lock { background: rgba(245,158,11,.16); color: #b45309; }
+.sp-acc-st.bad { background: rgba(239,68,68,.14); color: #b91c1c; }
+.sp-switch { position: relative; width: 40px; height: 22px; flex: none; cursor: pointer; }
+.sp-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.sp-switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--panel-border, #cbd5e1); transition: background .15s; pointer-events: none; }
+.sp-switch span::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: inset-inline-start .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.sp-switch input:checked + span { background: var(--sp-ok); }
+.sp-switch input:checked + span::after { inset-inline-start: 21px; }
+.sp-switch input:focus-visible + span { outline: 2px solid var(--panel-accent); outline-offset: 2px; }
+.sp-conn { position: relative; gap: 6px; padding: 16px; transition: border-color .15s, transform .15s, box-shadow .15s; }
+.sp-conn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(15,23,42,.07); }
+.sp-conn-ic { display: flex; gap: 6px; margin-bottom: 4px; }
+.sp-conn em { font-style: normal; font-size: 12.5px; font-weight: 600; color: var(--panel-accent); margin-top: 4px; }
+.sp-conn.locked { opacity: .6; }
+.sp-conn-lock { position: absolute; top: 12px; inset-inline-end: 12px; font-style: normal; font-size: 11px; border-radius: 999px; padding: 2px 8px; background: rgba(245,158,11,.16); color: #b45309; }
+
+/* ===== المنشورات (كروت) ===== */
+.sp-posts { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+.sp-post { display: grid; grid-template-columns: 64px 1fr auto; gap: 14px; padding: 14px; border: 1px solid var(--panel-border); border-radius: 14px; align-items: start; }
+.sp-post-media { width: 64px; height: 64px; border-radius: 10px; background: var(--sp-soft); display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--panel-text-muted); }
+.sp-post-media .sp-thumb { width: 100%; height: 100%; margin: 0; border-radius: 0; }
+.sp-post-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.sp-post-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sp-post-date { font-size: 12px; margin-inline-start: auto; }
+.sp-post-text { font-size: 13.5px; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.sp-post-tg, .sp-post-eng { font-size: 12.5px; }
+.sp-post .sp-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.sp-more { text-align: center; padding: 8px 0 4px; }
+@media (max-width: 640px) { .sp-post { grid-template-columns: 48px 1fr; } .sp-post-media { width: 48px; height: 48px; } .sp-post .sp-actions { grid-column: 1 / -1; justify-content: flex-start; } }

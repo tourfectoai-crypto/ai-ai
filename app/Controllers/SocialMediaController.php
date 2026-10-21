@@ -21,6 +21,7 @@ require_once __DIR__ . '/../Services/SocialMedia/SocialTeam.php';
 require_once __DIR__ . '/../Services/SocialMedia/ThreadsAPI.php';
 require_once __DIR__ . '/../Services/SocialMedia/LinkedInAPI.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialPackages.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialAccounts.php';
 require_once __DIR__ . '/../Jobs/SocialPackagesRenewJob.php';
 require_once __DIR__ . '/../Services/Payment/CurrencyService.php';
 require_once __DIR__ . '/../Jobs/ReconcileUncertainPostsJob.php';
@@ -86,6 +87,7 @@ class SocialMediaController extends Controller
             SyncSocialCommentsJob::ensureScheduled();
             SocialDailyInsightsJob::ensureScheduled();
             SocialPackages::ensureSchema();
+            SocialAccounts::ensureSchema();
             SocialPackagesRenewJob::ensureScheduled();
         } catch (Throwable $e) {
         }
@@ -103,6 +105,7 @@ class SocialMediaController extends Controller
             'team' => $this->team(),
             'cssUrl' => $asset('/assets/css/social-pro.css'),
             'jsUrl' => $asset('/assets/js/social-pro.js'),
+            'iconsJs' => $asset('/assets/js/sp-icons.js'),
             'monthlyCss' => $asset('/assets/css/social-monthly-plans.css'),
             'monthlyJs' => $asset('/assets/js/social-monthly-plans.js'),
             'pickerJs' => $asset('/assets/js/site-photo-picker.js'),
@@ -1262,6 +1265,9 @@ class SocialMediaController extends Controller
             $rows = [];
             $broken = [];
             $seen = [];
+            // منصة مقفولة على المنصة كلها (زي LinkedIn دلوقتي): حساباتها ما بتظهرش خالص
+            $enabled = SocialPackages::config()['platforms_enabled'];
+            $all = array_values(array_filter($all ?: [], static fn ($r) => in_array($r['platform'], $enabled, true)));
             foreach ($all as $r) {
                 $k = $r['platform'] . ':' . ($r['external_location_id'] ?: 'connection-' . $r['id']);
                 if (isset($seen[$k])) {
@@ -1274,10 +1280,21 @@ class SocialMediaController extends Controller
                     $broken[] = ['platform' => $r['platform'], 'name' => $r['name'], 'status' => $r['status'], 'last_error' => $r['last_error'] ? mb_substr((string) $r['last_error'], 0, 300) : null];
                 }
             }
+            // صور الصفحات وأسماؤها: بنحدّث القديم بس (لحد 4 في الطلب - الباقي بيتحدث في المهمة اليومية)
+            try {
+                SocialAccounts::refreshStale($this->uid(), 4);
+            } catch (Throwable $e) {
+            }
             $locked = SocialPackages::locked($this->uid());
+            $prof = SocialAccounts::profiles(array_column($rows, 'id'));
             foreach ($rows as &$r0) {
                 unset($r0['external_location_id'], $r0['status'], $r0['last_error']);
+                $pf = $prof[(int) $r0['id']] ?? [];
                 $r0['locked'] = $locked[(int) $r0['id']] ?? null;
+                $r0['active'] = !isset($pf['is_active']) || (int) $pf['is_active'] === 1;
+                $r0['avatar'] = !empty($pf['avatar_url']) ? (string) $pf['avatar_url'] : null;
+                $r0['username'] = $pf['username'] ?? null;
+                $r0['followers'] = isset($pf['followers']) ? (int) $pf['followers'] : null;
             }
             unset($r0);
             // Schema-safe: platform_connections in the supplied SQL has no meta_json column.
@@ -1291,6 +1308,36 @@ class SocialMediaController extends Controller
         } catch (Throwable $e) {
             Logger::error('listConnections Error', ['message' => $e->getMessage(), 'line' => $e->getLine()]);
             return $this->error('تعذر جلب الصفحات المتصلة. حاول تحديث الصفحة، وإذا استمرت المشكلة تواصل مع الدعم.', 500);
+        }
+    }
+
+    /** POST /api/social/connections/{id}/active  body: {active} - العميل بيختار الصفحات اللي بيشتغل عليها */
+    public function connectionActive(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($denied = $this->guard('manage')) || ($denied = $this->verifyCsrf()) || ($denied = $this->rateLimitGuard('user', 'social_conn_active', 60, 60))) {
+            return $denied;
+        }
+        $uid = $this->uid();
+        $id = (int) ($params['id'] ?? 0);
+        $on = (bool) $this->get('active', true);
+        try {
+            if ($on) {
+                $ent = SocialPackages::entitlements($uid);
+                $max = $ent['limits']['accounts'];
+                $usage = SocialPackages::usage($uid)['accounts'];
+                $conn = $this->db->query('SELECT platform FROM platform_connections WHERE id = ? LIMIT 1', [$id])[0] ?? null;
+                if ($ent['enforced'] && $max >= 0 && $usage >= $max && $conn && in_array($conn['platform'], $ent['platforms'], true)) {
+                    return $this->limitError(new SocialPackageLimit('باقتك فيها ' . $max . ' حسابات وكلهم شغالين - وقّف حساب تاني الأول أو زوّد الحسابات من تبويب «الباقة».', 'accounts'));
+                }
+            }
+            SocialAccounts::setActive($uid, $id, $on);
+            SocialPackages::flush();
+            return $this->success(['active' => $on, 'locked' => SocialPackages::locked($uid)], $on ? 'الحساب اشتغل' : 'الحساب اتوقف من النشر');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
         }
     }
 

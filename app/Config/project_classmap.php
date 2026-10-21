@@ -731,6 +731,7 @@ return [
     'LinkedInAPI' => dirname(__DIR__,2).'/app/Services/SocialMedia/LinkedInAPI.php',
     'SocialTeam' => dirname(__DIR__,2).'/app/Services/SocialMedia/SocialTeam.php',
     'SocialPackages' => dirname(__DIR__,2).'/app/Services/SocialMedia/SocialPackages.php',
+    'SocialAccounts' => dirname(__DIR__,2).'/app/Services/SocialMedia/SocialAccounts.php',
     'SocialPackageLimit' => dirname(__DIR__,2).'/app/Services/SocialMedia/SocialPackages.php',
     'SocialPackagesRenewJob' => dirname(__DIR__,2).'/app/Jobs/SocialPackagesRenewJob.php',
     'SyncSocialCommentsJob' => dirname(__DIR__,2).'/app/Jobs/SyncSocialCommentsJob.php',

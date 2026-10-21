@@ -821,6 +821,27 @@ class MetaSocialAPI
     }
 
     /**
+     * صورة واسم الصفحة/الحساب (لكروت الحسابات واختيار الصفحات في المحرر).
+     * @return array ['success'=>bool,'avatar'=>?string,'username'=>?string,'name'=>?string,'followers'=>?int]
+     */
+    public function getProfile(string $platform, string $accountId, string $pageAccessToken): array
+    {
+        $api = $this->withToken($pageAccessToken);
+        $r = $platform === 'instagram'
+            ? $api->get($accountId, ['fields' => 'username,name,profile_picture_url,followers_count'])
+            : $api->get($accountId, ['fields' => 'name,username,picture.type(large){url},followers_count,fan_count']);
+        if (!$r['success']) {
+            return $r;
+        }
+        $d = $r['data'];
+        $avatar = $platform === 'instagram' ? ($d['profile_picture_url'] ?? null) : ($d['picture']['data']['url'] ?? null);
+        $followers = $d['followers_count'] ?? ($d['fan_count'] ?? null);
+        return ['success' => true, 'avatar' => is_string($avatar) && str_starts_with($avatar, 'https://') ? $avatar : null,
+            'username' => isset($d['username']) ? (string) $d['username'] : null, 'name' => isset($d['name']) ? (string) $d['name'] : null,
+            'followers' => $followers === null ? null : (int) $followers];
+    }
+
+    /**
      * بيانات حساب إنستجرام بيزنس تاني (منافس) عن طريق Business Discovery - متاح بصلاحية instagram_basic.
      * @return array ['success'=>bool,'profile'=>['username','name','followers','media_count'],'media'=>[['caption','likes','comments','timestamp','type','permalink']]]
      */

@@ -7,6 +7,7 @@
  */
 require_once __DIR__ . '/../Services/SocialMedia/SocialGrowth.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialCompetitors.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialAccounts.php';
 
 class SocialDailyInsightsJob implements QueueJobInterface
 {
@@ -18,7 +19,8 @@ class SocialDailyInsightsJob implements QueueJobInterface
         try {
             $n = SocialGrowth::snapshot(null, 300);
             $c = (new SocialCompetitors())->refreshDue(60);
-            Logger::info('Social daily insights', ['snapshots' => $n, 'competitors' => $c]);
+            $pics = class_exists('SocialAccounts') ? SocialAccounts::refreshStale(null, 300) : 0;
+            Logger::info('Social daily insights', ['snapshots' => $n, 'competitors' => $c, 'profiles' => $pics]);
         } catch (Throwable $e) {
             Logger::warning('Social daily insights failed', ['message' => $e->getMessage()]);
         } finally {
