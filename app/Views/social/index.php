@@ -43,6 +43,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
 
     <!-- ============ نظرة عامة ============ -->
     <section class="sp-panel" data-panel="overview">
+        <div class="p-card sp-start" id="spStart" hidden></div>
         <div class="p-toolbar sp-bar">
             <select id="spDays" class="p-select" aria-label="<?= $t('الفترة', 'Period') ?>">
                 <option value="7"><?= $t('آخر 7 أيام', 'Last 7 days') ?></option>

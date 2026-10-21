@@ -919,7 +919,7 @@ HTML;
             if (empty($check['ok'])) {
                 return $this->error((string) ($check['error'] ?? 'خلصت حصتك'), 402, ['upgrade_url' => '/subscription']);
             }
-            $ids = $this->get('product_ids', []);
+            $ids = $this->get('trip_keys', $this->get('product_ids', []));
             $r = $svc->start($uid, is_array($ids) ? $ids : [], (string) $this->get('language', 'ar'), (string) $this->get('request_key', ''));
             if (empty($r['already'])) {
                 // استخدام واحد من أدوات التسويق للدفعة كلها (الصور المولّدة بتتحسب لوحدها زي استوديو المحتوى)

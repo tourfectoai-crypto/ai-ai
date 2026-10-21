@@ -75,50 +75,48 @@ final class SeasonTripPosts
 
     // ------------------------------------------------------------------ الرحلات
 
-    /** كل رحلات/غرف مواقع العميل مع تفاصيلها ورابطها العام */
+    /**
+     * كل رحلات/غرف مواقع العميل من محتوى الموقع نفسه (حتى لو ماتسجلتش في جدول المنتجات)،
+     * ومربوطة بالمنتج لو موجود عشان نقرا حجوزاتها. key ثابت لكل رحلة: p{product_id} أو w{site}-{slug}.
+     */
     public function trips(int $uid): array
     {
-        $rows = $this->db->query(
-            "SELECT p.id AS product_id, p.website_id, p.tour_slug, p.name, p.price, p.currency, g.slug AS site_slug, g.content_json, g.custom_domain, g.status AS site_status
-               FROM crm_products p JOIN generated_websites g ON g.id = p.website_id
-              WHERE p.user_id = ? AND g.user_id = ? AND p.is_active = 1 AND p.tour_slug IS NOT NULL AND p.tour_slug <> ''
-              ORDER BY p.id",
-            [$uid, $uid]
-        ) ?: [];
+        $sites = $this->db->query('SELECT id, slug, status, content_json, custom_domain FROM generated_websites WHERE user_id = ? ORDER BY id', [$uid]) ?: [];
+        $products = [];
+        foreach ($this->db->query("SELECT id, website_id, tour_slug, price, currency FROM crm_products WHERE user_id = ? AND is_active = 1 AND tour_slug IS NOT NULL AND tour_slug <> ''", [$uid]) ?: [] as $p) {
+            $products[(int) $p['website_id'] . '|' . $p['tour_slug']] = $p;
+        }
         $out = [];
-        $content = [];
-        foreach ($rows as $r) {
-            $wid = (int) $r['website_id'];
-            $content[$wid] ??= json_decode((string) $r['content_json'], true) ?: [];
-            $c = $content[$wid];
-            $item = null;
+        foreach ($sites as $site) {
+            $wid = (int) $site['id'];
+            $c = json_decode((string) $site['content_json'], true) ?: [];
             foreach (['tours', 'rooms'] as $key) {
-                foreach ((array) ($c[$key] ?? []) as $it) {
-                    if (is_array($it) && (string) ($it['slug'] ?? '') === (string) $r['tour_slug']) {
-                        $item = $it;
-                        break 2;
+                foreach ((array) ($c[$key] ?? []) as $item) {
+                    $slug = is_array($item) ? trim((string) ($item['slug'] ?? '')) : '';
+                    if ($slug === '' || trim((string) ($item['name'] ?? '')) === '') {
+                        continue;
                     }
+                    $pr = $products[$wid . '|' . $slug] ?? null;
+                    $pid = $pr ? (int) $pr['id'] : null;
+                    $out[] = [
+                        'key' => $pid ? 'p' . $pid : 'w' . $wid . '-' . substr(preg_replace('/[^A-Za-z0-9_-]/', '', $slug), 0, 60),
+                        'product_id' => $pid,
+                        'website_id' => $wid,
+                        'slug' => $slug,
+                        'name' => (string) $item['name'],
+                        'description' => mb_substr(trim((string) ($item['short_description'] ?? $item['description'] ?? '')), 0, 600),
+                        'price' => trim((string) ($item['price'] ?? '')) ?: ($pr && (float) $pr['price'] > 0 ? rtrim(rtrim(number_format((float) $pr['price'], 2, '.', ''), '0'), '.') . ' ' . $pr['currency'] : ''),
+                        'duration' => trim((string) ($item['duration'] ?? '')),
+                        'group_size' => trim((string) ($item['group_size'] ?? $item['capacity'] ?? '')),
+                        'highlights' => array_slice(array_values(array_filter(array_map(static fn ($h) => is_string($h) ? trim($h) : '', (array) ($item['highlights'] ?? [])))), 0, 6),
+                        'includes' => array_slice(array_values(array_filter(array_map(static fn ($h) => is_string($h) ? trim($h) : '', (array) ($item['includes'] ?? [])))), 0, 6),
+                        'image_url' => trim((string) ($item['image_url'] ?? '')),
+                        'url' => self::tripUrl((string) $site['slug'], $slug, (string) ($site['custom_domain'] ?? ''), $wid),
+                        'company' => trim((string) ($c['company_name'] ?? $c['name'] ?? $c['business_name'] ?? '')),
+                        'published' => ($site['status'] ?? '') === 'published',
+                    ];
                 }
             }
-            if (!$item) {
-                continue; // الرحلة اتشالت من الموقع
-            }
-            $out[] = [
-                'product_id' => (int) $r['product_id'],
-                'website_id' => $wid,
-                'slug' => (string) $r['tour_slug'],
-                'name' => (string) ($item['name'] ?? $r['name']),
-                'description' => mb_substr(trim((string) ($item['short_description'] ?? '')), 0, 600),
-                'price' => trim((string) ($item['price'] ?? '')) ?: ($r['price'] ? rtrim(rtrim(number_format((float) $r['price'], 2, '.', ''), '0'), '.') . ' ' . $r['currency'] : ''),
-                'duration' => trim((string) ($item['duration'] ?? '')),
-                'group_size' => trim((string) ($item['group_size'] ?? $item['capacity'] ?? '')),
-                'highlights' => array_slice(array_values(array_filter(array_map(static fn ($h) => is_string($h) ? trim($h) : '', (array) ($item['highlights'] ?? [])))), 0, 6),
-                'includes' => array_slice(array_values(array_filter(array_map(static fn ($h) => is_string($h) ? trim($h) : '', (array) ($item['includes'] ?? [])))), 0, 6),
-                'image_url' => trim((string) ($item['image_url'] ?? '')),
-                'url' => self::tripUrl((string) $r['site_slug'], (string) $r['tour_slug'], (string) ($r['custom_domain'] ?? ''), $wid),
-                'company' => trim((string) ($c['company_name'] ?? $c['name'] ?? $c['business_name'] ?? '')),
-                'published' => ($r['site_status'] ?? '') === 'published',
-            ];
         }
         return $out;
     }
@@ -150,7 +148,7 @@ final class SeasonTripPosts
         $trips = $this->trips($uid);
         $stats = [];
         if ($trips) {
-            $ids = implode(',', array_map(static fn ($t) => (int) $t['product_id'], $trips));
+            $ids = implode(',', array_map('intval', array_filter(array_column($trips, 'product_id')))) ?: '0';
             $rows = $this->db->query(
                 "SELECT product_id,
                     SUM(start_date >= CURDATE() AND start_date < DATE_ADD(CURDATE(), INTERVAL 90 DAY)) AS upcoming,
@@ -172,7 +170,7 @@ final class SeasonTripPosts
         $hasData = false;
         $ar = function_exists('current_lang') ? current_lang() === 'ar' : true;
         foreach ($trips as $i => &$t) {
-            $s = $stats[$t['product_id']] ?? [];
+            $s = $t['product_id'] ? ($stats[$t['product_id']] ?? []) : [];
             $up = (int) ($s['upcoming'] ?? 0);
             $rec = (int) ($s['recent'] ?? 0);
             $prev = (int) ($s['previous'] ?? 0);
@@ -212,15 +210,15 @@ final class SeasonTripPosts
 
     /**
      * بيبدأ دفعة منشورات للرحلات المختارة (بيحفظها "pending" وبيرجّع مفتاح الدفعة؛ الشغل الفعلي في process()).
-     * @param int[] $productIds
+     * @param string[] $tripKeys مفاتيح الرحلات (key من trips())
      */
-    public function start(int $uid, array $productIds, string $language, string $requestKey): array
+    public function start(int $uid, array $tripKeys, string $language, string $requestKey): array
     {
         self::ensureSchema();
         if (!self::ready()) {
             throw new InvalidArgumentException('شغّل migration رحلات الموسم (2026_10_24_000001_season_posts.sql) الأول');
         }
-        $ids = array_values(array_unique(array_filter(array_map('intval', $productIds))));
+        $ids = array_values(array_unique(array_filter(array_map(static fn ($k) => is_scalar($k) ? (is_numeric($k) ? 'p' . (int) $k : (string) $k) : '', $tripKeys))));
         if (!$ids) {
             throw new InvalidArgumentException('اختار رحلة واحدة على الأقل');
         }
@@ -237,7 +235,7 @@ final class SeasonTripPosts
         }
         $byId = [];
         foreach ($this->demand($uid)['trips'] as $t) {
-            $byId[$t['product_id']] = $t;
+            $byId[$t['key']] = $t;
         }
         foreach ($ids as $id) {
             if (!isset($byId[$id])) {
@@ -248,7 +246,7 @@ final class SeasonTripPosts
             $t = $byId[$id];
             $this->db->query(
                 "INSERT INTO season_post_drafts (user_id, batch_key, product_id, website_id, trip_slug, trip_name, trip_url, language, demand_json, status) VALUES (?,?,?,?,?,?,?,?,?, 'pending')",
-                [$uid, $batch, $id, $t['website_id'], $t['slug'], mb_substr($t['name'], 0, 255), $t['url'], $language, json_encode($t['demand'], JSON_UNESCAPED_UNICODE)]
+                [$uid, $batch, $t['product_id'], $t['website_id'], $t['slug'], mb_substr($t['name'], 0, 255), $t['url'], $language, json_encode($t['demand'], JSON_UNESCAPED_UNICODE)]
             );
         }
         return ['batch' => $batch, 'count' => count($ids)];
@@ -263,7 +261,7 @@ final class SeasonTripPosts
         }
         $trips = [];
         foreach ($this->trips($uid) as $t) {
-            $trips[$t['product_id']] = $t;
+            $trips[$t['website_id'] . '|' . $t['slug']] = $t;
         }
         $done = 0;
         foreach ($rows as $row) {
@@ -273,7 +271,7 @@ final class SeasonTripPosts
             if ($s->rowCount() !== 1) {
                 continue;
             }
-            $trip = $trips[(int) $row['product_id']] ?? null;
+            $trip = $trips[(int) $row['website_id'] . '|' . $row['trip_slug']] ?? null;
             try {
                 if (!$trip) {
                     throw new RuntimeException('الرحلة اتشالت من الموقع');

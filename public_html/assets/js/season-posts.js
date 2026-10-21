@@ -18,9 +18,9 @@
     let root = null, D = null, selected = new Set(), batch = null, timer = null;
 
     function tripCard(t) {
-        const d = t.demand || {}, lv = LEVEL[d.level] || LEVEL.none, on = selected.has(t.product_id);
+        const d = t.demand || {}, lv = LEVEL[d.level] || LEVEL.none, on = selected.has(t.key);
         const img = t.image_url ? '<img src="' + esc(t.image_url) + '" alt="" loading="lazy" onerror="this.remove()">' : '';
-        return '<label class="ssn-trip' + (on ? ' on' : '') + '"><input type="checkbox" data-trip="' + t.product_id + '"' + (on ? ' checked' : '') + '>'
+        return '<label class="ssn-trip' + (on ? ' on' : '') + '"><input type="checkbox" data-trip="' + esc(t.key) + '"' + (on ? ' checked' : '') + '>'
             + '<div class="ssn-img">' + img + IC('image', 26) + '<span class="ssn-rank">#' + nf(d.rank) + '</span></div>'
             + '<div class="ssn-body"><div class="ssn-top"><span class="ssn-lv ' + lv[0] + '">' + (d.level === 'high' ? IC('trend', 13) + ' ' : '') + esc(lv[1]) + '</span><span class="ssn-ck">' + IC('check', 13) + '</span></div>'
             + '<b class="ssn-name" data-no-translate>' + esc(t.name) + '</b>'
@@ -91,7 +91,7 @@
     function render() {
         const months = (D.season.months || []).map(monthName).join(' – ');
         const trips = D.trips || [];
-        if (!selected.size) trips.filter(t => (t.demand || {}).score > 0).slice(0, 3).forEach(t => selected.add(t.product_id));
+        if (!selected.size) trips.filter(t => (t.demand || {}).score > 0).slice(0, 3).forEach(t => selected.add(t.key));
         root.innerHTML = '<div class="ssn">'
             + '<div class="p-card ssn-hero"><div><h3>' + IC('trend', 20) + ' ' + T('رحلات الموسم', 'Season trips') + '</h3><p>' + T('بنشوف من حجوزاتك الحقيقية أنهي رحلات عليها طلب في الموسم اللي داخلين عليه (', 'From your real bookings we find which trips are in demand for the coming season (') + '<b>' + esc(months) + '</b>'
             + T(')، ونعملها منشورات جاهزة: نص احترافي بالتفاصيل والسعر، هاشتاجات، رابط الحجز، وصورة الرحلة من موقعك - ولو مش احترافية بنعمل صورة احترافية بالذكاء الصناعي.', '), then turn them into ready posts: professional caption with details and price, hashtags, booking link and the trip photo from your site — or a professional AI image when the photo is not good enough.') + '</p></div></div>'
@@ -104,7 +104,7 @@
                 + '<button type="button" class="p-btn primary" id="ssnGo"></button></div>')
             + '<section class="p-card" id="ssnPosts" hidden></section></div>';
         root.querySelectorAll('[data-trip]').forEach(cb => cb.addEventListener('change', () => {
-            const id = +cb.dataset.trip;
+            const id = cb.dataset.trip;
             if (cb.checked) {
                 if (selected.size >= (D.max_trips || 5)) { cb.checked = false; P.toast(T('لحد ' + (D.max_trips || 5) + ' رحلات في المرة', 'Up to ' + (D.max_trips || 5) + ' trips at a time'), 'error'); return; }
                 selected.add(id);
@@ -117,7 +117,7 @@
             paintSelectBar();
             go.addEventListener('click', async () => {
                 go.disabled = true;
-                const r = await jsonPost('/api/revenue-intelligence/season/posts', { product_ids: [...selected], language: root.querySelector('#ssnLang').value, request_key: 'ssn' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) });
+                const r = await jsonPost('/api/revenue-intelligence/season/posts', { trip_keys: [...selected], language: root.querySelector('#ssnLang').value, request_key: 'ssn' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) });
                 go.disabled = false;
                 if (!r.success) { P.toast(r.error || T('تعذر', 'Failed'), 'error'); return; }
                 batch = r.data.batch;

@@ -894,6 +894,62 @@ class SocialMediaController extends Controller
         }
     }
 
+    /**
+     * GET /api/social/onboarding - خط سير العميل الجديد لتشغيل الخدمة (كل خطوة: اتعملت ولا لأ + تروح فين).
+     * كل فحص لوحده جوه try: جدول ناقص مايوقعش القايمة كلها.
+     */
+    public function onboarding(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $uid = $this->uid();
+        $n = function (string $sql, array $args = []): int {
+            try {
+                return (int) (($this->db->query($sql, $args)[0]['n'] ?? 0));
+            } catch (Throwable $e) {
+                return 0;
+            }
+        };
+        $own = '(user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?))';
+        $accounts = $n("SELECT COUNT(*) AS n FROM platform_connections WHERE {$own} AND platform IN ('facebook','instagram','tiktok','youtube','google_business','threads','linkedin') AND status = 'connected'", [$uid, $uid]);
+        $sites = $n('SELECT COUNT(*) AS n FROM websites WHERE user_id = ?', [$uid]) + $n('SELECT COUNT(*) AS n FROM generated_websites WHERE user_id = ?', [$uid]);
+        $trips = $n("SELECT COUNT(*) AS n FROM crm_products WHERE user_id = ? AND is_active = 1 AND tour_slug IS NOT NULL AND tour_slug <> ''", [$uid]);
+        $brand = $n("SELECT COUNT(*) AS n FROM brand_profiles WHERE user_id = ? AND logo_path IS NOT NULL AND logo_path <> ''", [$uid]);
+        $media = $n("SELECT COUNT(*) AS n FROM media_items WHERE user_id = ? AND status = 'completed' AND deleted_at IS NULL", [$uid]);
+        $posts = $n('SELECT COUNT(*) AS n FROM social_posts WHERE user_id = ?', [$uid]);
+        $plans = $n("SELECT COUNT(*) AS n FROM social_monthly_plans WHERE user_id = ? AND status IN ('draft','active','paused','completed')", [$uid]);
+        $inbox = $n('SELECT COUNT(*) AS n FROM social_inbox_settings WHERE user_id = ?', [$uid]);
+        $season = $n('SELECT COUNT(*) AS n FROM season_post_drafts WHERE user_id = ?', [$uid]);
+        $ar = current_lang() === 'ar';
+        $L = static fn (string $a, string $e) => $ar ? $a : $e;
+        $steps = [
+            ['key' => 'accounts', 'done' => $accounts > 0, 'icon' => 'link', 'title' => $L('اربط صفحاتك', 'Connect your pages'),
+                'text' => $L('اربط فيسبوك وإنستجرام (وتيك توك ويوتيوب لو بتستخدمهم)، واختار الصفحات اللي هتنشر عليها.', 'Connect Facebook & Instagram (and TikTok/YouTube if you use them), then pick the pages you publish to.'),
+                'href' => '/social#accounts', 'cta' => $L('اربط الحسابات', 'Connect accounts')],
+            ['key' => 'site', 'done' => $sites > 0, 'icon' => 'external', 'title' => $L('ضيف موقع شركتك ورحلاتك', 'Add your website & trips'),
+                'text' => $L('الموقع والرحلات بيخلّوا المنشورات فيها روابط حجز حقيقية، وبيشغّلوا «رحلات الموسم» والخطة الشهرية.', 'Your site and trips put real booking links in posts and power Season trips and the monthly plan.'),
+                'href' => $sites > 0 ? '/website-builder' : '/websites', 'cta' => $L('ضيف الموقع', 'Add website')],
+            ['key' => 'brand', 'done' => $brand > 0 && $media > 0, 'icon' => 'images', 'title' => $L('لوجو شركتك وصورك', 'Your logo & photos'),
+                'text' => $L('ارفع اللوجو وصور رحلاتك (أو اسحبها من موقعك) عشان التصميمات تطلع بهوية شركتك.', 'Upload your logo and trip photos (or pull them from your site) so designs carry your brand.'),
+                'href' => '/social#plan', 'cta' => $L('ارفع اللوجو والصور', 'Upload logo & photos')],
+            ['key' => 'post', 'done' => $posts > 0, 'icon' => 'send', 'title' => $L('أول منشور', 'Your first post'),
+                'text' => $L('اكتب موضوع والذكاء الصناعي يكتبلك 3 نسخ بالهاشتاجات، واختار الصفحات وانشر أو جدول.', 'Type a topic and AI writes 3 versions with hashtags; pick pages and publish or schedule.'),
+                'action' => 'new_post', 'cta' => $L('اعمل منشور', 'Create a post')],
+            ['key' => 'plan', 'done' => $plans > 0, 'icon' => 'planCheck', 'title' => $L('خطة الشهر كاملة', 'A full monthly plan'),
+                'text' => $L('خطة منشورات للشهر كله بالصور والمواعيد، تراجعها مرة واحدة وتتنشر لوحدها.', 'A whole month of posts with images and times — review once and it publishes itself.'),
+                'href' => '/social#plan', 'cta' => $L('جهّز الخطة', 'Prepare the plan')],
+            ['key' => 'inbox', 'done' => $inbox > 0, 'icon' => 'chat', 'title' => $L('الرد على التعليقات', 'Answer comments'),
+                'text' => $L('كل التعليقات في مكان واحد، وفعّل الرد الخاص التلقائي على اللي بيسأل عن السعر.', 'All comments in one place — turn on auto private replies for price questions.'),
+                'href' => '/social#inbox', 'cta' => $L('افتح صندوق التعليقات', 'Open the inbox')],
+            ['key' => 'season', 'done' => $season > 0, 'icon' => 'trend', 'title' => $L('رحلات الموسم', 'Season trips'),
+                'text' => $L('بنشوف من حجوزاتك الرحلات المطلوبة في الموسم ونعملها منشورات جاهزة.', 'We spot the trips in demand from your bookings and turn them into ready posts.'),
+                'href' => '/revenue/intelligence#season', 'cta' => $L('شوف رحلات الموسم', 'See season trips'), 'needs' => $trips > 0 ? null : $L('محتاجة رحلات على موقعك', 'Needs trips on your site')],
+        ];
+        $done = count(array_filter($steps, static fn ($s) => $s['done']));
+        return $this->success(['steps' => $steps, 'done' => $done, 'total' => count($steps), 'next' => array_values(array_filter($steps, static fn ($s) => !$s['done']))[0]['key'] ?? null]);
+    }
+
     /** GET /api/social/me - دور المستخدم في فريق الحساب (للواجهة) */
     public function me(array $params = []): array
     {

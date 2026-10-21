@@ -1019,7 +1019,7 @@
     function paintChip() {
         const chip = $('spPkgChip'); if (!chip || !PKG) return;
         const lim = PKG.limits.posts, used = PKG.usage.posts;
-        chip.innerHTML = '' + IC('gem') + ' <b>' + esc(PKG.tier_name) + '</b> <span>' + nf(used) + '/' + limTxt(lim) + ' ' + T('منشور', 'posts') + '</span>';
+        chip.innerHTML = '' + IC('gem') + ' <b>' + esc(AR ? PKG.tier_name : (PKG.tier_name_en || PKG.tier_name)) + '</b> <span>' + nf(used) + '/' + limTxt(lim) + ' ' + T('منشور', 'posts') + '</span>';
         chip.classList.toggle('warn', lim >= 0 && used >= lim * 0.8);
         chip.hidden = !PKG.enforced;
         chip.onclick = () => showTab('package');
@@ -1046,17 +1046,40 @@
         const sub = PKG.subscription && PKG.subscription.status === 'active' ? PKG.subscription : null;
         const lockedN = Object.keys(PKG.locked || {}).filter(k => PKG.locked[k] !== 'inactive').length;
         const feats = Object.keys(PKG.features || {});
-        root.innerHTML = '<div class="p-card pk-head"><div><div class="p-cell-muted sp-small">' + T('باقتك في السوشيال', 'Your social plan') + '</div><h3 class="pk-tier">' + IC('gem') + ' ' + esc(PKG.tier_name) + ' <small>· ' + esc(src) + '</small></h3>'
+        root.innerHTML = '<div class="p-card pk-head"><div><div class="p-cell-muted sp-small">' + T('باقتك في السوشيال', 'Your social plan') + '</div><h3 class="pk-tier">' + IC('gem') + ' ' + esc(AR ? PKG.tier_name : (PKG.tier_name_en || PKG.tier_name)) + ' <small>· ' + esc(src) + '</small></h3>'
             + (sub ? '<div class="sp-small">' + (sub.auto_renew ? T('بتتجدد تلقائي يوم ', 'Renews on ') : T('شغالة لحد ', 'Active until ')) + '<b>' + esc(spLocal(sub.period_end + ' UTC')) + '</b></div>' : '')
             + '<div class="pk-feat-row">' + feats.map(k => '<span class="pk-fchip' + (PKG.features[k] ? '' : ' no') + '">' + (PKG.features[k] ? IC('check', 13) : IC('lock', 13)) + ' ' + esc(lab(k)) + '</span>').join('') + '</div>'
             + '<div class="sp-row sp-gap-s"><a class="p-btn primary sm" href="/subscription#social">' + IC('gem', 14) + ' ' + (PKG.can_buy ? T('رقّي أو غيّر باقتك', 'Upgrade or change plan') : T('شوف الباقات', 'See plans')) + '</a><a class="p-btn ghost sm" href="/subscription#wallet">' + IC('wallet', 14) + ' ' + T('المحفظة', 'Wallet') + '</a></div></div>'
             + '<div class="pk-meters">' + ['posts', 'accounts', 'ai_captions', 'monthly_plans', 'competitors'].map(meter).join('') + '</div></div>'
             + (lockedN ? '<div class="alert alert-warning sp-small">' + IC('lock') + ' ' + nf(lockedN) + T(' حساب مقفول للنشر بسبب حدود الباقة. ', ' account(s) locked by plan limits. ') + '<a href="/subscription#social">' + T('زوّد الحسابات', 'Add accounts') + '</a></div>' : '');
     }
+    // ================= ابدأ من هنا (خط سير العميل الجديد) =================
+    async function loadStart() {
+        const box = $('spStart'); if (!box) return;
+        const r = await fetchJSON('/api/social/onboarding');
+        if (!r.success) return;
+        const d = r.data;
+        let hidden = false; try { hidden = localStorage.getItem('tf_social_start_hidden') === '1'; } catch (e) {}
+        if (d.done >= d.total || (hidden && d.done >= 3)) { box.hidden = true; return; }
+        const pct = Math.round(d.done * 100 / d.total);
+        box.hidden = false;
+        box.innerHTML = '<div class="sp-start-head"><div><h3>' + IC('sparkles', 18) + ' ' + T('ابدأ من هنا', 'Start here') + '</h3><p class="p-cell-muted">' + T('خطوات بسيطة بالترتيب عشان السوشيال يشتغل لوحده ويجيبلك حجوزات.', 'A few simple steps, in order, so social runs itself and brings bookings.') + '</p></div>'
+            + '<div class="sp-start-prog"><b>' + nf(d.done) + ' / ' + nf(d.total) + '</b><div class="pk-bar"><i style="width:' + pct + '%"></i></div></div>'
+            + (d.done >= 3 ? '<button type="button" class="p-btn ghost xs" id="spStartHide" aria-label="' + esc(T('إخفاء', 'Hide')) + '">' + IC('x', 14) + '</button>' : '') + '</div>'
+            + '<ol class="sp-steps">' + d.steps.map((st, i) => {
+                const next = st.key === d.next;
+                const cta = st.action === 'new_post' ? '<button type="button" class="p-btn ' + (next ? 'primary' : 'outline') + ' sm" data-start-post>' + esc(st.cta) + '</button>' : '<a class="p-btn ' + (next ? 'primary' : 'outline') + ' sm" href="' + esc(st.href) + '">' + esc(st.cta) + '</a>';
+                return '<li class="sp-step-it' + (st.done ? ' done' : '') + (next ? ' next' : '') + '"><span class="sp-step-n">' + (st.done ? IC('check', 14) : nf(i + 1)) + '</span><div class="sp-step-tx"><b>' + IC(st.icon, 15) + ' ' + esc(st.title) + (next ? ' <span class="sp-next">' + T('الخطوة الجاية', 'Next step') + '</span>' : '') + '</b><small>' + esc(st.text) + (st.needs && !st.done ? ' <em>(' + esc(st.needs) + ')</em>' : '') + '</small></div>' + (st.done ? '<span class="sp-step-ok">' + T('تمت', 'Done') + '</span>' : cta) + '</li>';
+            }).join('') + '</ol>';
+        box.querySelectorAll('[data-start-post]').forEach(b => b.addEventListener('click', () => openNewPost()));
+        const h = $('spStartHide'); if (h) h.addEventListener('click', () => { try { localStorage.setItem('tf_social_start_hidden', '1'); } catch (e) {} box.hidden = true; });
+    }
+
     // ================= البداية =================
     loadStats();
     loadBest();
     fetchPackage();
+    loadStart();
     fetchJSON('/api/social/inbox?status=open').then(r => { if (r.success) paintBadge(r.data.counts); });
     const startTab = (location.hash || '').slice(1);
     showTab(startTab || 'overview');

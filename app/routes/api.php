@@ -714,6 +714,7 @@ $router->get('/api/social/connections', 'SocialMediaController', 'listConnection
 $router->post('/api/social/connections/{id}/active', 'SocialMediaController', 'connectionActive', ['AuthMiddleware']);
 // باقات السوشيال: الباقة الحالية + الاشتراك/الترقية/الإضافات من المحفظة
 $router->get('/api/social/package', 'SocialMediaController', 'package', ['AuthMiddleware']);
+$router->get('/api/social/onboarding', 'SocialMediaController', 'onboarding', ['AuthMiddleware']);
 $router->post('/api/social/package/subscribe', 'SocialMediaController', 'packageSubscribe', ['AuthMiddleware']);
 $router->post('/api/social/package/quote', 'SocialMediaController', 'packageQuote', ['AuthMiddleware']);
 $router->post('/api/social/package/auto-renew', 'SocialMediaController', 'packageAutoRenew', ['AuthMiddleware']);

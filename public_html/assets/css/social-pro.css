@@ -344,3 +344,25 @@
 @media (max-width: 700px) { .pk-meters { grid-template-columns: 1fr; gap: 6px; } .pk-meter { padding: 8px 10px; } }
 
 .pk-meter.off .pk-m-h b { color: var(--panel-text-muted); font-weight: 500; }
+
+/* ===== ابدأ من هنا ===== */
+.sp-start { padding: 18px; margin-bottom: 14px; border-color: var(--panel-accent); background: linear-gradient(135deg, var(--panel-accent-light, rgba(37,99,235,.06)), transparent 60%); }
+.sp-start-head { display: flex; align-items: flex-start; gap: 16px; justify-content: space-between; flex-wrap: wrap; }
+.sp-start-head h3 { margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+.sp-start-head p { margin: 0; font-size: 13px; }
+.sp-start-prog { min-width: 180px; font-size: 13px; }
+.sp-start-prog .pk-bar { margin-top: 6px; }
+.sp-steps { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; }
+.sp-step-it { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--panel-border); border-radius: 12px; background: var(--panel-card-bg); }
+.sp-step-it.next { border-color: var(--panel-accent); box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+.sp-step-it.done { opacity: .7; }
+.sp-step-n { flex: none; width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; border: 1.5px solid var(--panel-border); }
+.sp-step-it.next .sp-step-n { background: var(--panel-accent); border-color: var(--panel-accent); color: #fff; }
+.sp-step-it.done .sp-step-n { background: var(--sp-ok); border-color: var(--sp-ok); color: #fff; }
+.sp-step-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sp-step-tx b { font-size: 14px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sp-step-tx small { color: var(--panel-text-muted); font-size: 12.5px; line-height: 1.6; }
+.sp-step-tx em { font-style: normal; color: #b45309; }
+.sp-next { font-size: 11px; font-weight: 700; color: #fff; background: var(--panel-accent); border-radius: 999px; padding: 1px 8px; }
+.sp-step-ok { font-size: 12px; color: var(--sp-ok); font-weight: 600; }
+@media (max-width: 640px) { .sp-step-it { flex-wrap: wrap; } .sp-step-it .p-btn { width: 100%; justify-content: center; } }
