@@ -28,6 +28,9 @@ class GenerateVideoJob implements QueueJobInterface
             GenerationLifecycle::stage($item,'processing');$providerCompleted=true;
             $download=$client->downloadVideo((string)($r['video_uri']??''));if(empty($download['success']))throw new RuntimeException((string)($download['error']??'Video download failed'));
             $path=GeneratedMediaFiles::write($id,(string)($download['data']??''),'mp4');$item->setAttribute('file_path',$path);
+            $meta=json_decode((string)$item->getAttribute('generation_meta'),true)?:[];$size=VideoEditing::nominalSize((string)$item->getAttribute('aspect_ratio'),(string)($meta['options']['resolution']??'720p'));
+            $item->setAttribute('width',$size['width']);$item->setAttribute('height',$size['height']);
+            try{$poster=VideoEditing::poster(PrivateMedia::resolve($path),$id);if($poster)$item->setAttribute('thumbnail_path',$poster);}catch(Throwable $e){Logger::warning('Video poster unavailable',['media_item_id'=>$id]);}
             GenerationLifecycle::stage($item,'billing');GenerationLifecycle::complete($item,'media_video');
         }catch(Throwable $e){
             if(isset($item)&&$item->getAttribute('status')!=='completed'&&!empty($providerCompleted)) {
@@ -39,7 +42,7 @@ class GenerateVideoJob implements QueueJobInterface
     }
     private function providerSettings(MediaItem $item): array
     {
-        $meta=json_decode((string)$item->getAttribute('generation_meta'),true)?:[];$options=$meta['options']??[];$settings=['resolution'=>$options['resolution']??'720p'];if(isset($meta['routing_snapshot']['models']['veo']))$settings['model']=$meta['routing_snapshot']['models']['veo'];
+        $meta=json_decode((string)$item->getAttribute('generation_meta'),true)?:[];$options=$meta['options']??[];$settings=['resolution'=>$options['resolution']??'720p','negative_prompt'=>GenerationOptions::videoNegativePrompt(['avoid'=>(string)($options['avoid']??'')])];if(isset($meta['routing_snapshot']['models']['veo']))$settings['model']=$meta['routing_snapshot']['models']['veo'];
         if(!empty($options['reference_id']))$settings['reference']=ReferenceMedia::load((int)$item->getAttribute('user_id'),(int)$options['reference_id']);return $settings;
     }
     private function requeue(MediaItem $item): void

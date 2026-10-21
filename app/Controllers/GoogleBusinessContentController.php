@@ -164,6 +164,11 @@ class GoogleBusinessContentController extends Controller
                     + رفع صورة
                     <input type="file" id="gbpPhotoInput" accept="image/jpeg,image/png,image/webp" style="display:none;">
                 </label>
+                <button type="button" class="p-btn outline xs" id="gbpFromLibraryBtn">🎨 من مكتبة الاستوديو</button>
+            </div>
+            <div id="gbpLibraryPicker" style="display:none;padding:0 18px 12px;">
+                <div class="p-cell-muted" style="font-size:12.5px;margin-bottom:8px;">اختار صورة من الاستوديو الإبداعي (المتولدة أو صورك الحقيقية) وهتترفع على Google بالتصنيف المختار تحت.</div>
+                <div id="gbpLibraryGrid" class="p-grid cols-4" style="gap:8px;"></div>
             </div>
             <div style="padding:0 18px 10px;">
                 <select id="gbpPhotoCategory" class="p-select" style="max-width:260px;">
@@ -1037,6 +1042,39 @@ HTML;
                 P.toast(res.error || 'فشل الرفع', 'error');
             }
         } catch (err) { P.toast('تعذر رفع الصورة', 'error'); }
+    });
+
+    // صور الاستوديو الإبداعي → Google Business (من غير تنزيل ورفع يدوي)
+    document.getElementById('gbpFromLibraryBtn').addEventListener('click', async function () {
+        const box = document.getElementById('gbpLibraryPicker');
+        const grid = document.getElementById('gbpLibraryGrid');
+        if (box.style.display === 'block') { box.style.display = 'none'; return; }
+        box.style.display = 'block';
+        grid.innerHTML = '<div class="p-cell-muted">جارِ التحميل...</div>';
+        const res = await fetchJSON('/api/creative-studio/media?filter=images');
+        const items = res.success && res.data && Array.isArray(res.data.items) ? res.data.items.filter(m => m.status === 'completed' && m.thumbnail_path) : [];
+        if (!items.length) { grid.innerHTML = '<div class="p-cell-muted">مفيش صور جاهزة في الاستوديو لسه. <a href="/creative-studio">افتح الاستوديو</a></div>'; return; }
+        grid.innerHTML = items.map(m => '<button type="button" class="p-card no-pad" data-library-id="' + Number(m.id) + '" style="padding:0;border:0;cursor:pointer;overflow:hidden;aspect-ratio:1"><img src="' + P.esc(m.thumbnail_path) + '" alt="' + P.esc((m.prompt || '').slice(0, 120)) + '" loading="lazy" style="width:100%;height:100%;object-fit:cover"></button>').join('');
+    });
+    document.getElementById('gbpLibraryGrid').addEventListener('click', async function (e) {
+        const btn = e.target.closest('[data-library-id]');
+        if (!btn) return;
+        const websiteId = P.getCurrentWebsiteId();
+        if (!websiteId) { P.toast('اختر موقعًا أولاً', 'error'); return; }
+        const fd = new FormData();
+        fd.append('media_item_id', btn.dataset.libraryId);
+        fd.append('website_id', websiteId);
+        fd.append('category', document.getElementById('gbpPhotoCategory').value);
+        btn.disabled = true;
+        try {
+            const res = await (await fetch('/api/gbp/photos', { method: 'POST', body: fd })).json();
+            if (res.success) {
+                P.toast('الصورة بترفع على Google في الخلفية...', 'success');
+                document.getElementById('gbpLibraryPicker').style.display = 'none';
+                loadGbpPhotos(); setTimeout(loadGbpPhotos, 6000); setTimeout(loadGbpPhotos, 15000);
+            } else { P.toast(res.error || 'فشل الرفع', 'error'); }
+        } catch (err) { P.toast('تعذر رفع الصورة', 'error'); }
+        btn.disabled = false;
     });
 
     window.deleteGbpPhoto = async function (photoId) {

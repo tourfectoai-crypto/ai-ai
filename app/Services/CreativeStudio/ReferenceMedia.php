@@ -22,11 +22,18 @@ class ReferenceMedia
         if($parentId)self::load($userId,$parentId);
         $image=GeneratedMediaFiles::image(base64_encode($bytes));if($image['width']*$image['height']>8000000)throw new InvalidArgumentException('Upload dimensions too large');
         // Decode/re-encode to remove metadata, appended payloads and untrusted source file names.
-        $gd=@imagecreatefromstring($image['data']);if(!$gd)throw new InvalidArgumentException('Invalid upload');imagealphablending($gd,false);imagesavealpha($gd,true);ob_start();$encoded=@imagepng($gd);$clean=ob_get_clean();imagedestroy($gd);if(!$encoded||!is_string($clean)||strlen($clean)>self::MAX_BYTES)throw new RuntimeException('Image normalization failed');
+        // JPEG للصور المعتمة (إنستجرام مابيقبلش PNG)، وPNG بس لو فيه شفافية فعلية
+        $gd=@imagecreatefromstring($image['data']);if(!$gd)throw new InvalidArgumentException('Invalid upload');$alpha=GeneratedMediaFiles::hasTransparency($gd);ob_start();
+        if($alpha){imagealphablending($gd,false);imagesavealpha($gd,true);$encoded=@imagepng($gd);$ext='png';}
+        else{$flat=imagecreatetruecolor($image['width'],$image['height']);imagefill($flat,0,0,imagecolorallocate($flat,255,255,255));imagecopy($flat,$gd,0,0,0,0,$image['width'],$image['height']);$encoded=@imagejpeg($flat,null,92);imagedestroy($flat);$ext='jpg';}
+        $clean=ob_get_clean();imagedestroy($gd);if(!$encoded||!is_string($clean)||strlen($clean)>self::MAX_BYTES)throw new RuntimeException('Image normalization failed');
+        $phash=CreativeAssetRegistry::fingerprint($clean);
+        // نفس الصورة اترفعت قبل كده: نرجّع الموجودة بدل ما نكررها في المكتبة
+        if($phash&&!$parentId&&($dup=CreativeAssetRegistry::nearest(Database::getInstance()->getConnection(),$userId,$phash,0,CreativeAssetRegistry::DUPLICATE_BITS,600,$image['width']/$image['height']))){$existing=(new MediaItem())->find($dup['id']);if($existing&&$existing->getAttribute('type')!=='short_video')return $existing;}
         $path=null;$thumb=null;
-        try{return Database::getInstance()->transaction(function()use($userId,$parentId,$image,$clean,&$path,&$thumb){
-            $item=new MediaItem(['user_id'=>$userId,'type'=>'marketing_image','prompt'=>$parentId?'Brand layout — image #'.$parentId:'Uploaded reference image','aspect_ratio'=>'1:1','status'=>'completed','generation_stage'=>'completed','usage_charged'=>1,'generation_meta'=>json_encode(['source'=>$parentId?'brand_editor':'upload','parent_id'=>$parentId,'billing'=>['source'=>'upload','amount'=>0,'currency'=>'USD','settled'=>true]],JSON_THROW_ON_ERROR)]);GenerationLifecycle::save($item);
-            $path=GeneratedMediaFiles::write((int)$item->getAttribute('id'),$clean,'png');$thumb=GeneratedMediaFiles::thumbnail($path,(int)$item->getAttribute('id'));
+        try{return Database::getInstance()->transaction(function()use($userId,$parentId,$image,$clean,$ext,$phash,&$path,&$thumb){
+            $item=new MediaItem(['user_id'=>$userId,'type'=>'marketing_image','prompt'=>$parentId?'Brand layout — image #'.$parentId:'Uploaded reference image','aspect_ratio'=>CreativeAssetRegistry::closestRatio($image['width'],$image['height']),'status'=>'completed','generation_stage'=>'completed','usage_charged'=>1,'generation_meta'=>json_encode(array_filter(['source'=>$parentId?'brand_editor':'upload','parent_id'=>$parentId,'phash'=>$phash,'billing'=>['source'=>'upload','amount'=>0,'currency'=>'USD','settled'=>true]],static fn($v)=>$v!==null),JSON_THROW_ON_ERROR)]);GenerationLifecycle::save($item);
+            $path=GeneratedMediaFiles::write((int)$item->getAttribute('id'),$clean,$ext);$thumb=GeneratedMediaFiles::thumbnail($path,(int)$item->getAttribute('id'));
             $item->setAttribute('file_path',$path);$item->setAttribute('thumbnail_path',$thumb?:$path);$item->setAttribute('width',$image['width']);$item->setAttribute('height',$image['height']);GenerationLifecycle::save($item);return $item;
         });}catch(Throwable $e){foreach([$path,$thumb] as $p)if($p&&preg_match('#^/uploads/media/[a-zA-Z0-9_-]+\.(png|jpg)$#D',$p))@unlink(PrivateMedia::resolve($p));throw $e;}
     }

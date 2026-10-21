@@ -257,14 +257,15 @@ class GeminiClient
     /** طلب توليد صورة واحد لموديل واحد. @return array{success:bool, http:int, status:string, error:string, image_base64?:string, mime_type?:string, tokens?:int} */
     private function imageRequest(string $model, array $payload): array
     {
-        $url = GEMINI_API_URL . '/models/' . rawurlencode($model) . ':generateContent?key=' . $this->apiKey;
+        // المفتاح في header مش في الرابط: الروابط بتتسجل في logs الـ proxy/السيرفر
+        $url = GEMINI_API_URL . '/models/' . rawurlencode($model) . ':generateContent';
         try {
             $ch = curl_init($url);
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_POST => true,
                 CURLOPT_POSTFIELDS => json_encode($payload),
-                CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json', 'x-goog-api-key: ' . $this->apiKey],
                 CURLOPT_TIMEOUT => 90,
                 CURLOPT_CONNECTTIMEOUT => 10,
                 CURLOPT_SSL_VERIFYPEER => true,
@@ -351,9 +352,9 @@ class GeminiClient
         $found = [];
         $token = '';
         for ($page = 0; $page < 3; $page++) {
-            $url = GEMINI_API_URL . '/models?pageSize=200&key=' . $this->apiKey . ($token !== '' ? '&pageToken=' . rawurlencode($token) : '');
+            $url = GEMINI_API_URL . '/models?pageSize=200' . ($token !== '' ? '&pageToken=' . rawurlencode($token) : '');
             $ch = curl_init($url);
-            curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_USERAGENT => 'Tourfecto/1.0']);
+            curl_setopt_array($ch, [CURLOPT_HTTPHEADER => ['x-goog-api-key: ' . $this->apiKey], CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_USERAGENT => 'Tourfecto/1.0']);
             $resp = curl_exec($ch);
             $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
@@ -399,8 +400,8 @@ class GeminiClient
         $out = ['ok' => false, 'model' => null, 'http' => 0, 'status' => '', 'discovered' => false];
         $last = null;
         foreach ($this->imageModelCandidates() as $model) {
-            $ch = curl_init(GEMINI_API_URL . '/models/' . rawurlencode($model) . '?key=' . $this->apiKey);
-            curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_USERAGENT => 'Tourfecto/1.0']);
+            $ch = curl_init(GEMINI_API_URL . '/models/' . rawurlencode($model));
+            curl_setopt_array($ch, [CURLOPT_HTTPHEADER => ['x-goog-api-key: ' . $this->apiKey], CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_USERAGENT => 'Tourfecto/1.0']);
             $resp = curl_exec($ch);
             $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             curl_close($ch);
@@ -636,12 +637,12 @@ class GeminiClient
     /** طلب HTTP واحد. protected عشان الاختبار يقدر يستبدله بمحاكاة. */
     protected function httpPost(string $url, array $payload): array
     {
-        $ch = curl_init($url . '?key=' . $this->apiKey);
+        $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => json_encode($payload),
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json', 'x-goog-api-key: ' . $this->apiKey],
             CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_SSL_VERIFYPEER => true,

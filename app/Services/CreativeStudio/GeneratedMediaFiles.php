@@ -37,6 +37,53 @@ class GeneratedMediaFiles
             return self::image(base64_encode($bytes));
         } finally { if ($dst) imagedestroy($dst); imagedestroy($src); }
     }
+    /** أقل عرض احترافي لكل نسبة (مقاسات المنصات: 1080 انستجرام/ستوري، 1440 تسويقية 4:3، 1920 غلاف/يوتيوب 16:9) */
+    public const PLATFORM_MIN_WIDTH=['1:1'=>1080,'4:5'=>1080,'3:4'=>1080,'9:16'=>1080,'4:3'=>1440,'16:9'=>1920];
+    /**
+     * نسخة التسليم النهائية: نسبة دقيقة + تكبير لحد مقاس المنصة (بحد أقصى 2x مع شحذ خفيف)
+     * + JPEG عالي الجودة (إنستجرام مابيقبلش PNG). الصور اللي فيها شفافية فعلية بتفضل PNG.
+     * @return array{data:string,width:int,height:int,extension:string,upscaled:bool}
+     */
+    public static function deliver(array $image,string $ratio): array
+    {
+        $image=self::fitAspect($image,$ratio);
+        $w=(int)$image['width'];$h=(int)$image['height'];
+        $target=self::PLATFORM_MIN_WIDTH[$ratio]??1080;
+        $scale=$w<$target?min(2.0,$target/$w):1.0;
+        [$a,$b]=array_map('intval',explode(':',$ratio));
+        $src=@imagecreatefromstring($image['data']);if(!$src)throw new RuntimeException('Cannot decode image for delivery');
+        try{
+            $alpha=self::hasTransparency($src);
+            if($scale>1.0){
+                $unit=(int)floor($w*$scale/$a);$tw=$unit*$a;$th=$unit*$b;
+                $dst=imagecreatetruecolor($tw,$th);if(!$dst)throw new RuntimeException('Cannot allocate delivery image');
+                imagealphablending($dst,false);imagesavealpha($dst,true);
+                if(!imagecopyresampled($dst,$src,0,0,0,0,$tw,$th,$w,$h)){imagedestroy($dst);throw new RuntimeException('Upscale failed');}
+                // شحذ خفيف يعوّض نعومة التكبير
+                @imageconvolution($dst,[[0,-0.5,0],[-0.5,5,-0.5],[0,-0.5,0]],3,0);
+                imagedestroy($src);$src=$dst;$w=$tw;$h=$th;
+            }
+            ob_start();
+            try{
+                if($alpha){imagesavealpha($src,true);$ok=imagepng($src,null,6);$ext='png';}
+                else{$flat=imagecreatetruecolor($w,$h);imagefill($flat,0,0,imagecolorallocate($flat,255,255,255));imagecopy($flat,$src,0,0,0,0,$w,$h);imageinterlace($flat,true);$ok=imagejpeg($flat,null,92);imagedestroy($flat);$ext='jpg';}
+                $bytes=ob_get_contents();
+            }finally{ob_end_clean();}
+            if(!$ok||!$bytes)throw new RuntimeException('Delivery encoding failed');
+            $out=self::image(base64_encode($bytes));$out['upscaled']=$scale>1.0;
+            if($out['width']*$b!==$out['height']*$a)throw new RuntimeException('Delivery ratio mismatch');
+            return $out;
+        }finally{if($src)imagedestroy($src);}
+    }
+    /** فحص شفافية بعينة شبكية (سريع حتى مع الصور الكبيرة) */
+    public static function hasTransparency($gd): bool
+    {
+        if(!imageistruecolor($gd))return imagecolortransparent($gd)>=0;
+        $w=imagesx($gd);$h=imagesy($gd);$step=max(1,(int)floor(min($w,$h)/48));
+        for($y=0;$y<$h;$y+=$step)for($x=0;$x<$w;$x+=$step){if(((imagecolorat($gd,$x,$y)>>24)&0x7F)>0)return true;}
+        foreach([[0,0],[$w-1,0],[0,$h-1],[$w-1,$h-1]] as [$x,$y])if(((imagecolorat($gd,$x,$y)>>24)&0x7F)>0)return true;
+        return false;
+    }
     public static function write(int $id,string $data,string $extension): string
     {
         if($id<1||!in_array($extension,['png','jpg','webp','mp4'],true)||$data==='')throw new InvalidArgumentException('Invalid media file');

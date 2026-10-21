@@ -25,6 +25,9 @@ if (!defined('ROOT_PATH')) {
     define('ROOT_PATH', sys_get_temp_dir() . '/tourfecto_cs_root');
 }
 
+// خدمات الاستوديو الأحدث (GenerationLifecycle, PrivateMedia, CreativeQualityGate...) بتتحمّل من خريطة الكلاسات الرسمية
+require_once __DIR__ . '/../../app/Config/runtime_requirements.php';
+tourfecto_register_fallback_autoloader();
 require_once __DIR__ . '/../../app/Core/Model.php';
 require_once __DIR__ . '/../../app/Core/Container.php';
 require_once __DIR__ . '/../../app/Core/Queue/QueueManager.php';
@@ -66,7 +69,7 @@ final class CreativeStudioFakeGemini extends GeminiClient
         $this->contentResult = $r;
     }
 
-    public function generateImage(string $prompt, string $aspectRatio = '1:1'): array
+    public function generateImage(string $prompt, string $aspectRatio = '1:1', array $meta = []): array
     {
         $this->calls[] = ['method' => 'generateImage', 'prompt' => $prompt, 'aspect_ratio' => $aspectRatio];
         return $this->imageResult;
@@ -96,7 +99,7 @@ final class CreativeStudioFakeVeo extends VeoClient
         $this->downloadResult = $downloadResult;
     }
 
-    public function startGeneration(string $prompt, string $aspectRatio = '16:9', int $durationSeconds = 8): array
+    public function startGeneration(string $prompt, string $aspectRatio = '16:9', int $durationSeconds = 8, array $settings = []): array
     {
         $this->calls[] = ['method' => 'startGeneration', 'prompt' => $prompt, 'aspect_ratio' => $aspectRatio, 'duration' => $durationSeconds];
         return $this->startResult;
@@ -511,7 +514,7 @@ final class CreativeStudioModuleIntegrationTest extends TestCase
         $scenes = json_decode((string) $row['scenes'], true);
         $this->assertCount(2, $scenes);
         $this->assertSame('0-3s', $scenes[0]['time']);
-        $this->assertStringContainsString('tiktok', (string) $fake->calls[0]['prompt']);
+        $this->assertStringContainsString('TikTok', (string) $fake->calls[0]['prompt']);
 
         $logs = self::$pdo->query("SELECT * FROM activity_logs WHERE user_id = 999600 AND module = 'creative_studio' AND action = 'video_script.generated'")->fetchAll(PDO::FETCH_ASSOC);
         $this->assertCount(1, $logs);

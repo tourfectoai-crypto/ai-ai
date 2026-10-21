@@ -468,17 +468,21 @@ class GbpProfileController extends Controller
         if (!$websiteId) {
             return $this->error('website_id مطلوب', 422);
         }
-        if (empty($_FILES['photo'])) {
+        $uploader = new GbpMediaUploadHandler();
+        $libraryId = (int) ($_POST['media_item_id'] ?? 0);
+        if (empty($_FILES['photo']) && $libraryId < 1) {
             return $this->error('لم يتم اختيار أي صورة', 422);
         }
-
-        $uploader = new GbpMediaUploadHandler();
-        $validation = $this->photoService->validateUpload($_FILES['photo']);
-        if (!$validation['valid']) {
-            return $this->error($validation['error'], 422);
+        if (empty($_FILES['photo'])) {
+            // صورة من مكتبة الاستوديو الإبداعي (متولدة/مرفوعة/مسحوبة من الموقع)
+            $uploadResult = $uploader->uploadFromLibrary($libraryId, (int) $this->user['id']);
+        } else {
+            $validation = $this->photoService->validateUpload($_FILES['photo']);
+            if (!$validation['valid']) {
+                return $this->error($validation['error'], 422);
+            }
+            $uploadResult = $uploader->upload($_FILES['photo'], (int) $this->user['id']);
         }
-
-        $uploadResult = $uploader->upload($_FILES['photo'], (int) $this->user['id']);
         if (!$uploadResult['success']) {
             return $this->error($uploadResult['error'], 422);
         }

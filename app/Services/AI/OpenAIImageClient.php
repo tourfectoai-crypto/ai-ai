@@ -65,7 +65,7 @@ class OpenAIImageClient
     }
 
     /** @return array{size:string, payload_extra:array} */
-    private function shape(string $aspect): array
+    private function shape(string $aspect, ?string $quality = null): array
     {
         $isDalle = stripos($this->model, 'dall-e') === 0;
         $wide = in_array($aspect, ['16:9', '3:2', '4:3', '21:9'], true);
@@ -73,7 +73,7 @@ class OpenAIImageClient
         if ($isDalle) {
             return ['size' => $wide ? '1792x1024' : ($tall ? '1024x1792' : '1024x1024'), 'extra' => ['response_format' => 'b64_json']];
         }
-        $q = strtolower((string) self::setting('OPENAI_IMAGE_QUALITY', 'medium'));
+        $q = strtolower((string) ($quality ?? self::setting('OPENAI_IMAGE_QUALITY', 'medium')));
         return ['size' => $wide ? '1536x1024' : ($tall ? '1024x1536' : '1024x1024'), 'extra' => ['quality' => in_array($q, ['low', 'medium', 'high', 'auto'], true) ? $q : 'medium']];
     }
 
@@ -90,7 +90,7 @@ class OpenAIImageClient
         if (!$this->isConfigured()) {
             return ['success' => false, 'error' => 'OpenAI key not configured', 'http_code' => 0, 'api_status' => 'NOT_CONFIGURED'];
         }
-        $shape = $this->shape($aspectRatio);
+        $shape = $this->shape($aspectRatio, isset($meta['quality']) && is_string($meta['quality']) ? $meta['quality'] : null);
         $payload = array_merge(['model' => $this->model, 'prompt' => mb_substr($prompt, 0, 4000), 'n' => 1, 'size' => $shape['size']], $shape['extra']);
 
         $r = $this->post('/images/generations', $payload);

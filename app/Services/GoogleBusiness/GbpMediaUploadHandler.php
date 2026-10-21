@@ -77,6 +77,67 @@ class GbpMediaUploadHandler
     }
 
     /**
+     * صورة من مكتبة الاستوديو الإبداعي (المتولدة أو المرفوعة) → نسخة JPEG عامة لـ Google.
+     * Google بيحتاج sourceUrl عام، وملفات الاستوديو خاصة؛ فبننسخ الصورة بس (مش الأصل) بعد التحقق من الملكية.
+     * @return array ['success'=>bool, 'public_url'=>?string, 'error'=>?string]
+     */
+    public function uploadFromLibrary(int $mediaId, int $userId): array
+    {
+        try {
+            $row = PrivateMedia::owned($userId, $mediaId);
+        } catch (Throwable $e) {
+            return ['success' => false, 'error' => 'الصورة مش موجودة في مكتبتك'];
+        }
+        if ($row['status'] !== 'completed' || $row['type'] === 'short_video') {
+            return ['success' => false, 'error' => 'اختار صورة جاهزة (مش فيديو)'];
+        }
+        $path = (string) $row['file_path'];
+        $full = PrivateMedia::socialFile($path) ?? (PrivateMedia::valid($path) ? PrivateMedia::resolve($path) : null);
+        $bytes = $full ? @file_get_contents($full) : false;
+        $im = is_string($bytes) ? @imagecreatefromstring($bytes) : false;
+        if (!$im) {
+            return ['success' => false, 'error' => 'تعذر قراءة الصورة'];
+        }
+        $w = imagesx($im);
+        $h = imagesy($im);
+        if ($w < 250 || $h < 250) {
+            imagedestroy($im);
+            return ['success' => false, 'error' => 'أبعاد الصورة صغيرة جدًا - الحد الأدنى المطلوب من Google هو 250×250 بكسل'];
+        }
+        $flat = imagecreatetruecolor($w, $h);
+        imagefill($flat, 0, 0, imagecolorallocate($flat, 255, 255, 255));
+        imagecopy($flat, $im, 0, 0, 0, 0, $w, $h);
+        imagedestroy($im);
+        $jpeg = '';
+        foreach ([90, 82, 72] as $q) {
+            ob_start();
+            imagejpeg($flat, null, $q);
+            $jpeg = (string) ob_get_clean();
+            if (strlen($jpeg) <= $this->maxSize) {
+                break;
+            }
+        }
+        imagedestroy($flat);
+        if ($jpeg === '' || strlen($jpeg) > $this->maxSize) {
+            return ['success' => false, 'error' => 'الصورة أكبر من 5 ميجا'];
+        }
+        $publicDir = ROOT_PATH . '/public_html/uploads/gbp_photos';
+        if (!is_dir($publicDir)) {
+            @mkdir($publicDir, 0755, true);
+        }
+        if (!is_dir($publicDir) || !is_writable($publicDir)) {
+            return ['success' => false, 'error' => 'تعذر الوصول لمجلد رفع الصور على السيرفر (صلاحيات الكتابة)'];
+        }
+        $this->ensureHtaccessProtection($publicDir);
+        $filename = 'gbp_' . $userId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.jpg';
+        if (file_put_contents($publicDir . '/' . $filename, $jpeg, LOCK_EX) !== strlen($jpeg)) {
+            return ['success' => false, 'error' => 'تعذر حفظ الصورة على السيرفر'];
+        }
+        $baseUrl = defined('APP_URL') ? rtrim(APP_URL, '/') : '';
+        return ['success' => true, 'public_url' => $baseUrl . '/uploads/gbp_photos/' . $filename];
+    }
+
+    /**
      * Round 7 (2026-08-14 - Production Finalization / Security Audit):
      * لقينا إن public_html/uploads/gbp_photos/ (ومجلد public_html/uploads/
      * كله فعليًا) معندوش .htaccess بيمنع تنفيذ PHP، على عكس

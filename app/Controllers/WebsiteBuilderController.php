@@ -599,7 +599,8 @@ JS;
         // نولّد صورة للعنصر الجديد كمان
         $uploadsDir = dirname(__DIR__, 2) . '/public_html/uploads/generated-sites/' . $this->user['id'] . '-' . $website->getAttribute('id');
         @mkdir($uploadsDir, 0755, true);
-        $item['image_url'] = $this->service->generateTourImage($item, $content['service_type'] ?? '', $uploadsDir, $item['slug']);
+        // الغرف كانت بتتولّد بـ prompt رحلة؛ ودلوقتي كل عنصر جديد بياخد زاوية مختلفة عن اللي قبله
+        $item['image_url'] = $this->service->generateTourImage($item, $content['service_type'] ?? '', $uploadsDir, $item['slug'], $industry, count((array) ($content[$itemsKey] ?? [])), (int) $this->user['id']);
 
         $content[$itemsKey][] = $item;
         $website->setAttribute('content_json', json_encode($content, JSON_UNESCAPED_UNICODE));

@@ -51,7 +51,9 @@ class VeoClient
         $resolution=$settings['resolution']??'720p';$reference=$settings['reference']??null;
         if(!in_array($ratio,['16:9','9:16'],true)||!in_array($duration,[4,6,8],true)||!is_string($resolution)||!self::supportsResolution($resolution,$settings['model']??null)||(($resolution!=='720p'||$reference)&&$duration!==8))throw new InvalidArgumentException('Invalid video settings');
         $instance=['prompt'=>$prompt];if($reference){if(!is_array($reference))throw new InvalidArgumentException('Invalid reference');ReferenceMedia::validateInline($reference);$instance['image']=['inlineData'=>$reference];}
-        return ['instances'=>[$instance],'parameters'=>['aspectRatio'=>$ratio,'durationSeconds'=>$duration,'resolution'=>$resolution,'personGeneration'=>$reference?'allow_adult':'allow_all']];
+        $parameters=['aspectRatio'=>$ratio,'durationSeconds'=>$duration,'resolution'=>$resolution,'personGeneration'=>$reference?'allow_adult':'allow_all'];
+        $negative=$settings['negative_prompt']??'';if(is_string($negative)&&trim($negative)!=='')$parameters['negativePrompt']=mb_substr(trim($negative),0,1000);
+        return ['instances'=>[$instance],'parameters'=>$parameters];
     }
     public function startGeneration(string $prompt, string $aspectRatio = '16:9', int $durationSeconds = 8, array $settings = []): array
     {

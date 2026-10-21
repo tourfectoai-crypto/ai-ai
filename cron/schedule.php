@@ -36,6 +36,10 @@ return [
         'file' => 'admin_watchdog.php', 'when' => '*/10 * * * *', 'group' => 'core',
         'title' => 'حارس الأدمن: يختبر التكاملات ويبعتلك تنبيه لو حاجة وقعت', 'enabled' => true, 'max_minutes' => 9,
     ],
+    'creative_watchdog' => [
+        'file' => 'creative_media_watchdog.php', 'when' => '*/10 * * * *', 'group' => 'core',
+        'title' => 'حارس الاستوديو الإبداعي: يقفل طلبات التوليد العالقة ويرجّع الرصيد المحجوز', 'enabled' => true, 'max_minutes' => 5,
+    ],
     'scrub_logs' => [
         'file' => 'scrub_logs.php', 'when' => '40 3 * * *', 'group' => 'core',
         'title' => 'تنظيف اللوجات من الباسوردات والتوكنات', 'enabled' => true, 'max_minutes' => 20,

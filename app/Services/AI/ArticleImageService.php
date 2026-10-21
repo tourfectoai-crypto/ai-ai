@@ -172,6 +172,7 @@ class ArticleImageService
 
         $scene = '';
         $alt = '';
+        $recent = $this->recentScenes($userId, (int) ($article['id'] ?? 0));
         $ai = $this->ai ?? (class_exists('AIOrchestrator') ? new AIOrchestrator() : null);
         if ($ai !== null) {
             $q = "Create a blog hero image brief.\nArticle title: {$title}\nTopic: {$subject}\nKeywords: " . implode(', ', $keywords)
@@ -183,11 +184,13 @@ class ArticleImageService
                 . "- Never place hotels, villas, pools, furniture or modern buildings next to ancient monuments unless they are really there at that exact spot.\n"
                 . "- Landmarks must keep their true appearance, count and setting (e.g. the three main Giza pyramids rise from open desert, the city lies behind them).\n"
                 . "- At most one secondary element (e.g. a camel caravan on the sand, a felucca on the Nile), placed where it naturally appears.\n"
-                . "- No people's faces in focus, no text or signs.\n\n"
+                . "- No people's faces in focus, no text or signs.\n"
+                . ($recent ? "- This blog already used these hero scenes. Do NOT repeat their main subject, viewpoint, time of day or composition; pick a clearly different but still relevant real view:\n  * " . implode("\n  * ", $recent) . "\n" : '')
+                . "\n"
                 . "Return ONLY JSON: {\"image_prompt\": \"one concrete, photographable real-world scene in English, max 60 words, following the rules\", "
                 . "\"alt_text\": \"a plain description of what the image shows, max 110 characters, in the article language, without the words 'image of'\"}";
             try {
-                $r = $ai->generateContent($q, ['temperature' => 0.3, 'maxOutputTokens' => 500, 'responseMimeType' => 'application/json', 'task' => 'article_image_prompt', 'user_id' => $userId ?: null]);
+                $r = $ai->generateContent($q, ['temperature' => $recent ? 0.6 : 0.3, 'maxOutputTokens' => 500, 'responseMimeType' => 'application/json', 'task' => 'article_image_prompt', 'user_id' => $userId ?: null]);
                 if (!empty($r['success'])) {
                     $j = json_decode(trim(preg_replace('/^```(?:json)?\s*|\s*```$/m', '', trim((string) $r['data']))), true);
                     if (is_array($j)) {
@@ -206,6 +209,31 @@ class ArticleImageService
             $alt = mb_substr($title !== '' ? $title : $subject, 0, 110);
         }
         return ['prompt' => $scene . $style, 'alt' => mb_substr($alt, 0, 125)];
+    }
+
+    /** أوصاف آخر صور مقالات العميل (عشان الصورة الجديدة ماتبقاش نسخة من اللي قبلها) */
+    protected function recentScenes(int $userId, int $articleId): array
+    {
+        try {
+            if ($userId < 1 || !self::columnsReady()) {
+                return [];
+            }
+            $rows = Database::getInstance()->query(
+                "SELECT featured_image_prompt FROM ai_articles WHERE user_id = ? AND id <> ? AND featured_image_prompt IS NOT NULL AND featured_image_prompt <> '' ORDER BY id DESC LIMIT 8",
+                [$userId, $articleId]
+            );
+        } catch (\Throwable $e) {
+            return [];
+        }
+        $out = [];
+        foreach ((array) $rows as $r) {
+            // الجزء الأول بس (المشهد)، من غير جمل الأسلوب الثابتة
+            $scene = trim(explode(' Documentary-style', (string) $r['featured_image_prompt'])[0]);
+            if ($scene !== '') {
+                $out[] = mb_substr($scene, 0, 220);
+            }
+        }
+        return $out;
     }
 
     // ------------------------------------------------------------------ توليد
@@ -359,6 +387,10 @@ class ArticleImageService
             'UPDATE ai_articles SET featured_image_path = ?, featured_image_alt = ?, featured_image_prompt = ?, wp_media_id = NULL, image_error = NULL WHERE id = ? AND user_id = ?',
             [$rel, $p['alt'], mb_substr($p['prompt'], 0, 2000), $id, $userId]
         );
+        // صورة المقال تدخل مكتبة الاستوديو: تتعاد في السوشيال/الإعلانات ومايتولّدش زيها تاني
+        if (class_exists('CreativeAssetRegistry')) {
+            CreativeAssetRegistry::register($userId, $norm['bytes'], 'article', mb_substr((string) ($article['title'] ?? 'Article image'), 0, 300), ['article_id' => $id, 'alt' => $p['alt']]);
+        }
         return ['success' => true, 'existing' => false, 'rel' => $rel, 'url' => self::publicUrl($rel), 'alt' => $p['alt'], 'provider' => $img['provider'] ?? null];
     }
 

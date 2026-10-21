@@ -29,13 +29,29 @@ class GenerationLifecycle
         Database::getInstance()->transaction(function()use($item,$diagnostic){$item->setAttribute('error_message',self::publicFailure($diagnostic));self::save($item);CreativeReservations::release((int)$item->getAttribute('id'));});
     }
     /** Fixed messages only: provider responses and credentials stay in private logs. */
+    public const PUBLIC_MESSAGES=[
+        'safety'=>'تم حجب النتيجة بواسطة فلاتر الأمان لدى مزود التوليد، ولم يُخصم أي رصيد. عدّل الوصف (تجنب الأشخاص المعروفين والقُصّر والعلامات التجارية والمحتوى الحساس) ثم أعد المحاولة.',
+        'quota'=>'خدمة التوليد تجاوزت الحصة أو تحتاج تفعيل الفوترة، ولم يُخصم أي رصيد. تواصل مع الدعم برقم الطلب؛ لا يلزم تغيير الوصف.',
+        'auth'=>'خدمة التوليد تحتاج مراجعة المفتاح أو صلاحيات الحساب من الإدارة، ولم يُخصم أي رصيد. تواصل مع الدعم برقم الطلب.',
+        'model'=>'نموذج التوليد غير متاح حاليًا ولم يُخصم أي رصيد. تحتاج الإدارة مراجعة إعداد النموذج.',
+        'uncertain'=>'تعذر تأكيد نتيجة طلب التوليد ولم يُخصم أي رصيد. تواصل مع الدعم برقم الطلب قبل إعادة المحاولة.',
+        'stalled'=>'توقف الطلب لفترة طويلة فتم إلغاؤه وإرجاع الرصيد المحجوز بالكامل. يمكنك إعادة المحاولة الآن.',
+        'video_expired'=>'تعذر تنزيل الفيديو من المزود قبل انتهاء صلاحية رابطه، ولم يُخصم أي رصيد. أعد إنشاء الطلب.',
+        'quality'=>'النتيجة لم تجتز فحص الجودة التلقائي بعد محاولة تصحيح، ولم يُخصم أي رصيد. جرّب وصفًا أبسط بعنصر رئيسي واحد.',
+        'generic'=>'لم يكتمل التوليد ولم يُخصم أي رصيد. تواصل مع الدعم برقم الطلب لمراجعة السبب.',
+    ];
     public static function publicFailure(string $diagnostic): string
     {
-        if(preg_match('/quota|billing|insufficient_quota|resource_exhausted|HTTP\s*429|rate.limit/i',$diagnostic))return 'خدمة التوليد تجاوزت الحصة أو تحتاج تفعيل الفوترة. تواصل مع الدعم برقم الطلب؛ لا يلزم تغيير الوصف.';
-        if(preg_match('/HTTP\s*(401|403)|permission.denied|unauthenticated|verification|not configured/i',$diagnostic))return 'خدمة التوليد تحتاج مراجعة المفتاح أو صلاحيات الحساب من الإدارة. تواصل مع الدعم برقم الطلب.';
-        if(preg_match('/HTTP\s*404|model.*not.found/i',$diagnostic))return 'نموذج التوليد غير متاح حاليًا. تحتاج الإدارة مراجعة إعداد النموذج.';
-        if(preg_match('/timeout|timed out|outcome uncertain|Interrupted.*request|Interrupted video start/i',$diagnostic))return 'تعذر تأكيد نتيجة طلب التوليد. تواصل مع الدعم برقم الطلب قبل إعادة المحاولة.';
-        return 'لم يكتمل التوليد. تواصل مع الدعم برقم الطلب لمراجعة السبب.';
+        $m=self::PUBLIC_MESSAGES;
+        if(preg_match('/CREATIVE_STALLED/',$diagnostic))return $m['stalled'];
+        if(preg_match('/CREATIVE_VIDEO_EXPIRED/',$diagnostic))return $m['video_expired'];
+        if(preg_match('/CREATIVE_QA_REJECTED/',$diagnostic))return $m['quality'];
+        if(preg_match('/safety|blocked|moderation|content.policy|content_policy|raiMediaFiltered|فلاتر السلامة|PROHIBITED_CONTENT|IMAGE_SAFETY|responsible ai/i',$diagnostic))return $m['safety'];
+        if(preg_match('/quota|billing|insufficient_quota|resource_exhausted|HTTP\s*429|rate.limit/i',$diagnostic))return $m['quota'];
+        if(preg_match('/HTTP\s*(401|403)|permission.denied|unauthenticated|verification|not configured/i',$diagnostic))return $m['auth'];
+        if(preg_match('/HTTP\s*404|model.*not.found/i',$diagnostic))return $m['model'];
+        if(preg_match('/timeout|timed out|outcome uncertain|Interrupted.*request|Interrupted video start/i',$diagnostic))return $m['uncertain'];
+        return $m['generic'];
     }
     public static function complete(MediaItem $item,string $feature): void
     {

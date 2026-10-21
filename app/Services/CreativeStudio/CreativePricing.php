@@ -2,9 +2,12 @@
 /** Display and freeze a price before provider execution. No API call, no upfront charge. */
 class CreativePricing
 {
-    public static function quote(int $userId,string $kind,array $options,int $count=1,int $duration=8): array
+    public const STORYBOARD_MAX_SCENES=6;
+    /** @param bool $storyboard سكربت → فيديو: عدة لقطات فيديو بنفس الإعدادات في طلب واحد */
+    public static function quote(int $userId,string $kind,array $options,int $count=1,int $duration=8,bool $storyboard=false): array
     {
-        if(!in_array($kind,['image','video'],true)||!in_array($count,[1,2],true)||($kind==='video'&&$count!==1))throw new InvalidArgumentException('Invalid quantity');
+        if($storyboard){if($kind!=='video'||$count<1||$count>self::STORYBOARD_MAX_SCENES)throw new InvalidArgumentException('Invalid scene count');}
+        elseif(!in_array($kind,['image','video'],true)||!in_array($count,[1,2],true)||($kind==='video'&&$count!==1))throw new InvalidArgumentException('Invalid quantity');
         $o=GenerationOptions::normalize($options,$kind==='video');
         if($o['reference_id'])ReferenceMedia::load($userId,$o['reference_id']);
         $premium=$kind==='video'&&$o['resolution']!=='720p';
@@ -16,7 +19,7 @@ class CreativePricing
         if($paid&&(!$price||($price['currency']??'USD')!=='USD'||!is_numeric($price['price'])||(float)$price['price']<0||($premium&&(float)$price['price']<=0)))throw new InvalidArgumentException('Pricing unavailable');
         $unit=$paid?round((float)$price['price'],2):0.0;$total=round($unit*$paid,2);$balance=$wallet->getBalance($userId);
         $units=[];for($i=0;$i<$count;$i++)$units[]=['source'=>$i<$plan?'plan':'wallet','amount'=>$i<$plan?0.0:$unit,'currency'=>'USD','key'=>$key,'settled'=>false];
-        $data=['kind'=>$kind,'count'=>$count,'resolution'=>$o['resolution'],'duration'=>$kind==='video'?$duration:0,'reference_id'=>$o['reference_id'],'plan_units'=>$plan,'wallet_units'=>$paid,'unit_price'=>$unit,'total'=>$total,'currency'=>'USD','units'=>$units];
+        $data=['kind'=>$kind,'storyboard'=>$storyboard,'count'=>$count,'resolution'=>$o['resolution'],'duration'=>$kind==='video'?$duration:0,'reference_id'=>$o['reference_id'],'plan_units'=>$plan,'wallet_units'=>$paid,'unit_price'=>$unit,'total'=>$total,'currency'=>'USD','units'=>$units];
         $data['hash']=hash('sha256',json_encode([$userId,$data],JSON_THROW_ON_ERROR));$data['ok']=$balance+0.00001>=$total;return $data;
     }
     public static function settle(MediaItem $item,array $billing,string $feature): string

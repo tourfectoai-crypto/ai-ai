@@ -16,9 +16,23 @@ class CreativePlanService
         $count = max(3, min(12, $count));
         $d = BrandPromptBuilder::profileData($bp);
         $learn = BrandPromptBuilder::learnings((int) $bp->getAttribute('id'), 6);
+        // أفكار الخطط اللي فاتت: الخطة الجديدة لازم تجيب مشاهد مختلفة مش نسخة منها
+        $previous = [];
+        try {
+            foreach ((new CreativePlan())->where(['brand_profile_id' => (int) $bp->getAttribute('id')], ['created_at' => 'DESC'], 2) as $old) {
+                foreach ((array) json_decode((string) $old->getAttribute('plan_json'), true) as $it) {
+                    if (is_array($it) && !empty($it['title'])) {
+                        $previous[] = mb_substr((string) $it['title'], 0, 100) . ' — ' . mb_substr((string) ($it['image_prompt'] ?? ''), 0, 140);
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            $previous = [];
+        }
         $ctx = json_encode([
             'brand' => $bp->getAttribute('brand_name'), 'profile' => $d, 'goal' => $goal,
             'client_liked' => $learn['do'], 'client_rejected' => $learn['avoid'],
+            'previous_ideas_do_not_repeat' => array_slice($previous, 0, 14),
         ], JSON_UNESCAPED_UNICODE);
         $types = implode('|', self::TYPES);
         $language=ContentLanguageService::forUser($userId);
@@ -29,6 +43,7 @@ class CreativePlanService
 {$ctx}
 
 اعمل خطة محتوى من {$count} أفكار بوستات متنوعة (تنويع في أعمدة المحتوى والمنصات)، وكل فكرة لازم تكون مشهد حقيقي قابل للتصوير الفوتوغرافي (ناس/أماكن/منتجات/تجارب ملموسة من نشاط العميل نفسه).
+ممنوع تكرار نفس المكان أو نفس زاوية التصوير أو نفس حجم اللقطة في فكرتين، وممنوع تكرار أي فكرة من previous_ideas_do_not_repeat؛ نوّع بين لقطة واسعة/متوسطة/قريبة/تفاصيل، وبين أوقات اليوم.
 ممنوع تمامًا: سكرين شوت، واجهات تطبيقات أو مواقع، داشبورد، إنفوجرافيك، شعارات، صور فيها كتابة أو أرقام، شاشات لابتوب/موبايل بمحتوى.
 لو العلامة منصة/خدمة رقمية، صوّر العميل النهائي والنتيجة اللي بيعيشها (مش المنتج الرقمي نفسه).
 ارجع JSON فقط (مصفوفة) بدون شرح وبدون ```، كل عنصر بالشكل ده:

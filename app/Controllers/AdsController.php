@@ -1595,9 +1595,19 @@ JS;
                 $imageUrl = null;
                 $mediaId = (int) $this->get('media_item_id', 0);
                 if ($mediaId > 0) {
-                    $m = $this->db->query("SELECT file_path FROM media_items WHERE id = ? AND user_id IN (?, ?) AND status = 'completed' AND type <> 'short_video' LIMIT 1", [$mediaId, (int) $campaign->getAttribute('user_id'), (int) $this->user['id']]);
+                    $m = $this->db->query("SELECT * FROM media_items WHERE id = ? AND user_id IN (?, ?) AND status = 'completed' AND deleted_at IS NULL AND type <> 'short_video' LIMIT 1", [$mediaId, (int) $campaign->getAttribute('user_id'), (int) $this->user['id']]);
                     if ($m) {
-                        $imageUrl = rtrim(defined('APP_URL') ? APP_URL : '', '/') . $m[0]['file_path'];
+                        $path = (string) $m[0]['file_path'];
+                        // صور الاستوديو متخزنة في storage/private: Meta لازم ياخد رابط نشر موقّع، مش مسار عام مش موجود
+                        if (PrivateMedia::valid($path)) {
+                            try {
+                                $imageUrl = PrivateMedia::publishUrl(new MediaItem($m[0]));
+                            } catch (Throwable $e) {
+                                Logger::warning('Ad creative signed media URL unavailable', ['media_item_id' => $mediaId]);
+                            }
+                        } elseif (PrivateMedia::socialFile($path)) {
+                            $imageUrl = rtrim(defined('APP_URL') ? APP_URL : '', '/') . $path;
+                        }
                     }
                 }
                 $imageUrl = $imageUrl ?: $api->fetchOgImageFromWebsite($destinationUrl); // best-effort - ممكن ترجع null وده مقبول

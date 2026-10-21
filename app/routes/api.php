@@ -738,6 +738,9 @@ $router->post('/api/creative-studio/media', 'CreativeStudioController', 'request
 $router->get('/api/creative-studio/video-scripts', 'CreativeStudioController', 'listVideoScripts', ['AuthMiddleware']);
 $router->post('/api/creative-studio/video-scripts', 'CreativeStudioController', 'requestVideoScript', ['AuthMiddleware', 'PlanGateMiddleware:ai_tool']);
 $router->post('/api/creative-studio/video', 'CreativeStudioController', 'requestVideo', ['AuthMiddleware']);
+$router->post('/api/creative-studio/video-scripts/{id}/storyboard/quote', 'CreativeStudioController', 'storyboardQuote', ['AuthMiddleware']);
+$router->post('/api/creative-studio/video-scripts/{id}/storyboard', 'CreativeStudioController', 'requestStoryboard', ['AuthMiddleware']);
+$router->post('/api/creative-studio/storyboards/{group}/render', 'CreativeStudioController', 'renderStoryboard', ['AuthMiddleware']);
 $router->post('/api/creative-studio/enhance-prompt', 'CreativeStudioController', 'enhancePrompt', ['AuthMiddleware', 'PlanGateMiddleware:ai_tool']);
 $router->get('/api/creative-studio/brands', 'CreativeStudioController', 'listBrands', ['AuthMiddleware']);
 $router->post('/api/creative-studio/brand/analyze', 'CreativeStudioController', 'analyzeBrand', ['AuthMiddleware', 'PlanGateMiddleware:ai_tool']);

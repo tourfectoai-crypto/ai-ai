@@ -182,8 +182,30 @@ class SocialMonthlyPlanService
         }
     }
     /** تعليمات شكل البوستات للذكاء الصناعي حسب اختيار العميل */
+    /**
+     * صورة مختلفة لكل بوست: اختيار الذكاء الصناعي بيتحترم لو الصورة لسه ماتستخدمتش في الخطة،
+     * وإلا بناخد أقل صورة استخدامًا (والأولوية للصور اللي ماتنشرتش آخر 60 يوم). التكرار بيحصل بس لو الصور أقل من البوستات.
+     * @param array<int,?int> $choices رقم الصورة اللي الذكاء الصناعي اختارها لكل بوست
+     * @return array<int,?int> رقم media_item لكل بوست
+     */
+    public static function uniqueAssignments(array $choices,array $assets,array $recentIds=[]): array {
+        $images=[];foreach($assets as $index=>$a)if(empty($a['video']))$images[$index]=(int)$a['id'];
+        $uses=array_fill_keys(array_values($images),0);$recent=array_flip(array_map('intval',$recentIds));$out=[];
+        foreach($choices as $i=>$choice){
+            if(!$images){$out[$i]=null;continue;}
+            $want=$choice!==null&&isset($images[$choice])?$images[$choice]:null;
+            $min=min($uses);
+            if($want===null||$uses[$want]>$min){
+                // أقل استخدامًا، ثم اللي ماتنشرتش مؤخرًا، ثم بالترتيب
+                $best=null;foreach($images as $id){if($uses[$id]!==$min)continue;if($best===null||(isset($recent[$best])&&!isset($recent[$id])))$best=$id;}
+                $want=$best;
+            }
+            $uses[$want]++;$out[$i]=$want;
+        }
+        return $out;
+    }
     public static function formatRules(string $mix,bool $designer): string {
-        $fields='For every post also return: "format" ("photo" = the client\'s real photo as is, "design" = the photo turned into a branded agency-style design with the company logo, colors and a short headline on it, "card" = a branded text poster for a tip, question, quote or offer with no photo), "asset" (index of the best matching asset for the post topic; prefer high quality photos, match places and activities, do not use a photo that already has big text for "design"), "headline" (the short text written ON the image for design/card: max 6 words, in the content language, catchy, no hashtags, no emoji, no invented prices) and "subline" (max 5 words: a clear call to action or a confirmed offer).';
+        $fields='For every post also return: "format" ("photo" = the client\'s real photo as is, "design" = the photo turned into a branded agency-style design with the company logo, colors and a short headline on it, "card" = a branded text poster for a tip, question, quote or offer with no photo), "asset" (index of the best matching asset for the post topic; prefer high quality photos, match places and activities, do not use a photo that already has big text for "design"; use every asset index at most once unless there are fewer assets than posts, and never give consecutive posts the same asset), "headline" (the short text written ON the image for design/card: max 6 words, in the content language, catchy, no hashtags, no emoji, no invented prices) and "subline" (max 5 words: a clear call to action or a confirmed offer).';
         if(!$designer||$mix==='photo')return $fields.' Use "photo" for every post.';
         if($mix==='design')return $fields.' Use "design" for most posts and "card" for about one in four; never "photo".';
         return $fields.' Mix formats like a professional social media agency: about half "photo", about a third "design" and the rest "card"; never the same format three times in a row.';
@@ -191,10 +213,10 @@ class SocialMonthlyPlanService
     /** يربط كل بوست بالصورة اللي الذكاء الصناعي اختارها، ويعمل التصميم بهوية الشركة لو مطلوب */
     private function attachMedia(int $uid,int $wid,array $posts,array $assets,SocialBrandStudio $studio): array {
         $images=array_values(array_filter($assets,static fn($a)=>empty($a['video'])));$designs=0;
+        $recent=class_exists('CreativeAssetRegistry')?CreativeAssetRegistry::recentlyUsed($this->pdo,$uid,$wid,60):[];
+        $picks=self::uniqueAssignments(array_map(static fn($p)=>$p['asset'],$posts),$assets,$recent);
         foreach($posts as $i=>&$p){
-            $pick=$p['asset']!==null&&isset($assets[$p['asset']])?$assets[$p['asset']]:null;
-            if($pick&&empty($pick['video']))$p['media_id']=(int)$pick['id'];
-            elseif($images)$p['media_id']=(int)$images[$i%count($images)]['id'];
+            if($picks[$i]!==null)$p['media_id']=$picks[$i];
             if($p['format']==='photo'||!SocialPostDesigner::available())continue;
             try{$p['media_id']=$studio->design($uid,$wid,$p['format'],$p['headline'],$p['subline'],$p['format']==='card'?null:($p['media_id']??null),$designs++);}
             catch(Throwable $e){Logger::warning('Branded design failed; using the real photo',['error'=>$e->getMessage()]);}

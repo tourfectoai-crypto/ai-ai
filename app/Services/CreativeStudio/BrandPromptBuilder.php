@@ -19,6 +19,40 @@ class BrandPromptBuilder
         return is_array($p) ? $p : [];
     }
 
+    /** أسماء ألوان مرجعية: موديلات الصور والفيديو بتفهم "deep navy blue" أحسن بكتير من #0F4C81 */
+    private const NAMED_COLORS=[
+        'black'=>[0,0,0],'charcoal'=>[54,69,79],'slate gray'=>[112,128,144],'silver gray'=>[192,192,192],'white'=>[255,255,255],'ivory'=>[255,250,235],
+        'navy blue'=>[20,40,100],'royal blue'=>[65,105,225],'sky blue'=>[135,206,235],'teal'=>[0,128,128],'turquoise'=>[64,224,208],'aqua'=>[0,200,220],
+        'forest green'=>[34,100,34],'emerald green'=>[0,155,90],'olive green'=>[110,120,40],'sage green'=>[156,175,136],'lime green'=>[140,200,40],'mint green'=>[160,230,190],
+        'golden yellow'=>[240,190,30],'mustard'=>[205,160,40],'lemon yellow'=>[250,240,90],'sand beige'=>[220,200,160],'warm beige'=>[200,175,140],
+        'orange'=>[245,130,30],'burnt orange'=>[204,85,0],'terracotta'=>[200,100,70],'coral'=>[250,125,95],'peach'=>[250,200,160],
+        'crimson red'=>[200,20,50],'burgundy'=>[128,0,32],'brick red'=>[170,60,45],'rose pink'=>[240,130,160],'blush pink'=>[240,195,200],'magenta'=>[200,30,150],
+        'purple'=>[110,50,150],'lavender'=>[180,160,220],'plum'=>[120,60,100],'chocolate brown'=>[95,55,30],'caramel brown'=>[175,110,55],'taupe'=>[140,125,110],
+    ];
+    public static function colorName(string $hex): string
+    {
+        $hex=ltrim(trim($hex),'#');
+        if(!preg_match('/^[0-9a-fA-F]{6}$/D',$hex))return '';
+        $rgb=[hexdec(substr($hex,0,2)),hexdec(substr($hex,2,2)),hexdec(substr($hex,4,2))];
+        $best='';$distance=PHP_INT_MAX;
+        foreach(self::NAMED_COLORS as $name=>$c){
+            // مسافة مرجّحة حسب حساسية العين (redmean)
+            $r=($rgb[0]+$c[0])/2;$d=(2+$r/256)*($rgb[0]-$c[0])**2+4*($rgb[1]-$c[1])**2+(2+(255-$r)/256)*($rgb[2]-$c[2])**2;
+            if($d<$distance){$distance=$d;$best=$name;}
+        }
+        $lum=(0.2126*$rgb[0]+0.7152*$rgb[1]+0.0722*$rgb[2])/255;
+        $max=max($rgb);$min=min($rgb);$sat=$max===0?0:($max-$min)/$max;
+        if($sat>0.15&&!in_array($best,['black','white','ivory','charcoal'],true))$best=($lum<0.25?'deep ':($lum>0.8?'pale ':'')).$best;
+        return $best;
+    }
+    /** أسماء ألوان الهوية بدون تكرار، للاستخدام في أي prompt */
+    public static function paletteNames(BrandProfile $bp): array
+    {
+        $pal=self::palette($bp);$out=[];
+        foreach(['primary','secondary','accent'] as $k){$name=self::colorName((string)($pal[$k]??''));if($name!==''&&!in_array($name,$out,true))$out[]=$name;}
+        return $out;
+    }
+
     /** أحدث/أثقل الدروس: ['do'=>[], 'avoid'=>[]] */
     public static function learnings(int $brandId, int $limit = 5): array
     {
@@ -47,7 +81,6 @@ class BrandPromptBuilder
             return $base . '. Style: ' . $styleLine . '.';
         }
         $d = self::profileData($bp);
-        $pal = self::palette($bp);
         $learn = self::learnings((int) $bp->getAttribute('id'));
 
         $parts = [$base . '.'];
@@ -58,13 +91,13 @@ class BrandPromptBuilder
         if (!empty($d['mood_keywords']) && is_array($d['mood_keywords'])) {
             $parts[] = 'Mood: ' . implode(', ', array_slice($d['mood_keywords'], 0, 6)) . '.';
         }
-        $colors = array_filter([$pal['primary'] ?? '', $pal['secondary'] ?? '', $pal['accent'] ?? '']);
+        $colors = self::paletteNames($bp);
         if ($colors) {
-            $parts[] = 'Color grading should harmonize with the brand palette ' . implode(', ', $colors) . ' (use as subtle accents in props, wardrobe, light or environment; keep natural realism).';
+            $parts[] = 'Color grading should harmonize with the brand palette (' . implode(', ', $colors) . '); use these colors as subtle accents in props, wardrobe, light or environment and keep natural realism.';
         }
         $parts[] = 'Photographic style: ' . $styleLine . '.';
         if(in_array($style,['photo','cinematic','product','luxury'],true))$parts[] = 'Technical look: photorealistic editorial travel/lifestyle photograph, shot on a full-frame camera with a prime lens, natural light, rich but natural color, crisp detail, authentic textures, believable proportions and anatomy; people look candid and natural; preserve the requested view and pose. Brand accents must not change the natural colors of skin, water or landmarks. A real destination must not be represented with invented landmark details; use a supplied reference for precise location fidelity.';
-        $parts[] = 'Composition for ' . $aspectRatio . ': one clear focal subject, strong depth, uncluttered, with calm negative space near the bottom edge for a logo overlay.';
+        $parts[] = 'Composition for ' . $aspectRatio . ': one clear focal subject, strong depth and an uncluttered frame.';
         foreach ((array) ($d['do'] ?? []) as $x) {
             $parts[] = 'Do: ' . $x . '.';
         }
