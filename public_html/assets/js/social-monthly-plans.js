@@ -4,7 +4,7 @@
     const start = async () => {
         const root=document.getElementById('monthlySocialRoot');if(!root||!window.Panel)return;
         const P=window.Panel,esc=P.esc,ar=document.documentElement.lang.toLowerCase().startsWith('ar'),t=(a,e)=>ar?a:e;
-        const base='/api/social/monthly-plans';let setup=null,current=null,busy=false,pendingRequest=null;
+        const base='/api/social/monthly-plans';let setup=null,current=null,busy=false,pendingRequest=null,tryIndex=-1;
         const labels={queued:t('في انتظار إعداد الخطة','Waiting for plan generation'),generating:t('جارٍ إعداد الخطة','Preparing draft'),draft:t('جاهزة للمراجعة','Ready for review'),active:t('النشر التلقائي مفعّل','Automatic publishing active'),paused:t('متوقفة مؤقتًا','Paused'),completed:t('انتهى التنفيذ — راجع النتائج','Execution finished — review results'),cancelled:t('ملغاة','Cancelled'),published:t('نُشر بالفعل','Published'),scheduled:t('مجدول','Scheduled'),publishing:t('جارٍ النشر','Publishing'),failed:t('فشل — يحتاج مراجعة','Failed — needs review'),uncertain:t('نتيجة غير مؤكدة — راجع الحساب','Uncertain — check provider'),skipped:t('تم التخطي','Skipped')};
         const message=(value,error=false)=>{const box=root.querySelector('#smpMessage');box.textContent=value;if(value&&error)box.scrollIntoView({block:'center',behavior:'smooth'});box.className='smp-notice'+(error?' error':'');box.hidden=!value;};
         const request=async(url,body)=>{
@@ -52,9 +52,13 @@
         el('smpBrand').addEventListener('change',event=>{if(event.target.id==='smpLogo'&&event.target.files[0])perform(()=>saveBrand(event.target.files[0]));});
         el('smpBrand').addEventListener('click',event=>{
             if(event.target.id==='smpBrandSave')perform(()=>saveBrand(null));
-            if(event.target.id==='smpTry')perform(async()=>{const photo=setup.media.find(m=>m.type!=='short_video'&&m.source!=='brand_design'&&safePreview(m.preview_url));const lang=el('smpLanguage').value==='ar';
+            if(event.target.id==='smpTry')perform(async()=>{
+                // كل ضغطة: صورة وعنوان مختلفين (كانت بتاخد أول صورة ونفس العنوان كل مرة فالمكتبة اتملت بنسخ متطابقة)
+                const photos=setup.media.filter(m=>m.type!=='short_video'&&m.source!=='brand_design'&&safePreview(m.preview_url));tryIndex++;
+                const photo=photos.length?photos[tryIndex%photos.length]:null;const lang=el('smpLanguage').value==='ar';
+                const lines=lang?[['رحلتك الجاية تبدأ من هنا','احجز دلوقتي'],['اكتشف مصر بعيون جديدة','كلمنا واتس'],['مغامرة تستاهل الحكاية','احجز مكانك'],['ذكريات تفضل معاك','ابدأ رحلتك']]:[['Your next trip starts here','Book now'],['See Egypt with new eyes','Message us'],['An adventure worth telling','Reserve your spot'],['Memories that stay with you','Start your trip']];const [head,sub]=lines[tryIndex%lines.length];
                 const out=el('smpTryOut');out.textContent=t('بنصمم…','Designing…');
-                const r=await request('/api/social/design',{website_id:Number(el('smpWebsite').value),media_id:photo?Number(photo.id):0,format:photo?'design':'card',headline:lang?'رحلتك الجاية تبدأ من هنا':'Your next trip starts here',subline:lang?'احجز دلوقتي':'Book now',variant:Math.floor(Math.random()*3)});
+                const r=await request('/api/social/design',{website_id:Number(el('smpWebsite').value),media_id:photo?Number(photo.id):0,format:photo?'design':'card',headline:head,subline:sub,variant:tryIndex});
                 out.innerHTML=`<img src="${esc(r.preview_url)}" alt=""><p class="p-cell-muted">${t('ده مثال. في الخطة الذكاء الصناعي بيكتب عنوان مختلف لكل بوست ويختار الصورة المناسبة.','This is a sample. In the plan the AI writes a different headline for every post and picks the right photo.')}</p>`;});
         });
         el('smpRefresh').addEventListener('click',()=>perform(async()=>{await loadSetup();await list();if(current)await detail(current.plan.id);}));

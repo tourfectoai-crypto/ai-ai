@@ -74,6 +74,8 @@ class GenerationOptions
         if(($out['status']??'')!=='completed'||!empty($out['deleted_at'])){$out['file_path']=null;$out['thumbnail_path']=null;}
         $out['is_favorite']=(bool)($out['is_favorite']??false);
         $out['error_message']=($out['status']??'')==='failed'?self::publicError($row['error_message']??null):null;
+        // نوع السبب عشان الواجهة الإنجليزي تعرض نفس الرسالة بلغتها
+        $out['error_code']=$out['error_message']!==null?(array_search($out['error_message'],GenerationLifecycle::PUBLIC_MESSAGES,true)?:'generic'):null;
         if(!in_array($out['generation_stage']??'',self::STAGES,true))$out['generation_stage']=($out['status']??'')==='generating'?'generating':($out['status']??'failed');
         return $out;
     }

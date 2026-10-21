@@ -363,6 +363,19 @@ class SocialBrandStudio
      * @param string $format design|card
      * @return int رقم الصورة الجديدة
      */
+    private function existingDesign(int $uid, int $wid, string $format, ?int $baseMediaId, string $headline, string $subline): ?int
+    {
+        $rows = $this->q("SELECT id,generation_meta FROM media_items WHERE user_id=? AND status='completed' AND deleted_at IS NULL AND generation_meta LIKE '%\"brand_design\"%' ORDER BY id DESC LIMIT 300", [$uid])->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            $m = json_decode((string) $r['generation_meta'], true) ?: [];
+            if ((int) ($m['website_id'] ?? 0) === $wid && ($m['format'] ?? '') === $format && ($format === 'card' || (int) ($m['base_media_id'] ?? 0) === (int) $baseMediaId)
+                && trim((string) ($m['headline'] ?? '')) === $headline && trim((string) ($m['subline'] ?? '')) === $subline) {
+                return (int) $r['id'];
+            }
+        }
+        return null;
+    }
+
     public function design(int $uid, int $wid, string $format, string $headline, string $subline, ?int $baseMediaId, int $variant = 0): int
     {
         if (!SocialPostDesigner::available()) {
@@ -375,6 +388,11 @@ class SocialBrandStudio
             $photo = $file ? (string) file_get_contents($file) : null;
         }
         $format = $format === 'card' || !$photo ? 'card' : 'design';
+        // نفس الصورة ونفس النص اتصمموا قبل كده: نرجّع التصميم الموجود بدل ما نملا المكتبة بنسخ متطابقة
+        $existing = $this->existingDesign($uid, $wid, $format, $format === 'card' ? null : $baseMediaId, trim($headline), trim($subline));
+        if ($existing) {
+            return $existing;
+        }
         $template = SocialPostDesigner::TEMPLATES[abs($variant) % count(SocialPostDesigner::TEMPLATES)];
         $jpeg = (new SocialPostDesigner())->render([
             'format' => $format,
@@ -396,7 +414,7 @@ class SocialBrandStudio
         file_put_contents($this->publicRoot . $path, $jpeg);
         $meta = ['source' => 'brand_design', 'format' => $format, 'template' => $template, 'base_media_id' => $baseMediaId, 'headline' => $headline, 'subline' => $subline, 'website_id' => $wid];
         $this->q("INSERT INTO media_items(user_id,type,prompt,file_path,thumbnail_path,width,height,status,generation_meta,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'completed',?,NOW(),NOW())", [
-            $uid, 'social_image', mb_substr('تصميم بهوية الشركة: ' . $headline, 0, 250), $path, $path, SocialPostDesigner::W, SocialPostDesigner::H, json_encode($meta, JSON_UNESCAPED_UNICODE),
+            $uid, 'social_image', mb_substr($headline, 0, 250), $path, $path, SocialPostDesigner::W, SocialPostDesigner::H, json_encode($meta, JSON_UNESCAPED_UNICODE),
         ]);
         return (int) $this->pdo->lastInsertId();
     }
