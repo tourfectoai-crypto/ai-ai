@@ -194,27 +194,101 @@ class SchemaUpdater
     // ------------------------------------------------------------------
 
     /**
-     * بيحوّل "ALTER TABLE t ADD COLUMN IF NOT EXISTS c ..." و "ADD [UNIQUE] INDEX IF NOT EXISTS i (...)"
-     * لصيغة تشتغل على MySQL و MariaDB: لو العمود/الفهرس موجود بيرجّع null (يتخطّى)،
-     * غير كده بيرجّع الجملة من غير IF NOT EXISTS.
+     * MySQL (عكس MariaDB) مابيدعمش IF NOT EXISTS في ADD COLUMN / ADD INDEX / CREATE INDEX.
+     * بنفحص بنفسنا: العمود/الفهرس الموجود بيتشال من الجملة، والباقي بيتنفّذ من غير IF NOT EXISTS.
+     * بيدعم ALTER فيه أكتر من إضافة (ADD ..., ADD ...) — قبل كده كانت أول إضافة بس اللي بتتحوّل
+     * والباقي بيفشل بـ syntax error. بيرجّع null لو مفيش حاجة تتنفّذ.
      */
     private function mysqlCompat(string $stmt): ?string
     {
-        if (preg_match('/^\s*ALTER\s+TABLE\s+`?(\w+)`?\s+ADD\s+(?:COLUMN\s+)?IF\s+NOT\s+EXISTS\s+`?(\w+)`?(\s.*)$/is', $stmt, $m)) {
-            if ($this->column($m[1], $m[2])) {
+        return self::rewriteForMysql(
+            $stmt,
+            fn (string $table, string $column): bool => (bool) $this->column($table, $column),
+            function (string $table, string $index): bool {
+                $q = $this->pdo->prepare('SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?');
+                $q->execute([$table, $index]);
+                return (int) $q->fetchColumn() > 0;
+            }
+        );
+    }
+
+    /**
+     * منطق خالص (قابل للاختبار من غير قاعدة بيانات).
+     * @param callable(string,string):bool $columnExists
+     * @param callable(string,string):bool $indexExists
+     */
+    public static function rewriteForMysql(string $stmt, callable $columnExists, callable $indexExists): ?string
+    {
+        // CREATE [UNIQUE] INDEX IF NOT EXISTS i ON t (...)
+        if (preg_match('/^\s*CREATE\s+(UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+`?(\w+)`?\s+ON\s+`?(\w+)`?\s*(\(.*)$/is', $stmt, $m)) {
+            if ($indexExists($m[3], $m[2])) {
                 return null;
             }
-            return 'ALTER TABLE `' . $m[1] . '` ADD COLUMN `' . $m[2] . '`' . $m[3];
+            return 'CREATE ' . ($m[1] ? 'UNIQUE ' : '') . 'INDEX `' . $m[2] . '` ON `' . $m[3] . '` ' . $m[4];
         }
-        if (preg_match('/^\s*ALTER\s+TABLE\s+`?(\w+)`?\s+ADD\s+(UNIQUE\s+)?(?:INDEX|KEY)\s+IF\s+NOT\s+EXISTS\s+`?(\w+)`?(\s*\(.*)$/is', $stmt, $m)) {
-            $q = $this->pdo->prepare('SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?');
-            $q->execute([$m[1], $m[3]]);
-            if ((int) $q->fetchColumn() > 0) {
-                return null;
+        if (!preg_match('/^\s*ALTER\s+TABLE\s+`?(\w+)`?\s+(.*)$/is', $stmt, $m) || !preg_match('/IF\s+NOT\s+EXISTS/i', $m[2])) {
+            return $stmt;
+        }
+        $table = $m[1];
+        $kept = [];
+        foreach (self::splitTopLevel($m[2]) as $clause) {
+            if (preg_match('/^ADD\s+(?:COLUMN\s+)?IF\s+NOT\s+EXISTS\s+`?(\w+)`?(\s.*)$/is', $clause, $c)) {
+                if (!$columnExists($table, $c[1])) {
+                    $kept[] = 'ADD COLUMN `' . $c[1] . '`' . $c[2];
+                }
+                continue;
             }
-            return 'ALTER TABLE `' . $m[1] . '` ADD ' . ($m[2] ? 'UNIQUE ' : '') . 'INDEX `' . $m[3] . '`' . $m[4];
+            if (preg_match('/^ADD\s+(UNIQUE\s+)?(?:INDEX|KEY)\s+IF\s+NOT\s+EXISTS\s+`?(\w+)`?(\s*\(.*)$/is', $clause, $c)) {
+                if (!$indexExists($table, $c[2])) {
+                    $kept[] = 'ADD ' . ($c[1] ? 'UNIQUE ' : '') . 'INDEX `' . $c[2] . '`' . $c[3];
+                }
+                continue;
+            }
+            $kept[] = $clause;
         }
-        return $stmt;
+        return $kept ? 'ALTER TABLE `' . $table . '` ' . implode(', ', $kept) : null;
+    }
+
+    /** تقسيم على الفواصل في المستوى الأعلى بس (مش جوه أقواس زي DECIMAL(12,2) ولا جوه نصوص/تعليقات) */
+    public static function splitTopLevel(string $body): array
+    {
+        $parts = [];
+        $buf = '';
+        $depth = 0;
+        $quote = null;
+        $len = strlen($body);
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $body[$i];
+            if ($quote !== null) {
+                $buf .= $ch;
+                if ($ch === '\\' && $i + 1 < $len) {
+                    $buf .= $body[++$i];
+                } elseif ($ch === $quote) {
+                    if (($body[$i + 1] ?? '') === $quote) {
+                        $buf .= $body[++$i];
+                    } else {
+                        $quote = null;
+                    }
+                }
+                continue;
+            }
+            if ($ch === "'" || $ch === '"' || $ch === '`') {
+                $quote = $ch;
+            } elseif ($ch === '(') {
+                $depth++;
+            } elseif ($ch === ')') {
+                $depth = max(0, $depth - 1);
+            } elseif ($ch === ',' && $depth === 0) {
+                $parts[] = trim($buf);
+                $buf = '';
+                continue;
+            }
+            $buf .= $ch;
+        }
+        if (trim($buf) !== '') {
+            $parts[] = trim($buf);
+        }
+        return array_values(array_filter($parts, fn ($p) => $p !== ''));
     }
 
     private function files(): array

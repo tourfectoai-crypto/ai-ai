@@ -6,6 +6,7 @@ app/Models/EmailAutomation.php
 app/Models/EmailAutomationStep.php
 app/Models/EmailCampaign.php
 app/Services/AI/AiServiceRouting.php
+app/Services/Admin/SchemaUpdater.php
 app/Services/BookingEngine.php
 app/Services/Crm/CrmAutomationService.php
 app/Services/EmailMarketing/ContactManagementService.php
@@ -19,4 +20,5 @@ app/Services/EmailMarketing/EmailTemplateEditorService.php
 app/Services/EmailMarketing/EmailTrackingService.php
 app/routes/api.php
 cron/process_email_automations.php
+database/migrations/2026_10_18_000001_social_publishing_reliability.sql
 database/migrations/2026_10_20_000002_email_platform_integration.sql
