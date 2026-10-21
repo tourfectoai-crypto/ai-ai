@@ -89,6 +89,10 @@ return [
         'file' => 'run_ads_alerts.php', 'when' => '45 * * * *', 'group' => 'ads',
         'title' => 'تنبيهات الإعلانات', 'enabled' => true, 'max_minutes' => 30,
     ],
+    'ads_search_terms' => [
+        'file' => 'run_ads_search_terms.php', 'when' => '20 6 * * *', 'group' => 'ads',
+        'title' => 'كلمات Google السلبية من مصطلحات البحث الحقيقية', 'enabled' => true, 'max_minutes' => 40,
+    ],
 
     // ===== المنافسين =====
     'competitors' => [

@@ -31,8 +31,11 @@ class AdCampaignService
                 'objective' => $data['objective'] ?? null,
                 'product_or_service' => $data['product_or_service'] ?? null,
                 'target_audience_brief' => $data['target_audience_brief'] ?? null,
+                // الدول بتتخزن كأكواد ISO (EG, DE...) عشان النشر وحدود الطيار الآلي يقروها صح
                 'target_countries_json' => !empty($data['target_countries_json'])
-                    ? (is_array($data['target_countries_json']) ? json_encode($data['target_countries_json'], JSON_UNESCAPED_UNICODE) : (string) $data['target_countries_json'])
+                    ? (is_array($data['target_countries_json'])
+                        ? json_encode(AdGeo::toIso2($data['target_countries_json'], $data['target_countries_json']), JSON_UNESCAPED_UNICODE)
+                        : (string) $data['target_countries_json'])
                     : null,
                 'landing_page_url' => $data['landing_page_url'] ?? null,
                 'daily_budget' => isset($data['daily_budget']) && $data['daily_budget'] !== '' ? $data['daily_budget'] : null,

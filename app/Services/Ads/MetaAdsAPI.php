@@ -2,13 +2,16 @@
 
 /**
  * Tourfecto - Enterprise Meta Ads Marketing API Client
- * @version 2.0.0
+ * @version 3.0.0
  *
  * المزايا التنافسية:
  * 1. سحب تلقائي لـ external_adset_id وميزانية الـ Ad Set أثناء المزامنة لتمكين الـ Autopilot من التعديل الفوري.
  * 2. دعم كامل لإشارات Meta CAPI المتقدمة (em, ph, fn, ln, fbc, fbp, client_ip_address, client_user_agent) لرفع EMQ إلى 9.5+/10.
  * 3. حماية تلقائية من Rate Limits (أكواد 4, 17, 613) عبر Exponential Backoff في بيئة الإنتاج.
  * 4. توافق 100% مع $testTransport للاختبارات الآلية (CLI).
+ * 5. أهداف حقيقية (Sales/Leads بالبيكسل، واتساب، مكالمات) مع بدائل آمنة لو المنصة رفضت.
+ * 6. اهتمامات Meta حقيقية + Advantage+ Audience + ميزانية بعملة حساب الإعلانات.
+ * 7. تحويلات من غير عدّ مزدوج ومزامنة على مستوى الحساب بكل الصفحات.
  */
 class MetaAdsAPI
 {
@@ -51,13 +54,60 @@ class MetaAdsAPI
     }
 
     /**
+     * عملات Meta اللي مالهاش كسور (الميزانية بتتبعت بالوحدة الكاملة مش ×100).
+     * باقي العملات (USD/EGP/EUR/SAR...) الميزانية بتتبعت بأصغر وحدة (سنت/قرش).
+     */
+    private const ZERO_DECIMAL_CURRENCIES = ['CLP', 'COP', 'CRC', 'HUF', 'ISK', 'IDR', 'JPY', 'KRW', 'PYG', 'TWD', 'VND'];
+
+    /** أحداث التحويل اللي بتتحسب مرة واحدة بس لكل مجموعة (الأولوية للإجمالي الموحّد) */
+    private const CONVERSION_GROUPS = [
+        'purchase' => ['omni_purchase', 'purchase', 'offsite_conversion.fb_pixel_purchase', 'onsite_web_purchase'],
+        'lead' => ['lead', 'onsite_conversion.lead_grouped', 'offsite_conversion.fb_pixel_lead', 'onsite_web_lead'],
+        'messaging' => ['onsite_conversion.messaging_conversation_started_7d'],
+    ];
+
+    public static function budgetMultiplier(string $currency): int
+    {
+        return in_array(strtoupper($currency), self::ZERO_DECIMAL_CURRENCIES, true) ? 1 : 100;
+    }
+
+    /**
+     * عدد التحويلات الحقيقي من مصفوفة actions بتاعة Meta.
+     * Meta بترجّع نفس الشراء أكتر من مرة (omni_purchase + purchase + fb_pixel_purchase)
+     * فجمعهم كان بيضاعف الرقم ويخلي الـCPA/ROAS أحسن من الحقيقة. هنا كل مجموعة
+     * بتتحسب مرة واحدة بس من أول نوع موجود حسب الأولوية.
+     */
+    public static function countConversions(array $actions): float
+    {
+        $byType = [];
+        foreach ($actions as $a) {
+            $type = (string) ($a['action_type'] ?? '');
+            if ($type !== '') {
+                $byType[$type] = (float) ($a['value'] ?? 0);
+            }
+        }
+        $total = 0.0;
+        foreach (self::CONVERSION_GROUPS as $types) {
+            foreach ($types as $type) {
+                if (isset($byType[$type])) {
+                    $total += $byType[$type];
+                    break;
+                }
+            }
+        }
+        return $total;
+    }
+
+    /**
      * كل الحملات (Campaigns) الخاصة بحساب إعلانات معيّن، مع بيانات الأداء الحقيقية
      * ومعرّف المجموعة الإعلانية (external_adset_id) اللازم للطيار الآلي.
+     * الأداء بيتسحب على مستوى الحساب في طلبين بس (مش طلبين لكل حملة) ومع
+     * التنقل بين الصفحات، فالحسابات الكبيرة (أكتر من 100 حملة) بتتزامن كاملة.
      */
     public function listCampaignsWithInsights(string $adAccountId): array
     {
-        $campaignsResult = $this->get("{$adAccountId}/campaigns", [
-            'fields' => 'id,name,objective,status,daily_budget,start_time,stop_time,adsets{id,daily_budget,status}',
+        $campaignsResult = $this->getAllPages("{$adAccountId}/campaigns", [
+            'fields' => 'id,name,objective,status,daily_budget,start_time,stop_time,adsets.limit(5){id,daily_budget,status}',
             'limit' => 100,
         ]);
 
@@ -65,20 +115,50 @@ class MetaAdsAPI
             return $campaignsResult;
         }
 
-        $campaigns = $campaignsResult['data']['data'] ?? [];
-        $enriched = [];
         $acc = $this->get($adAccountId, ['fields' => 'currency']);
         $currency = $acc['success'] ? strtoupper((string) ($acc['data']['currency'] ?? '')) : '';
+        $divider = (float) self::budgetMultiplier($currency ?: 'USD');
 
-        foreach ($campaigns as $c) {
-            $insights = $this->get("{$c['id']}/insights", [
-                'fields' => 'impressions,clicks,spend',
-                'date_preset' => 'maximum',
-            ]);
+        $totals = [];
+        $totalsRes = $this->getAllPages("{$adAccountId}/insights", [
+            'level' => 'campaign',
+            'fields' => 'campaign_id,impressions,clicks,spend',
+            'date_preset' => 'maximum',
+            'limit' => 500,
+        ]);
+        if ($totalsRes['success']) {
+            foreach ($totalsRes['rows'] as $row) {
+                $totals[(string) ($row['campaign_id'] ?? '')] = $row;
+            }
+        }
 
-            $stats = ($insights['success'] && !empty($insights['data']['data'][0]))
-                ? $insights['data']['data'][0]
-                : ['impressions' => 0, 'clicks' => 0, 'spend' => 0];
+        $dailyByCampaign = [];
+        $dailyRes = $this->getAllPages("{$adAccountId}/insights", [
+            'level' => 'campaign',
+            'fields' => 'campaign_id,impressions,clicks,spend,actions',
+            'date_preset' => 'last_30d',
+            'time_increment' => 1,
+            'limit' => 500,
+        ]);
+        if ($dailyRes['success']) {
+            foreach ($dailyRes['rows'] as $d) {
+                $dailyByCampaign[(string) ($d['campaign_id'] ?? '')][] = [
+                    'date' => (string) ($d['date_start'] ?? ''),
+                    'impressions' => (int) ($d['impressions'] ?? 0),
+                    'clicks' => (int) ($d['clicks'] ?? 0),
+                    'spend' => (float) ($d['spend'] ?? 0),
+                    'conversions' => self::countConversions((array) ($d['actions'] ?? [])),
+                ];
+            }
+        }
+
+        $enriched = [];
+        foreach ($campaignsResult['rows'] as $c) {
+            $id = (string) ($c['id'] ?? '');
+            if ($id === '') {
+                continue;
+            }
+            $stats = $totals[$id] ?? ['impressions' => 0, 'clicks' => 0, 'spend' => 0];
 
             // استخراج أول Ad Set وميزانيته في حال كانت الميزانية محددة على مستوى الـ Ad Set وليس الحملة
             $primaryAdSetId = null;
@@ -87,50 +167,18 @@ class MetaAdsAPI
                 $firstAdSet = $c['adsets']['data'][0];
                 $primaryAdSetId = $firstAdSet['id'] ?? null;
                 if (isset($firstAdSet['daily_budget'])) {
-                    $adSetDailyBudget = ((float) $firstAdSet['daily_budget']) / 100;
+                    $adSetDailyBudget = ((float) $firstAdSet['daily_budget']) / $divider;
                 }
             }
 
             $campaignDailyBudget = isset($c['daily_budget'])
-                ? ((float) $c['daily_budget']) / 100
+                ? ((float) $c['daily_budget']) / $divider
                 : $adSetDailyBudget;
 
-            // أداء يومي لآخر 30 يوم
-            $daily = [];
-            $dailyRes = $this->get("{$c['id']}/insights", [
-                'fields' => 'impressions,clicks,spend,actions',
-                'date_preset' => 'last_30d',
-                'time_increment' => 1,
-                'limit' => 40,
-            ]);
-            if ($dailyRes['success']) {
-                foreach (($dailyRes['data']['data'] ?? []) as $d) {
-                    $conv = 0.0;
-                    foreach (($d['actions'] ?? []) as $a) {
-                        if (in_array($a['action_type'] ?? '', [
-                            'purchase',
-                            'offsite_conversion.fb_pixel_purchase',
-                            'lead',
-                            'onsite_conversion.lead_grouped',
-                            'omni_purchase',
-                        ], true)) {
-                            $conv += (float) ($a['value'] ?? 0);
-                        }
-                    }
-                    $daily[] = [
-                        'date' => (string) ($d['date_start'] ?? ''),
-                        'impressions' => (int) ($d['impressions'] ?? 0),
-                        'clicks' => (int) ($d['clicks'] ?? 0),
-                        'spend' => (float) ($d['spend'] ?? 0),
-                        'conversions' => $conv,
-                    ];
-                }
-            }
-
             $enriched[] = [
-                'external_campaign_id' => $c['id'],
+                'external_campaign_id' => $id,
                 'external_adset_id' => $primaryAdSetId,
-                'name' => $c['name'],
+                'name' => $c['name'] ?? ('Campaign ' . $id),
                 'objective' => $c['objective'] ?? null,
                 'status' => strtolower($c['status'] ?? 'paused'),
                 'daily_budget' => $campaignDailyBudget,
@@ -139,7 +187,7 @@ class MetaAdsAPI
                 'impressions' => (int) ($stats['impressions'] ?? 0),
                 'clicks' => (int) ($stats['clicks'] ?? 0),
                 'spend' => (float) ($stats['spend'] ?? 0),
-                'daily' => $daily,
+                'daily' => $dailyByCampaign[$id] ?? [],
                 'currency' => $currency ?: null,
             ];
         }
@@ -147,92 +195,204 @@ class MetaAdsAPI
         return ['success' => true, 'campaigns' => $enriched];
     }
 
+    /** بيانات حساب الإعلانات اللي النشر محتاجها (العملة أهمها) */
+    public function getAdAccountInfo(string $adAccountId): array
+    {
+        $r = $this->get($adAccountId, ['fields' => 'currency,name,account_status,timezone_name']);
+        if (!$r['success']) {
+            return $r;
+        }
+        return [
+            'success' => true,
+            'currency' => strtoupper((string) ($r['data']['currency'] ?? 'USD')) ?: 'USD',
+            'name' => (string) ($r['data']['name'] ?? ''),
+            'active' => (int) ($r['data']['account_status'] ?? 0) === 1,
+        ];
+    }
+
+    /** بيكسلات (Datasets) حساب الإعلانات - لازمة لحملات Leads/Sales الحقيقية */
+    public function listPixels(string $adAccountId): array
+    {
+        $r = $this->get("{$adAccountId}/adspixels", ['fields' => 'id,name,last_fired_time', 'limit' => 25]);
+        if (!$r['success']) {
+            return [];
+        }
+        $pixels = [];
+        foreach (($r['data']['data'] ?? []) as $p) {
+            if (!empty($p['id'])) {
+                $pixels[] = ['id' => (string) $p['id'], 'name' => (string) ($p['name'] ?? $p['id']), 'last_fired_time' => $p['last_fired_time'] ?? null];
+            }
+        }
+        // البيكسل اللي اشتغل مؤخرًا الأول - ده غالبًا اللي على الموقع فعلًا
+        usort($pixels, fn ($a, $b) => strcmp((string) ($b['last_fired_time'] ?? ''), (string) ($a['last_fired_time'] ?? '')));
+        return $pixels;
+    }
+
+    /**
+     * تحويل أسماء الاهتمامات اللي الذكاء الاصطناعي اقترحها (نص حر) لاهتمامات
+     * Meta حقيقية بمعرّفاتها - قبل كده كانت بتتحفظ وبتتجاهل وقت النشر.
+     * @return array<int, array{id:string,name:string}>
+     */
+    public function searchInterests(array $names, int $max = 10): array
+    {
+        $found = [];
+        foreach (array_slice($names, 0, $max) as $name) {
+            $q = trim((string) $name);
+            if ($q === '') {
+                continue;
+            }
+            $r = $this->get('search', ['type' => 'adinterest', 'q' => $q, 'limit' => 3]);
+            if (!$r['success'] || empty($r['data']['data'])) {
+                continue;
+            }
+            $best = $r['data']['data'][0];
+            if (!empty($best['id']) && !isset($found[$best['id']])) {
+                $found[(string) $best['id']] = ['id' => (string) $best['id'], 'name' => (string) ($best['name'] ?? $q)];
+            }
+        }
+        return array_values($found);
+    }
+
+    /**
+     * خطط الهدف بالترتيب: أول خطة هي الأنسب للهدف اللي العميل اختاره، والباقي
+     * بدائل آمنة لو Meta رفضت الأولى (مثلًا صفحة مش مربوط بيها واتساب).
+     * @return array<int, array{label:string,objective:string,optimization:string,destination:?string,promoted:?array,cta:?string,warning:?string}>
+     */
+    public static function objectivePlans(string $objective, array $options = []): array
+    {
+        $pixelId = trim((string) ($options['pixel_id'] ?? ''));
+        $phone = trim((string) ($options['phone'] ?? ''));
+        $pageId = (string) ($options['page_id'] ?? '');
+        $plans = [];
+        $warning = null;
+
+        switch ($objective) {
+            case 'sales':
+                if ($pixelId !== '') {
+                    $plans[] = ['label' => 'sales_pixel', 'objective' => 'OUTCOME_SALES', 'optimization' => 'OFFSITE_CONVERSIONS', 'destination' => 'WEBSITE', 'promoted' => ['pixel_id' => $pixelId, 'custom_event_type' => 'PURCHASE'], 'cta' => null];
+                } else {
+                    $warning = 'مفيش Meta Pixel على حساب الإعلانات، فالحملة اتعملت بهدف زيارات صفحة الهبوط بدل المبيعات. ركّب البيكسل عشان Meta تجيبلك ناس بتحجز فعلًا.';
+                }
+                break;
+            case 'leads':
+                if ($pixelId !== '') {
+                    $plans[] = ['label' => 'leads_pixel', 'objective' => 'OUTCOME_LEADS', 'optimization' => 'OFFSITE_CONVERSIONS', 'destination' => 'WEBSITE', 'promoted' => ['pixel_id' => $pixelId, 'custom_event_type' => 'LEAD'], 'cta' => null];
+                } else {
+                    $warning = 'مفيش Meta Pixel على حساب الإعلانات، فالحملة اتعملت بهدف زيارات صفحة الهبوط بدل العملاء المحتملين. ركّب البيكسل أو استخدم هدف واتساب.';
+                }
+                break;
+            case 'whatsapp':
+                $plans[] = ['label' => 'whatsapp', 'objective' => 'OUTCOME_ENGAGEMENT', 'optimization' => 'CONVERSATIONS', 'destination' => 'WHATSAPP', 'promoted' => $pageId !== '' ? ['page_id' => $pageId] : null, 'cta' => 'WHATSAPP_MESSAGE'];
+                $plans[] = ['label' => 'whatsapp_leads', 'objective' => 'OUTCOME_LEADS', 'optimization' => 'CONVERSATIONS', 'destination' => 'WHATSAPP', 'promoted' => $pageId !== '' ? ['page_id' => $pageId] : null, 'cta' => 'WHATSAPP_MESSAGE'];
+                break;
+            case 'calls':
+                if ($phone !== '') {
+                    $plans[] = ['label' => 'calls', 'objective' => 'OUTCOME_TRAFFIC', 'optimization' => 'QUALITY_CALL', 'destination' => 'PHONE_CALL', 'promoted' => null, 'cta' => 'CALL_NOW'];
+                } else {
+                    $warning = 'مفيش رقم تليفون للنشاط، فالحملة اتعملت بهدف زيارات الموقع. ضيف رقم التليفون في ملف النشاط عشان إعلانات المكالمات.';
+                }
+                break;
+            case 'engagement':
+                $plans[] = ['label' => 'engagement', 'objective' => 'OUTCOME_ENGAGEMENT', 'optimization' => 'POST_ENGAGEMENT', 'destination' => 'ON_POST', 'promoted' => null, 'cta' => null];
+                break;
+            case 'awareness':
+                $plans[] = ['label' => 'awareness', 'objective' => 'OUTCOME_AWARENESS', 'optimization' => 'REACH', 'destination' => null, 'promoted' => null, 'cta' => null];
+                break;
+        }
+
+        // البدائل الآمنة دايمًا في الآخر: زيارات صفحة الهبوط (أجود من مجرد ضغطات) ثم الضغطات
+        $plans[] = ['label' => 'traffic_lpv', 'objective' => 'OUTCOME_TRAFFIC', 'optimization' => 'LANDING_PAGE_VIEWS', 'destination' => 'WEBSITE', 'promoted' => null, 'cta' => null];
+        $plans[] = ['label' => 'traffic_clicks', 'objective' => 'OUTCOME_TRAFFIC', 'optimization' => 'LINK_CLICKS', 'destination' => 'WEBSITE', 'promoted' => null, 'cta' => null];
+
+        foreach ($plans as $i => $p) {
+            $plans[$i]['warning'] = ($i === 0 && $warning !== null) ? $warning : null;
+        }
+        return $plans;
+    }
+
     /**
      * إنشاء حملة حقيقية كاملة على Meta Ads: Campaign → Ad Set → Ad Creative → Ad.
+     *
+     * $options (كلها اختيارية):
+     * - currency: عملة حساب الإعلانات (عشان الميزانية تتبعت صح)
+     * - pixel_id: بيكسل الحساب (لحملات Leads/Sales الحقيقية)
+     * - phone: رقم التليفون بصيغة دولية (لإعلانات المكالمات)
+     * - image_urls: أكتر من صورة - كل نسخة إعلان بتاخد صورة مختلفة
+     * - interests: اهتمامات محلولة جاهزة [{id,name}] (لو مش موجودة بتتحل من audience.interests)
      */
-    public function createCampaign(string $adAccountId, string $pageId, array $campaign, array $audience, array $copies, string $destinationUrl, ?string $imageUrl = null): array
+    public function createCampaign(string $adAccountId, string $pageId, array $campaign, array $audience, array $copies, string $destinationUrl, ?string $imageUrl = null, array $options = []): array
     {
-        $objectiveMap = [
-            'traffic' => ['OUTCOME_TRAFFIC', 'LINK_CLICKS'],
-            'leads' => ['OUTCOME_TRAFFIC', 'LINK_CLICKS'],
-            'calls' => ['OUTCOME_TRAFFIC', 'LINK_CLICKS'],
-            'engagement' => ['OUTCOME_TRAFFIC', 'LINK_CLICKS'],
-            'awareness' => ['OUTCOME_AWARENESS', 'REACH'],
-        ];
-        [$metaObjective, $optimizationGoal] = $objectiveMap[$campaign['objective'] ?? 'traffic'] ?? $objectiveMap['traffic'];
+        $currency = strtoupper((string) ($options['currency'] ?? 'USD')) ?: 'USD';
+        $options['page_id'] = $pageId;
+        $objective = (string) ($campaign['objective'] ?? 'traffic');
+        $plans = self::objectivePlans($objective, $options);
+        $warnings = [];
 
-        $campaignResult = $this->post("{$adAccountId}/campaigns", [
-            'name' => $campaign['name'],
-            'objective' => $metaObjective,
-            'status' => 'PAUSED',
-            'special_ad_categories' => json_encode([]),
-            'is_adset_budget_sharing_enabled' => 'false',
-        ]);
-        if (!$campaignResult['success']) {
-            return ['success' => false, 'step' => 'campaign', 'error' => 'فشل إنشاء الحملة: ' . ($campaignResult['error'] ?? '')];
+        $targeting = $this->buildTargeting($audience, $options);
+        if (!empty($targeting['_warning'])) {
+            $warnings[] = $targeting['_warning'];
         }
-        $campaignId = $campaignResult['data']['id'];
+        unset($targeting['_warning']);
 
-        $targeting = [
-            'age_min' => max(18, (int) ($audience['age_min'] ?? 18)),
-            'age_max' => min(65, max(18, (int) ($audience['age_max'] ?? 65))),
-            'geo_locations' => ['countries' => array_values($this->mapLocationsToCountryCodes($audience['locations'] ?? []))],
-            'targeting_automation' => ['advantage_audience' => 0],
-        ];
-        if (!empty($audience['genders']) && $audience['genders'] !== 'all') {
-            $targeting['genders'] = [$audience['genders'] === 'male' ? 1 : 2];
-        }
+        $campaignId = null;
+        $adSetId = null;
+        $usedPlan = null;
+        $firstError = '';
+        foreach ($plans as $plan) {
+            $campaignResult = $this->post("{$adAccountId}/campaigns", [
+                'name' => $campaign['name'],
+                'objective' => $plan['objective'],
+                'status' => 'PAUSED',
+                'special_ad_categories' => json_encode([]),
+                'is_adset_budget_sharing_enabled' => 'false',
+            ]);
+            if (!$campaignResult['success']) {
+                // خطأ على مستوى الحملة نفسها (صلاحيات/حساب/دفع) مش هيتحل بتغيير الهدف
+                return ['success' => false, 'step' => 'campaign', 'error' => 'فشل إنشاء الحملة: ' . ($campaignResult['error'] ?? '')];
+            }
+            $candidateId = $campaignResult['data']['id'];
 
-        $adSetFields = [
-            'name' => $campaign['name'] . ' - Ad Set',
-            'campaign_id' => $campaignId,
-            'daily_budget' => (int) round((float) ($campaign['daily_budget'] ?? 10) * 100),
-            'billing_event' => 'IMPRESSIONS',
-            'optimization_goal' => $optimizationGoal,
-            'bid_strategy' => 'LOWEST_COST_WITHOUT_CAP',
-            'targeting' => json_encode($targeting),
-            'status' => 'PAUSED',
-        ];
-        if ($optimizationGoal === 'LINK_CLICKS') {
-            $adSetFields['destination_type'] = 'WEBSITE';
-        }
-        $start = !empty($campaign['start_date']) ? strtotime((string) $campaign['start_date']) : false;
-        if ($start && $start > time() + 600) {
-            $adSetFields['start_time'] = date('c', $start);
-        }
-        $end = !empty($campaign['end_date']) ? strtotime((string) $campaign['end_date'] . ' 23:59:00') : false;
-        if ($end && $end > max(time(), $start ?: 0) + 86400) {
-            $adSetFields['end_time'] = date('c', $end);
+            $adSetResult = $this->post("{$adAccountId}/adsets", $this->adSetFields($campaign, $candidateId, $plan, $targeting, $currency));
+            if ($adSetResult['success']) {
+                $campaignId = $candidateId;
+                $adSetId = $adSetResult['data']['id'];
+                $usedPlan = $plan;
+                break;
+            }
+            $firstError = $firstError ?: ($adSetResult['error'] ?? '');
+            $this->post("{$candidateId}", ['status' => 'DELETED']);
+            if (self::isFatalAdSetError((string) ($adSetResult['error'] ?? ''))) {
+                break;
+            }
         }
 
-        $adSetResult = $this->post("{$adAccountId}/adsets", $adSetFields);
-        if (!$adSetResult['success']) {
-            $this->post("{$campaignId}", ['status' => 'DELETED']);
-            return ['success' => false, 'step' => 'adset', 'error' => 'فشل إنشاء المجموعة الإعلانية: ' . ($adSetResult['error'] ?? '')];
+        if ($campaignId === null || $usedPlan === null) {
+            return ['success' => false, 'step' => 'adset', 'error' => 'فشل إنشاء المجموعة الإعلانية: ' . $firstError];
         }
-        $adSetId = $adSetResult['data']['id'];
+        if ($usedPlan['warning']) {
+            $warnings[] = $usedPlan['warning'];
+        } elseif ($usedPlan !== $plans[0]) {
+            $warnings[] = 'Meta رفضت إعداد الهدف الأساسي (' . $firstError . ') فاستخدمنا هدف زيارات صفحة الهبوط بدلًا منه.';
+        }
 
-        $imageHash = $imageUrl ? $this->uploadAdImage($adAccountId, $imageUrl) : null;
+        $imageUrls = array_values(array_filter(array_merge((array) ($options['image_urls'] ?? []), $imageUrl ? [$imageUrl] : [])));
+        $imageUrls = array_values(array_unique($imageUrls));
+        $imageHashes = [];
+        foreach (array_slice($imageUrls, 0, 5) as $url) {
+            $imageHashes[] = ['url' => $url, 'hash' => $this->uploadAdImage($adAccountId, $url)];
+        }
 
         $adIds = [];
         $lastError = '';
-        foreach (array_slice($copies, 0, 3) as $copy) {
-            $linkData = [
-                'link' => $destinationUrl,
-                'message' => (string) ($copy['primary_text'] ?? ''),
-                'name' => (string) ($copy['headline'] ?? ''),
-                'description' => (string) ($copy['description'] ?? ''),
-                'call_to_action' => ['type' => $this->mapCta((string) ($copy['call_to_action'] ?? '')), 'value' => ['link' => $destinationUrl]],
-            ];
-            if ($imageHash) {
-                $linkData['image_hash'] = $imageHash;
-            } elseif ($imageUrl) {
-                $linkData['picture'] = $imageUrl;
-            }
+        foreach (array_values(array_slice($copies, 0, 5)) as $i => $copy) {
+            $image = !empty($imageHashes) ? $imageHashes[$i % count($imageHashes)] : null;
+            $linkData = $this->linkData($copy, $destinationUrl, $usedPlan, $options, $image);
 
             $creativeResult = $this->post("{$adAccountId}/adcreatives", [
-                'name' => $campaign['name'] . ' - ' . ($copy['variant_label'] ?? 'A'),
+                'name' => $campaign['name'] . ' - ' . ($copy['variant_label'] ?? chr(65 + $i)),
                 'object_story_spec' => json_encode(['page_id' => $pageId, 'link_data' => $linkData], JSON_UNESCAPED_UNICODE),
+                // UTM تلقائي على كل ضغطة - نفس أسماء الحملة/الإعلان تظهر في Google Analytics
+                'url_tags' => 'utm_source=facebook&utm_medium=paid_social&utm_campaign={{campaign.name}}&utm_content={{ad.name}}',
             ]);
             if (!$creativeResult['success']) {
                 $lastError = 'التصميم (Creative): ' . ($creativeResult['error'] ?? '');
@@ -240,10 +400,10 @@ class MetaAdsAPI
             }
 
             $adResult = $this->post("{$adAccountId}/ads", [
-                'name' => $campaign['name'] . ' - ' . ($copy['variant_label'] ?? 'A'),
+                'name' => $campaign['name'] . ' - ' . ($copy['variant_label'] ?? chr(65 + $i)),
                 'adset_id' => $adSetId,
                 'creative' => json_encode(['creative_id' => $creativeResult['data']['id']]),
-                'status' => 'PAUSED',
+                'status' => 'ACTIVE',
             ]);
             if ($adResult['success']) {
                 $adIds[] = $adResult['data']['id'];
@@ -256,14 +416,143 @@ class MetaAdsAPI
             $this->post("{$campaignId}", ['status' => 'DELETED']);
             return ['success' => false, 'step' => 'ads', 'error' => 'الحملة اتعملت على Meta بس الإعلان نفسه اترفض، فمسحناها عشان تقدر تحاول تاني بعد ما تصلّح السبب. ' . $lastError];
         }
+        if ($lastError !== '') {
+            $warnings[] = 'بعض النسخ اترفضت: ' . $lastError;
+        }
 
         return [
             'success' => true,
             'external_campaign_id' => $campaignId,
             'external_adset_id' => $adSetId,
             'ad_ids' => $adIds,
-            'warning' => $lastError ?: null,
+            'plan' => $usedPlan['label'],
+            'warning' => $warnings ? implode(' | ', $warnings) : null,
         ];
+    }
+
+    /** الاستهداف: الدول + السن + النوع + الاهتمامات الحقيقية + Advantage+ لما يكون مسموح */
+    private function buildTargeting(array $audience, array $options): array
+    {
+        $ageMin = max(18, min(65, (int) ($audience['age_min'] ?? 18)));
+        $ageMax = min(65, max($ageMin, (int) ($audience['age_max'] ?? 65)));
+        $countries = class_exists('AdGeo')
+            ? AdGeo::toIso2((array) ($audience['locations'] ?? []), (array) ($options['default_countries'] ?? ['EG']))
+            : $this->mapLocationsToCountryCodes((array) ($audience['locations'] ?? []));
+
+        $targeting = [
+            'age_min' => $ageMin,
+            'age_max' => $ageMax,
+            'geo_locations' => ['countries' => array_values($countries)],
+        ];
+        if (!empty($audience['genders']) && $audience['genders'] !== 'all') {
+            $targeting['genders'] = [$audience['genders'] === 'male' ? 1 : 2];
+        }
+
+        $interests = isset($options['interests']) && is_array($options['interests'])
+            ? $options['interests']
+            : $this->searchInterests((array) ($audience['interests'] ?? []));
+        if (!empty($interests)) {
+            $targeting['flexible_spec'] = [['interests' => array_values($interests)]];
+        } elseif (!empty($audience['interests'])) {
+            $targeting['_warning'] = 'معرفناش نطابق الاهتمامات المقترحة مع اهتمامات Meta، فالاستهداف اعتمد على الدولة والسن بس.';
+        }
+
+        // Advantage+ Audience: Meta بتوسّع الجمهور لو لقت ناس أحسن من الاهتمامات.
+        // Meta بتشترط أقصى سن 65 وأقل سن مش أكبر من 25 عشان يشتغل، غير كده بنقفله.
+        $targeting['targeting_automation'] = ['advantage_audience' => ($ageMax >= 65 && $ageMin <= 25) ? 1 : 0];
+
+        return $targeting;
+    }
+
+    private function adSetFields(array $campaign, string $campaignId, array $plan, array $targeting, string $currency): array
+    {
+        $fields = [
+            'name' => $campaign['name'] . ' - Ad Set',
+            'campaign_id' => $campaignId,
+            'daily_budget' => (int) round((float) ($campaign['daily_budget'] ?? 10) * self::budgetMultiplier($currency)),
+            'billing_event' => 'IMPRESSIONS',
+            'optimization_goal' => $plan['optimization'],
+            'bid_strategy' => 'LOWEST_COST_WITHOUT_CAP',
+            'targeting' => json_encode($targeting, JSON_UNESCAPED_UNICODE),
+            // الحملة نفسها PAUSED فمفيش صرف - لكن المجموعة والإعلانات ACTIVE عشان لما
+            // العميل يفعّل الحملة (من Tourfecto أو Meta) الإعلانات تشتغل فعلًا
+            'status' => 'ACTIVE',
+        ];
+        if (!empty($plan['destination'])) {
+            $fields['destination_type'] = $plan['destination'];
+        }
+        if (!empty($plan['promoted'])) {
+            $fields['promoted_object'] = json_encode($plan['promoted']);
+        }
+        $start = !empty($campaign['start_date']) ? strtotime((string) $campaign['start_date']) : false;
+        if ($start && $start > time() + 600) {
+            $fields['start_time'] = date('c', $start);
+        }
+        $end = !empty($campaign['end_date']) ? strtotime((string) $campaign['end_date'] . ' 23:59:00') : false;
+        if ($end && $end > max(time(), $start ?: 0) + 86400) {
+            $fields['end_time'] = date('c', $end);
+        }
+        return $fields;
+    }
+
+    private function linkData(array $copy, string $destinationUrl, array $plan, array $options, ?array $image): array
+    {
+        $cta = ['type' => $this->mapCta((string) ($copy['call_to_action'] ?? '')), 'value' => ['link' => $destinationUrl]];
+        $link = $destinationUrl;
+        if (($plan['cta'] ?? null) === 'WHATSAPP_MESSAGE') {
+            $cta = ['type' => 'WHATSAPP_MESSAGE', 'value' => ['app_destination' => 'WHATSAPP']];
+            $link = 'https://api.whatsapp.com/send';
+        } elseif (($plan['cta'] ?? null) === 'CALL_NOW') {
+            $phone = preg_replace('/[^0-9+]/', '', (string) ($options['phone'] ?? ''));
+            $cta = ['type' => 'CALL_NOW', 'value' => ['link' => 'tel:' . $phone]];
+        }
+
+        $linkData = [
+            'link' => $link,
+            'message' => (string) ($copy['primary_text'] ?? ''),
+            'name' => (string) ($copy['headline'] ?? ''),
+            'description' => (string) ($copy['description'] ?? ''),
+            'call_to_action' => $cta,
+        ];
+        if ($image && !empty($image['hash'])) {
+            $linkData['image_hash'] = $image['hash'];
+        } elseif ($image && !empty($image['url'])) {
+            $linkData['picture'] = $image['url'];
+        }
+        return $linkData;
+    }
+
+    /** أخطاء مش هتتحل بتجربة هدف تاني (فلوس/صلاحيات/ميزانية) - نوقف فورًا بدل ما نعمل حملات كتير */
+    private static function isFatalAdSetError(string $error): bool
+    {
+        $e = mb_strtolower($error);
+        foreach (['الميزانية اليومية أقل', 'وسيلة دفع', 'صلاحية', 'انتهت صلاحية', 'وضع التطوير'] as $needle) {
+            if (str_contains($e, mb_strtolower($needle))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** GET مع التنقل بين كل الصفحات (cursor paging) - حد أقصى 20 صفحة كحماية */
+    private function getAllPages(string $path, array $query, int $maxPages = 20): array
+    {
+        $rows = [];
+        for ($page = 0; $page < $maxPages; $page++) {
+            $r = $this->get($path, $query);
+            if (!$r['success']) {
+                return $page === 0 ? $r : ['success' => true, 'rows' => $rows];
+            }
+            foreach (($r['data']['data'] ?? []) as $row) {
+                $rows[] = $row;
+            }
+            $after = $r['data']['paging']['cursors']['after'] ?? null;
+            if (empty($r['data']['paging']['next']) || !$after) {
+                break;
+            }
+            $query['after'] = $after;
+        }
+        return ['success' => true, 'rows' => $rows];
     }
 
     public function uploadAdImage(string $adAccountId, string $imageUrl): ?string
@@ -455,15 +744,17 @@ class MetaAdsAPI
 
     private function mapCta(string $cta): string
     {
+        // إعلانات الموقع مينفعش ياخدوا زرار "اتصل" أو "راسلنا" (دول ليهم أهداف خاصة
+        // بيتحطوا تلقائيًا في linkData) - فبيتحولوا لـ"تواصل معنا" عشان الإعلان ميترفضش.
         $map = [
-            'احجز الآن' => 'BOOK_TRAVEL', 'اعرف المزيد' => 'LEARN_MORE', 'تواصل معنا' => 'CONTACT_US',
-            'اشترك الآن' => 'SIGN_UP', 'تسوق الآن' => 'SHOP_NOW', 'قدّم الآن' => 'APPLY_NOW',
-            'اتصل الآن' => 'CALL_NOW', 'راسلنا' => 'MESSAGE_PAGE', 'حمّل الآن' => 'DOWNLOAD',
+            'احجز الآن' => 'BOOK_TRAVEL', 'اعرف المزيد' => 'LEARN_MORE', 'اعرف أكتر' => 'LEARN_MORE', 'تواصل معنا' => 'CONTACT_US',
+            'اشترك الآن' => 'SIGN_UP', 'سجّل الآن' => 'SIGN_UP', 'سجل الآن' => 'SIGN_UP', 'تسوق الآن' => 'SHOP_NOW', 'قدّم الآن' => 'APPLY_NOW',
+            'اتصل الآن' => 'CONTACT_US', 'راسلنا' => 'CONTACT_US', 'راسلنا واتساب' => 'CONTACT_US', 'حمّل الآن' => 'DOWNLOAD',
         ];
         $english = [
             'book now' => 'BOOK_TRAVEL', 'learn more' => 'LEARN_MORE', 'contact us' => 'CONTACT_US',
             'sign up' => 'SIGN_UP', 'shop now' => 'SHOP_NOW', 'apply now' => 'APPLY_NOW',
-            'call now' => 'CALL_NOW', 'message us' => 'MESSAGE_PAGE', 'download' => 'DOWNLOAD',
+            'call now' => 'CONTACT_US', 'message us' => 'CONTACT_US', 'download' => 'DOWNLOAD',
         ];
         return $map[trim($cta)] ?? $english[strtolower(trim($cta))] ?? 'LEARN_MORE';
     }

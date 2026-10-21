@@ -980,6 +980,12 @@ $router->get('/api/ads/market-research/history', 'AdsController', 'marketResearc
 $router->post('/api/ads/campaigns/{id}/status', 'AdsController', 'updateCampaignStatus', ['AuthMiddleware']);
 $router->post('/api/ads/campaigns/{id}/publish', 'AdsController', 'publishCampaign', ['AuthMiddleware']);
 $router->get('/api/ads/campaigns/{id}/publish-options', 'AdsController', 'publishOptions', ['AuthMiddleware']);
+$router->post('/api/ads/campaigns/{id}/search-assets/generate', 'AdsController', 'generateSearchAssets', ['AuthMiddleware', 'PlanGateMiddleware:ai_tool']);
+$router->get('/api/ads/campaigns/{id}/search-assets', 'AdsController', 'getSearchAssets', ['AuthMiddleware']);
+$router->get('/api/ads/search-terms/suggestions', 'AdsController', 'listSearchTermSuggestions', ['AuthMiddleware']);
+$router->post('/api/ads/search-terms/run', 'AdsController', 'runSearchTermsNow', ['AuthMiddleware']);
+$router->post('/api/ads/search-terms/suggestions/{id}/apply', 'AdsController', 'applySearchTermSuggestion', ['AuthMiddleware']);
+$router->post('/api/ads/search-terms/suggestions/{id}/dismiss', 'AdsController', 'dismissSearchTermSuggestion', ['AuthMiddleware']);
 $router->post('/api/ads/campaigns/{id}/toggle-status', 'AdsController', 'toggleCampaignStatus', ['AuthMiddleware']);
 $router->post('/api/ads/campaigns/{id}/cancel', 'AdsController', 'cancelCampaign', ['AuthMiddleware']);
 $router->post('/api/ads/campaigns/{id}/update-budget', 'AdsController', 'updateCampaignBudget', ['AuthMiddleware']);

@@ -265,7 +265,8 @@ class AdsSyncService
         return $t ? date('Y-m-d H:i:s', $t) : null;
     }
 
-    private function googleAccessToken(array $conn, Encryption $enc): ?string
+    /** access token صالح لـ Google Ads (بيجدّده لو قرب ينتهي) - مستخدم كمان في AdSearchTermsService */
+    public function googleAccessToken(array $conn, Encryption $enc): ?string
     {
         $expires = !empty($conn['token_expires_at']) ? strtotime((string) $conn['token_expires_at']) : 0;
         if ($expires > time() + 120) {

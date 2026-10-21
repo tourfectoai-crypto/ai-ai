@@ -480,6 +480,7 @@ HTML;
 
     // ============ نشر حملة على Meta/Google ============
     let pubId = null;
+    let pubData = null;
     window.openPublish = async function (btn) {
         pubId = +btn.dataset.id;
         document.getElementById('pubName').textContent = btn.dataset.name || '';
@@ -489,49 +490,114 @@ HTML;
         document.getElementById('publishModal').classList.add('open');
         const res = await fetchJSON('/api/ads/campaigns/' + pubId + '/publish-options');
         if (!res.success) { body.innerHTML = '<div class="alert alert-danger">' + esc(res.error || 'تعذر التحميل') + '</div>'; return; }
-        const d = res.data, plats = d.platforms || {};
+        const d = pubData = res.data, plats = d.platforms || {};
         const pk = Object.keys(plats);
         if (!pk.length) { body.innerHTML = '<div class="alert alert-warning">لازم تربط حساب إعلانات الأول. <a href="/ads/connect/meta">اربط Meta Ads</a></div>'; return; }
         const def = pk.includes(d.campaign.platform) ? d.campaign.platform : (pk.includes('meta_ads') ? 'meta_ads' : pk[0]);
         const needCopy = !d.approved_copies;
+        const objectives = d.objectives || {};
+        const objOptions = Object.keys(objectives).map(k => '<option value="' + esc(k) + '"' + (k === (d.campaign.objective || 'traffic') ? ' selected' : '') + '>' + esc(objectives[k]) + '</option>').join('');
+        const pixelOptions = '<option value="">تلقائي (أول بيكسل في الحساب)</option>' + (d.pixels || []).map(p => '<option value="' + esc(p.id) + '">' + esc(p.name) + ' (' + esc(p.id) + ')</option>').join('');
         body.innerHTML = `
             <label>المنصة</label>
-            <select id="pubPlatform" class="p-select" style="width:100%;margin-bottom:10px">${pk.map(k => '<option value="' + k + '"' + (k === def ? ' selected' : '') + '>' + (k === 'meta_ads' ? 'Meta (فيسبوك + إنستجرام) - ' : 'Google Ads - ') + esc(plats[k]) + '</option>').join('')}</select>
+            <select id="pubPlatform" class="p-select" style="width:100%;margin-bottom:10px">${pk.map(k => '<option value="' + k + '"' + (k === def ? ' selected' : '') + '>' + (k === 'meta_ads' ? 'Meta (فيسبوك + إنستجرام) - ' : 'Google Ads (بحث) - ') + esc(plats[k]) + '</option>').join('')}</select>
+            <label>هدف الحملة</label>
+            <select id="pubObjective" class="p-select" style="width:100%;margin-bottom:10px">${objOptions}</select>
             <div id="pubPageWrap"><label>صفحة الفيسبوك اللي الإعلان هيظهر باسمها</label>
             ${(d.pages || []).length ? '<select id="pubPage" class="p-select" style="width:100%;margin-bottom:10px">' + d.pages.map(p => '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>').join('') + '</select>'
                 : '<div class="alert alert-warning" style="margin-bottom:10px">مفيش صفحة فيسبوك مربوطة. <a href="/ads/connect/meta?for=social">اربط صفحاتك</a></div>'}</div>
+            <div id="pubPixelWrap" style="display:none"><label>Meta Pixel (عشان Meta تجيب ناس بتحجز فعلًا مش بس بتضغط)</label>
+                <select id="pubPixel" class="p-select" style="width:100%;margin-bottom:4px">${pixelOptions}</select>
+                ${(d.pixels || []).length ? '' : '<div class="p-cell-muted" style="font-size:12px;margin-bottom:10px">⚠️ مفيش بيكسل على الحساب - الحملة هتتعمل بهدف زيارات صفحة الهبوط لحد ما تركّبه.</div>'}</div>
+            <label>الدول المستهدفة (افصل بفاصلة - عربي أو إنجليزي أو كود زي EG, DE)</label>
+            <input type="text" id="pubCountries" class="p-select" style="width:100%;margin-bottom:10px" value="${esc((d.countries || []).join(', '))}" placeholder="Germany, United Kingdom">
             <label>رابط الوجهة</label>
             <input type="url" id="pubDest" class="p-select" dir="ltr" style="width:100%;margin-bottom:10px" value="${esc(d.destination_url || '')}" placeholder="https://...">
-            <label>الميزانية اليومية (بعملة حسابك الإعلاني)</label>
-            <input type="number" id="pubBudget" class="p-select" style="width:100%;margin-bottom:10px" min="1" value="${esc(d.campaign.daily_budget || '')}">
+            <label>الميزانية اليومية بعملة حسابك الإعلاني <b id="pubCurrency"></b></label>
+            <input type="number" id="pubBudget" class="p-select" style="width:100%;margin-bottom:4px" min="1" step="0.01">
+            <div class="p-cell-muted" id="pubBudgetHint" style="font-size:12px;margin-bottom:10px"></div>
+            <div id="pubPhoneWrap" style="display:none"><label>رقم التليفون (بصيغة دولية +20...)</label>
+                <input type="tel" id="pubPhone" class="p-select" dir="ltr" style="width:100%;margin-bottom:10px" value="${esc(d.phone || '')}"></div>
+            <div id="pubGoogleWrap" class="p-card" style="display:none;padding:12px;margin-bottom:10px">
+                <div style="font-size:13px;margin-bottom:6px">🔎 ${d.keywords ? '<b>' + d.keywords + '</b> كلمة مفتاحية جاهزة' : 'مفيش كلمات مفتاحية - <b>هتتولد تلقائيًا</b> وقت النشر'} · هيتعمل إعلان متجاوب بـ15 عنوان و4 أوصاف + Sitelinks وCallouts وزرار اتصال.</div>
+                <label style="font-size:12px">أقصى تكلفة للضغطة (اختياري - بعملة الحساب)</label>
+                <input type="number" id="pubMaxCpc" class="p-select" style="width:100%;margin-bottom:6px" min="0" step="0.01" placeholder="فاضي = Google تحدد">
+                <button type="button" class="p-btn outline xs" onclick="previewSearchAssets()">معاينة أصول Google قبل النشر</button>
+                <div id="pubAssets" style="margin-top:8px"></div>
+            </div>
             ${needCopy ? `<div class="p-card" style="margin:6px 0 10px;padding:12px">
                 <b>نص الإعلان</b> <span class="p-cell-muted" style="font-size:12px">${d.pending_copies ? '(أو اقفل واعتمد واحدة من النسخ المولّدة)' : ''}</span>
                 <input type="text" id="pubHead" class="p-select" maxlength="40" style="width:100%;margin:8px 0" placeholder="العنوان (مثال: رحلة الأقصر يوم كامل)" value="${esc(d.campaign.name || '')}">
                 <textarea id="pubText" class="p-select" rows="3" maxlength="500" style="width:100%" placeholder="النص الأساسي للإعلان"></textarea>
             </div>` : '<div class="p-cell-muted" style="margin-bottom:10px">✔ هيتنشر بـ ' + d.approved_copies + ' نسخة معتمدة</div>'}
-            <div class="p-cell-muted" style="font-size:12px">الحملة بتتعمل <b>متوقفة (Paused)</b> - مفيش فلوس هتتصرف لحد ما تفعّلها بنفسك من Meta Ads Manager.</div>`;
-        const syncPage = () => { document.getElementById('pubPageWrap').style.display = document.getElementById('pubPlatform').value === 'meta_ads' ? '' : 'none'; };
-        document.getElementById('pubPlatform').addEventListener('change', syncPage); syncPage();
+            <div class="p-cell-muted" style="font-size:12px">الحملة بتتعمل <b>متوقفة (Paused)</b> - مفيش فلوس هتتصرف لحد ما تفعّلها بنفسك.</div>`;
+        const g = id => document.getElementById(id);
+        const sync = () => {
+            const plat = g('pubPlatform').value, obj = g('pubObjective').value;
+            const acc = (d.accounts || {})[plat] || {};
+            g('pubPageWrap').style.display = plat === 'meta_ads' ? '' : 'none';
+            g('pubPixelWrap').style.display = plat === 'meta_ads' && (obj === 'leads' || obj === 'sales') ? '' : 'none';
+            g('pubPhoneWrap').style.display = obj === 'calls' || plat === 'google_ads' ? '' : 'none';
+            g('pubGoogleWrap').style.display = plat === 'google_ads' ? '' : 'none';
+            g('pubCurrency').textContent = acc.currency ? '(' + acc.currency + ')' : '';
+            if (!g('pubBudget').dataset.touched) g('pubBudget').value = acc.suggested_daily_budget || d.campaign.daily_budget || '';
+            g('pubBudgetHint').textContent = acc.minimum_daily_budget ? 'أقل ميزانية منطقية: ' + acc.minimum_daily_budget + ' ' + acc.currency + (d.campaign.currency && acc.currency && d.campaign.currency !== acc.currency && d.campaign.daily_budget ? ' · ميزانية المسودة ' + d.campaign.daily_budget + ' ' + d.campaign.currency + ' اتحولت تلقائيًا' : '') : '';
+        };
+        g('pubBudget').addEventListener('input', () => { g('pubBudget').dataset.touched = '1'; });
+        g('pubPlatform').addEventListener('change', () => { delete g('pubBudget').dataset.touched; sync(); });
+        g('pubObjective').addEventListener('change', sync);
+        sync();
         document.getElementById('pubGo').disabled = false;
+    };
+
+    window.previewSearchAssets = async function () {
+        const box = document.getElementById('pubAssets');
+        box.innerHTML = '<div class="p-loading-row">بنجهّز 15 عنوان و4 أوصاف وإضافات من بيانات نشاطك...</div>';
+        const res = await fetchJSON('/api/ads/campaigns/' + pubId + '/search-assets/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destination_url: document.getElementById('pubDest').value.trim() }) });
+        if (!res.success) { box.innerHTML = '<div class="alert alert-danger">' + esc(res.error || 'تعذر التوليد') + '</div>'; return; }
+        const a = res.data.assets || {};
+        const pills = (list, max) => (list || []).map(t => '<span class="pill xs" style="margin:2px">' + esc(t) + ' <small class="p-cell-muted">' + t.length + '/' + max + '</small></span>').join('');
+        box.innerHTML = '<div style="font-size:12px"><b>العناوين (' + (a.headlines || []).length + ')</b><div>' + pills(a.headlines, 30) + '</div>'
+            + '<b>الأوصاف (' + (a.descriptions || []).length + ')</b><div>' + (a.descriptions || []).map(t => '<div class="p-cell-muted">• ' + esc(t) + '</div>').join('') + '</div>'
+            + ((a.sitelinks || []).length ? '<b>Sitelinks</b><div>' + a.sitelinks.map(s => '<span class="pill xs" style="margin:2px">' + esc(s.text) + '</span>').join('') + '</div>' : '')
+            + ((a.callouts || []).length ? '<b>Callouts</b><div>' + pills(a.callouts, 25) + '</div>' : '') + '</div>';
     };
 
     window.doPublish = async function () {
         if (!pubId) return;
         const g = id => document.getElementById(id);
-        const payload = { platform: g('pubPlatform').value, destination_url: g('pubDest').value.trim(), daily_budget: g('pubBudget').value };
+        const payload = {
+            platform: g('pubPlatform').value,
+            objective: g('pubObjective').value,
+            destination_url: g('pubDest').value.trim(),
+            daily_budget: g('pubBudget').value,
+            countries: g('pubCountries').value.split(/[,،]/).map(s => s.trim()).filter(Boolean),
+        };
         if (g('pubPage') && payload.platform === 'meta_ads') payload.page_id = g('pubPage').value;
+        if (g('pubPixel') && g('pubPixel').value) payload.pixel_id = g('pubPixel').value;
+        if (g('pubPhone') && g('pubPhone').value.trim()) payload.phone = g('pubPhone').value.trim();
+        if (g('pubMaxCpc') && g('pubMaxCpc').value) payload.max_cpc = g('pubMaxCpc').value;
         if (g('pubHead')) {
             const headline = g('pubHead').value.trim(), primary_text = g('pubText').value.trim();
             if (!headline || !primary_text) { P.toast('اكتب عنوان ونص الإعلان', 'error'); return; }
             payload.copy = { headline, primary_text, call_to_action: 'احجز الآن' };
         }
         if (!payload.destination_url) { P.toast('اكتب رابط الوجهة', 'error'); return; }
+        if (!payload.countries.length) { P.toast('حدد الدول المستهدفة', 'error'); return; }
         const btn = g('pubGo'); btn.disabled = true; btn.textContent = 'جارِ النشر على المنصة...';
         const res = await fetchJSON('/api/ads/campaigns/' + pubId + '/publish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         btn.disabled = false; btn.textContent = 'انشر (متوقفة)';
         if (res.success) {
             g('publishModal').classList.remove('open');
-            P.toast(res.message || 'اتنشرت ✓', 'success');
+            const sm = (res.data && res.data.summary) || {};
+            const parts = [];
+            if (sm.countries) parts.push('الدول: ' + sm.countries.join(', '));
+            if (sm.daily_budget) parts.push('الميزانية: ' + sm.daily_budget);
+            if (sm.ads) parts.push(sm.ads + ' إعلان');
+            if (sm.ad_groups) parts.push(sm.ad_groups + ' مجموعة');
+            if (sm.keywords) parts.push(sm.keywords + ' كلمة');
+            if (sm.headlines) parts.push(sm.headlines + ' عنوان');
+            P.toast((res.message || 'اتنشرت ✓') + (parts.length ? ' — ' + parts.join(' · ') : ''), 'success');
             if (res.data && res.data.warning) P.toast(res.data.warning, 'error');
             load();
         } else {
@@ -630,7 +696,9 @@ HTML;
         const hLen = headline.length, dLen = description.length, pLen = primaryText.length;
 
         let html = '<div class="ads-copy-card">';
-        html += '<div class="ads-copy-card-head">نسخة ' + esc(c.variant_label || String.fromCharCode(65 + i)) + '</div>';
+        html += '<div class="ads-copy-card-head">نسخة ' + esc(c.variant_label || String.fromCharCode(65 + i))
+            + (c.angle ? ' · <span class="p-cell-muted">' + esc(c.angle) + '</span>' : '')
+            + (c.quality_score ? ' <span class="pill xs" title="تقييم المراجع الآلي من 10">⭐ ' + esc(c.quality_score) + '/10</span>' : '') + '</div>';
 
         html += '<label>العنوان (Headline)</label>';
         html += '<div class="ads-field-row"><input type="text" class="p-select ads-cc-headline" data-idx="' + i + '" style="width:100%;" maxlength="' + LIMITS.headline.max + '" value="' + esc(headline) + '">';
@@ -716,7 +784,15 @@ HTML;
         if (b.reasoning) html += '<div class="p-cell-muted" style="font-size:12px;margin-top:4px;">💡 ' + esc(b.reasoning) + '</div>';
         html += '</div>';
 
-        html += '<div style="font-size:13px;font-weight:800;margin:14px 0 8px;">✍️ النصوص الإعلانية (اتفحص العدّادات وعدّل اللي يعجبك)</div>';
+        const kws = brief.keywords || [];
+        if (kws.length) {
+            html += '<div class="p-card" style="margin-bottom:14px;padding:14px;">';
+            html += '<div style="font-weight:800;font-size:13.5px;margin-bottom:8px;">🔎 كلمات Google المقترحة (هتتحفظ مع الحملة)</div>';
+            html += kws.map(function (k) { return '<span class="pill xs" style="margin:2px;' + (k.match_type === 'negative' ? 'opacity:.6;text-decoration:line-through;' : '') + '">' + esc(k.keyword) + '</span>'; }).join(' ');
+            html += '</div>';
+        }
+
+        html += '<div style="font-size:13px;font-weight:800;margin:14px 0 8px;">✍️ النصوص الإعلانية (اتراجعت آليًا - اتفحص العدّادات وعدّل اللي يعجبك)</div>';
         const copies = brief.copies || [];
         copies.forEach(function (c, i) { html += renderCopyCard(c, i); });
 
@@ -761,6 +837,9 @@ HTML;
                 reasoning: (currentBrief.budget_recommendation || {}).reasoning || '',
             },
             copies: copies,
+            keywords: currentBrief.keywords || [],
+            target_countries_json: locations,
+            currency: 'USD',
         };
     }
 
@@ -1417,12 +1496,38 @@ JS;
         }
         $owner = (int) $campaign->getAttribute('user_id');
         $conns = $this->db->query(
-            "SELECT platform, external_account_id FROM platform_connections WHERE user_id = ? AND platform IN ('meta_ads','google_ads') AND status = 'connected'",
+            "SELECT * FROM platform_connections WHERE user_id = ? AND platform IN ('meta_ads','google_ads') AND status = 'connected'",
             [$owner]
         );
         $platforms = [];
+        $accounts = [];
+        $pixels = [];
+        $campaignCurrency = strtoupper((string) ($campaign->getAttribute('currency') ?: 'USD'));
+        $campaignBudget = (float) ($campaign->getAttribute('daily_budget') ?: 0);
+        $encryption = new Encryption();
         foreach ($conns as $c) {
             $platforms[$c['platform']] = (string) $c['external_account_id'];
+            $currency = null;
+            try {
+                if ($c['platform'] === 'meta_ads') {
+                    $api = new MetaAdsAPI($encryption->decrypt((string) $c['access_token']));
+                    $info = $api->getAdAccountInfo((string) $c['external_account_id']);
+                    $currency = $info['success'] ? $info['currency'] : null;
+                    $pixels = $api->listPixels((string) $c['external_account_id']);
+                } else {
+                    $token = $this->getValidGoogleAdsAccessToken($c, $encryption);
+                    $currency = $token ? (new GoogleAdsAPI($token))->getAccountCurrency((string) $c['external_account_id']) : null;
+                }
+            } catch (Throwable $e) {
+                $currency = null;
+            }
+            $currency = $currency ?: $campaignCurrency;
+            $suggested = $campaignBudget > 0 ? AdBudgetCurrency::convert($campaignBudget, $campaignCurrency, $currency) : null;
+            $accounts[$c['platform']] = [
+                'currency' => $currency,
+                'suggested_daily_budget' => $suggested,
+                'minimum_daily_budget' => AdBudgetCurrency::minimumDaily($currency),
+            ];
         }
         $pages = $this->db->query(
             "SELECT external_location_id AS id, external_location_name AS name FROM platform_connections
@@ -1434,18 +1539,28 @@ JS;
             $w = (new Website())->find((int) ($campaign->getAttribute('website_id') ?: ($this->currentWebsiteIdForAds($owner) ?? 0)));
             $dest = $w ? trim((string) $w->getAttribute('main_url')) : '';
         }
+        $business = $this->ownerBusiness($owner);
         $approved = $this->db->query("SELECT COUNT(*) AS c FROM ad_copies WHERE campaign_id = ? AND status = 'approved'", [(int) $campaign->getAttribute('id')]);
         $pending = $this->db->query("SELECT COUNT(*) AS c FROM ad_copies WHERE campaign_id = ? AND status = 'pending_review'", [(int) $campaign->getAttribute('id')]);
+        $keywords = $this->db->query("SELECT COUNT(*) AS c FROM ad_keywords WHERE campaign_id = ? AND match_type <> 'negative'", [(int) $campaign->getAttribute('id')]);
         return $this->success([
             'platforms' => $platforms,
+            'accounts' => $accounts,
+            'pixels' => $pixels,
             'pages' => $pages,
             'destination_url' => $dest,
             'approved_copies' => (int) ($approved[0]['c'] ?? 0),
             'pending_copies' => (int) ($pending[0]['c'] ?? 0),
+            'keywords' => (int) ($keywords[0]['c'] ?? 0),
+            'countries' => $this->campaignCountries($campaign, $business),
+            'phone' => (string) ($business['business_phone'] ?? ''),
+            'whatsapp_number' => (string) ($business['whatsapp_number'] ?? ''),
+            'objectives' => AdCopyGenerationService::OBJECTIVES,
             'campaign' => [
                 'name' => $campaign->getAttribute('name'),
                 'platform' => $campaign->getAttribute('platform'),
                 'daily_budget' => $campaign->getAttribute('daily_budget'),
+                'currency' => $campaignCurrency,
                 'objective' => $campaign->getAttribute('objective'),
             ],
         ]);
@@ -1457,6 +1572,10 @@ JS;
      * المعتمدة، ويبعتها فعليًا لـ Meta Ads أو Google Ads عشان تتعمل
      * كحملة حقيقية هناك - دايمًا بحالة متوقفة (Paused) كإجراء أمان،
      * العميل لازم يراجعها ويفعّلها بنفسه من داخل حساب المنصة الرسمي.
+     *
+     * النسخة الاحترافية: الميزانية بعملة حساب الإعلانات، استهداف دول حقيقي،
+     * هدف حقيقي (بيكسل/واتساب/مكالمات)، اهتمامات Meta حقيقية، أكتر من صورة،
+     * وعلى Google: أصول RSA كاملة + إضافات + مجموعات إعلانية + كلمات سلبية.
      */
     public function publishCampaign(array $params = []): array
     {
@@ -1486,6 +1605,11 @@ JS;
         }
         if (!in_array($platform, ['meta_ads', 'google_ads'], true)) {
             return $this->error('اختار المنصة اللي هتنشر عليها (Meta أو Google)', 422);
+        }
+
+        $objective = (string) $this->get('objective', '');
+        if ($objective !== '' && array_key_exists($objective, AdCopyGenerationService::OBJECTIVES)) {
+            $campaign->setAttribute('objective', $objective);
         }
 
         // نص إعلان سريع من فورم النشر (للحملات اليدوية اللي مالهاش نصوص)
@@ -1529,36 +1653,80 @@ JS;
             return $this->error('رابط الوجهة مش صحيح', 422);
         }
         $campaign->setAttribute('landing_page_url', mb_substr($destinationUrl, 0, 500));
-        if ($this->get('daily_budget') !== null && $this->get('daily_budget') !== '') {
-            $b = (float) $this->get('daily_budget');
-            if ($b <= 0) {
-                return $this->error('الميزانية اليومية لازم تكون أكبر من صفر', 422);
-            }
-            $campaign->setAttribute('daily_budget', $b);
+
+        $owner = (int) $campaign->getAttribute('user_id');
+        $business = $this->ownerBusiness($owner);
+
+        // الدول: اللي العميل اختارها في فورم النشر ← جمهور الحملة ← ملف النشاط
+        $countriesInput = $this->get('countries');
+        if (is_string($countriesInput)) {
+            $countriesInput = preg_split('/[,،]/u', $countriesInput);
         }
-        $campaign->save();
+        $countries = is_array($countriesInput) ? AdGeo::toIso2($countriesInput) : [];
+        if (empty($countries)) {
+            $countries = $this->campaignCountries($campaign, $business);
+        }
+        if (empty($countries)) {
+            return $this->error('حدّد الدول اللي عايز الإعلان يظهر فيها', 422, ['need_countries' => true]);
+        }
 
         try {
             $connection = $this->db->query(
                 "SELECT * FROM platform_connections WHERE user_id = ? AND platform = ? AND status = 'connected' LIMIT 1",
-                [(int) $campaign->getAttribute('user_id'), $platform]
+                [$owner, $platform]
             );
             if (empty($connection)) {
                 return $this->error('لازم تربط حساب ' . ($platform === 'meta_ads' ? 'Meta Ads' : 'Google Ads') . ' الأول من أعلى الصفحة', 422);
             }
             $conn = $connection[0];
             $encryption = new Encryption();
-            $accessToken = $encryption->decrypt($conn['access_token']);
+            $accessToken = $platform === 'google_ads'
+                ? $this->getValidGoogleAdsAccessToken($conn, $encryption)
+                : $encryption->decrypt($conn['access_token']);
+            if (!$accessToken) {
+                return $this->error('انتهت صلاحية ربط Google Ads - افصل الحساب واربطه تاني', 422);
+            }
+            $metaApi = $platform === 'meta_ads' ? new MetaAdsAPI($accessToken) : null;
+            $googleApi = $platform === 'google_ads' ? new GoogleAdsAPI($accessToken) : null;
+
+            // الميزانية بعملة حساب الإعلانات نفسه
+            $accountCurrency = null;
+            if ($metaApi) {
+                $info = $metaApi->getAdAccountInfo((string) $conn['external_account_id']);
+                $accountCurrency = $info['success'] ? $info['currency'] : null;
+            } else {
+                $accountCurrency = $googleApi->getAccountCurrency((string) $conn['external_account_id']);
+            }
+            $campaignCurrency = strtoupper((string) ($campaign->getAttribute('currency') ?: 'USD'));
+            $accountCurrency = $accountCurrency ?: $campaignCurrency;
+
+            $requestedBudget = $this->get('daily_budget');
+            if ($requestedBudget !== null && $requestedBudget !== '') {
+                // فورم النشر بيطلب الميزانية بعملة حساب الإعلانات مباشرة
+                $dailyBudget = (float) $requestedBudget;
+            } else {
+                $dailyBudget = AdBudgetCurrency::convert((float) ($campaign->getAttribute('daily_budget') ?: 10), $campaignCurrency, $accountCurrency);
+                if ($dailyBudget === null) {
+                    return $this->error("حساب الإعلانات بعملة {$accountCurrency} - اكتب الميزانية اليومية بنفس العملة في فورم النشر", 422, ['account_currency' => $accountCurrency]);
+                }
+            }
+            $minBudget = AdBudgetCurrency::minimumDaily($accountCurrency);
+            if ($dailyBudget < $minBudget) {
+                return $this->error(sprintf('الميزانية اليومية أقل من الحد الأدنى المنطقي (%s %s) - المنصة مش هتعرض الإعلان بأقل من كده', $minBudget, $accountCurrency), 422);
+            }
 
             $campaignPayload = [
                 'name' => $campaign->getAttribute('name'),
                 'objective' => $campaign->getAttribute('objective') ?: 'traffic',
-                'daily_budget' => $campaign->getAttribute('daily_budget') ?: 10,
+                'daily_budget' => $dailyBudget,
                 'start_date' => $campaign->getAttribute('start_date'),
                 'end_date' => $campaign->getAttribute('end_date'),
             ];
+            // دولة الرقم = دولة النشاط (مش دولة الجمهور المستهدف)
+            $phoneCountry = strtoupper((string) ($business['country_code'] ?? '')) ?: ($countries[0] ?? '');
+            $phone = $this->normalizePhone((string) ($this->get('phone') ?: ($business['business_phone'] ?? '')), $phoneCountry);
 
-            if ($platform === 'meta_ads') {
+            if ($metaApi) {
                 $pages = $this->db->query(
                     "SELECT external_location_id, external_location_name FROM platform_connections
                      WHERE (website_id = ? OR user_id = ?) AND platform = 'facebook' AND status = 'connected'
@@ -1587,30 +1755,101 @@ JS;
                     'age_min' => $audienceRow['age_min'] ?? 18,
                     'age_max' => $audienceRow['age_max'] ?? 65,
                     'genders' => $audienceRow['genders'] ?? 'all',
-                    'locations' => !empty($audienceRow['locations_json']) ? (json_decode($audienceRow['locations_json'], true) ?: []) : [],
+                    'locations' => $countries,
+                    'interests' => !empty($audienceRow['interests_json']) ? (json_decode($audienceRow['interests_json'], true) ?: []) : [],
                 ];
 
-                $api = new MetaAdsAPI($accessToken);
-                // صورة الإعلان: اللي العميل اختارها/رفعها ← og:image من صفحة الوجهة
-                $imageUrl = null;
-                $mediaId = (int) $this->get('media_item_id', 0);
-                if ($mediaId > 0) {
-                    $m = $this->db->query("SELECT file_path FROM media_items WHERE id = ? AND user_id IN (?, ?) AND status = 'completed' AND type <> 'short_video' LIMIT 1", [$mediaId, (int) $campaign->getAttribute('user_id'), (int) $this->user['id']]);
-                    if ($m) {
-                        $imageUrl = rtrim(defined('APP_URL') ? APP_URL : '', '/') . $m[0]['file_path'];
+                // صور الإعلان: اللي العميل اختارها (أكتر من صورة = كل نسخة بصورة) ← og:image من صفحة الوجهة
+                $imageUrls = $this->mediaImageUrls($owner);
+                if (empty($imageUrls)) {
+                    $og = $metaApi->fetchOgImageFromWebsite($destinationUrl); // best-effort - ممكن ترجع null وده مقبول
+                    if ($og) {
+                        $imageUrls[] = $og;
                     }
                 }
-                $imageUrl = $imageUrl ?: $api->fetchOgImageFromWebsite($destinationUrl); // best-effort - ممكن ترجع null وده مقبول
-                $result = $api->createCampaign($conn['external_account_id'], $pageId, $campaignPayload, $audience, $copiesData, $destinationUrl, $imageUrl);
+
+                $objectiveKey = (string) $campaignPayload['objective'];
+                $pixelId = trim((string) $this->get('pixel_id', ''));
+                if ($pixelId === '' && in_array($objectiveKey, ['leads', 'sales'], true)) {
+                    $pixelsList = $metaApi->listPixels((string) $conn['external_account_id']);
+                    $pixelId = (string) ($pixelsList[0]['id'] ?? '');
+                }
+
+                $result = $metaApi->createCampaign($conn['external_account_id'], (string) $pageId, $campaignPayload, $audience, $copiesData, $destinationUrl, null, [
+                    'currency' => $accountCurrency,
+                    'pixel_id' => $pixelId,
+                    'phone' => $phone,
+                    'image_urls' => $imageUrls,
+                    'default_countries' => $countries,
+                ]);
             } else {
+                $customerId = (string) $conn['external_account_id'];
                 $keywordRows = (new AdKeyword())->where(['campaign_id' => (int) $campaign->getAttribute('id')]);
-                $keywords = array_map(fn ($k) => ['keyword' => $k->getAttribute('keyword'), 'match_type' => $k->getAttribute('match_type')], $keywordRows);
+                if (empty(array_filter($keywordRows, fn ($k) => $k->getAttribute('match_type') !== 'negative'))) {
+                    // مفيش كلمات - بنولّدها تلقائيًا بدل ما النشر يفشل
+                    try {
+                        (new AdKeywordStrategistService())->generateForCampaign($campaign, (string) ($campaign->getAttribute('product_or_service') ?: $campaign->getAttribute('name')), $countries[0] ?? null);
+                        $keywordRows = (new AdKeyword())->where(['campaign_id' => (int) $campaign->getAttribute('id')]);
+                    } catch (Throwable $e) {
+                        return $this->error('الحملة مفيهاش كلمات مفتاحية ومعرفناش نولّدها تلقائيًا - ولّد كلمات من صفحة الحملة وحاول تاني', 422);
+                    }
+                }
+                $keywords = array_map(fn ($k) => ['keyword' => $k->getAttribute('keyword'), 'match_type' => $k->getAttribute('match_type'), 'ad_group_id' => $k->getAttribute('ad_group_id')], $keywordRows);
+
+                // المجموعات الإعلانية المحلية بتتحول لمجموعات حقيقية على Google
+                $adGroups = [];
+                $groupRows = $this->db->query("SELECT id, name FROM ad_ad_groups WHERE campaign_id = ? AND status = 'active'", [(int) $campaign->getAttribute('id')]);
+                $groupNames = array_column($groupRows, 'name', 'id');
+                $ungrouped = [];
+                foreach ($keywords as $k) {
+                    $gid = (int) ($k['ad_group_id'] ?? 0);
+                    if ($gid && isset($groupNames[$gid])) {
+                        $adGroups[$gid]['name'] = $groupNames[$gid];
+                        $adGroups[$gid]['keywords'][] = $k;
+                    } elseif (strtolower((string) $k['match_type']) !== 'negative') {
+                        $ungrouped[] = $k;
+                    }
+                }
+                if ($adGroups && $ungrouped) {
+                    $adGroups[0] = ['name' => $campaign->getAttribute('name') . ' - General', 'keywords' => $ungrouped];
+                }
+
+                // أصول Google (15 عنوان + 4 أوصاف + إضافات) - محفوظة أو بتتولد دلوقتي
+                $searchAssets = json_decode((string) ($campaign->getAttribute('search_assets_json') ?? ''), true);
+                if (!is_array($searchAssets) || empty($searchAssets['headlines'])) {
+                    try {
+                        $searchAssets = (new AdCopyGenerationService())->generateSearchAssets($campaign, $keywords, $destinationUrl);
+                    } catch (Throwable $e) {
+                        $searchAssets = [];
+                        Logger::error('generateSearchAssets on publish failed', ['campaign_id' => $campaign->getAttribute('id'), 'message' => $e->getMessage()]);
+                    }
+                }
+
+                $languages = (array) $this->get('languages', []);
+                if (empty($languages)) {
+                    $copyText = implode(' ', array_map(fn ($c) => ($c['headline'] ?? '') . ' ' . ($c['primary_text'] ?? ''), $copiesData))
+                        . ' ' . implode(' ', (array) ($searchAssets['headlines'] ?? []));
+                    $languages = [AdGeo::detectLanguage($copyText)];
+                }
 
                 $budgetRecRows = (new AdBudgetRecommendation())->where(['campaign_id' => (int) $campaign->getAttribute('id')]);
                 $bidStrategyHint = !empty($budgetRecRows) ? (string) $budgetRecRows[0]->getAttribute('bid_strategy') : '';
+                $bidding = in_array($campaignPayload['objective'], ['leads', 'sales', 'calls', 'whatsapp'], true) && $googleApi->hasConversionTracking($customerId)
+                    ? 'conversions' : 'clicks';
 
-                $api = new GoogleAdsAPI($accessToken);
-                $result = $api->createSearchCampaign($conn['external_account_id'], $campaignPayload, $copiesData, $keywords, $destinationUrl, $bidStrategyHint);
+                $result = $googleApi->createSearchCampaign($customerId, $campaignPayload, $copiesData, $keywords, $destinationUrl, $bidStrategyHint, [
+                    'countries' => $countries,
+                    'languages' => $languages,
+                    'search_assets' => $searchAssets,
+                    'ad_groups' => array_values($adGroups),
+                    'bidding' => $bidding,
+                    'max_cpc' => (float) $this->get('max_cpc', 0),
+                    'phone' => $phone,
+                    'phone_country' => $phoneCountry,
+                ]);
+                if (($result['success'] ?? false) && $bidding === 'clicks' && in_array($campaignPayload['objective'], ['leads', 'sales'], true)) {
+                    $result['warning'] = trim(($result['warning'] ?? '') . ' | مفيش تتبع تحويلات في حساب Google Ads، فالحملة بتزوّد الضغطات. فعّل تتبع التحويلات عشان Google تجيبلك حجوزات.', ' |');
+                }
             }
 
             if (!($result['success'] ?? false)) {
@@ -1631,7 +1870,11 @@ JS;
                 'external_campaign_id' => $result['external_campaign_id'],
                 'external_adset_id' => $result['external_adset_id'] ?? null,
                 'external_budget_resource' => $result['external_budget_resource'] ?? null,
+                'external_budget_resource_name' => $result['external_budget_resource'] ?? null,
                 'platform_connection_id' => $conn['id'],
+                'daily_budget' => $dailyBudget,
+                'currency' => $accountCurrency,
+                'target_countries_json' => json_encode($countries),
                 'status' => 'paused',
                 'published_at' => date('Y-m-d H:i:s'),
             ]);
@@ -1639,17 +1882,132 @@ JS;
 
             ActivityLog::record('ads', 'ad_campaign.published', [
                 'subject_type' => 'ad_campaigns', 'subject_id' => (int) $campaign->getAttribute('id'),
-                'meta' => ['platform' => $platform, 'external_campaign_id' => $result['external_campaign_id']],
+                'meta' => ['platform' => $platform, 'external_campaign_id' => $result['external_campaign_id'], 'plan' => $result['plan'] ?? null, 'countries' => $countries],
             ]);
 
             return $this->success([
                 'campaign' => $campaign->toArray(),
                 'warning' => $result['warning'] ?? null,
-            ], 'تم إنشاء الحملة فعليًا على ' . ($platform === 'meta_ads' ? 'Meta Ads' : 'Google Ads') . ' بحالة متوقفة - راجعها وفعّلها من حسابك الرسمي هناك');
+                'summary' => array_filter([
+                    'countries' => $countries,
+                    'daily_budget' => $dailyBudget . ' ' . $accountCurrency,
+                    'ads' => isset($result['ad_ids']) ? count($result['ad_ids']) : null,
+                    'ad_groups' => $result['ad_groups'] ?? null,
+                    'keywords' => $result['keywords'] ?? null,
+                    'headlines' => $result['headlines'] ?? null,
+                ], fn ($v) => $v !== null),
+            ], 'تم إنشاء الحملة فعليًا على ' . ($platform === 'meta_ads' ? 'Meta Ads' : 'Google Ads') . ' بحالة متوقفة - راجعها وفعّلها من هنا أو من حسابك الرسمي هناك');
         } catch (Exception $e) {
             Logger::error('publishCampaign Error', ['campaign_id' => $params['id'] ?? null, 'message' => $e->getMessage()]);
             return $this->error('تعذر النشر: ' . CustomerError::message($e->getMessage(), 500), 500);
         }
+    }
+
+    /**
+     * POST /api/ads/campaigns/{id}/search-assets/generate
+     * توليد (أو إعادة توليد) أصول Google للحملة قبل النشر عشان العميل يراجعها.
+     */
+    public function generateSearchAssets(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $campaign = (new AdCampaign())->find((int) ($params['id'] ?? 0));
+        if (!$campaign || !$this->resolveCampaignAccess($campaign, 'manager')) {
+            return $this->error('الحملة غير موجودة', 404);
+        }
+        try {
+            $keywords = array_map(fn ($k) => ['keyword' => $k->getAttribute('keyword'), 'match_type' => $k->getAttribute('match_type')], (new AdKeyword())->where(['campaign_id' => (int) $campaign->getAttribute('id')]));
+            $assets = (new AdCopyGenerationService())->generateSearchAssets($campaign, $keywords, (string) $this->get('destination_url', '') ?: null);
+            return $this->success(['assets' => $assets], 'تم تجهيز أصول Google');
+        } catch (Exception $e) {
+            Logger::error('generateSearchAssets Error', ['campaign_id' => $params['id'] ?? null, 'message' => $e->getMessage()]);
+            return $this->error(CustomerError::message($e->getMessage(), 500), 502);
+        }
+    }
+
+    /** GET /api/ads/campaigns/{id}/search-assets */
+    public function getSearchAssets(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $campaign = (new AdCampaign())->find((int) ($params['id'] ?? 0));
+        if (!$campaign || !$this->resolveCampaignAccess($campaign, 'viewer')) {
+            return $this->error('الحملة غير موجودة', 404);
+        }
+        $assets = json_decode((string) ($campaign->getAttribute('search_assets_json') ?? ''), true);
+        return $this->success(['assets' => is_array($assets) ? $assets : null]);
+    }
+
+    /** ملف النشاط (للتليفون/الدولة) - null لو العميل لسه معملوش */
+    private function ownerBusiness(int $ownerId): ?array
+    {
+        try {
+            $rows = $this->db->query('SELECT * FROM businesses WHERE owner_user_id = ? ORDER BY id ASC LIMIT 1', [$ownerId]);
+            return $rows[0] ?? null;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /** دول الحملة كأكواد ISO: جمهور الحملة ← target_countries_json ← دولة النشاط */
+    private function campaignCountries(AdCampaign $campaign, ?array $business): array
+    {
+        $audienceRows = (new AdAudience())->where(['campaign_id' => (int) $campaign->getAttribute('id')], [], 1);
+        $locations = !empty($audienceRows) ? (json_decode((string) $audienceRows[0]->getAttribute('locations_json'), true) ?: []) : [];
+        $codes = AdGeo::toIso2((array) $locations);
+        if (empty($codes)) {
+            $codes = AdGeo::toIso2((array) (json_decode((string) ($campaign->getAttribute('target_countries_json') ?? ''), true) ?: []));
+        }
+        if (empty($codes) && !empty($business['country_code'])) {
+            $codes = AdGeo::toIso2([(string) $business['country_code']]);
+        }
+        return $codes;
+    }
+
+    /** روابط الصور اللي العميل اختارها من مكتبته (media_item_ids[] أو media_item_id) */
+    private function mediaImageUrls(int $ownerId): array
+    {
+        $ids = array_map('intval', (array) ($this->get('media_item_ids') ?: []));
+        if ((int) $this->get('media_item_id', 0) > 0) {
+            $ids[] = (int) $this->get('media_item_id', 0);
+        }
+        $urls = [];
+        foreach (array_slice(array_unique(array_filter($ids)), 0, 5) as $mediaId) {
+            $m = $this->db->query(
+                "SELECT file_path FROM media_items WHERE id = ? AND user_id IN (?, ?) AND status = 'completed' AND type <> 'short_video' LIMIT 1",
+                [$mediaId, $ownerId, (int) $this->user['id']]
+            );
+            if ($m) {
+                $urls[] = rtrim(defined('APP_URL') ? APP_URL : '', '/') . $m[0]['file_path'];
+            }
+        }
+        return $urls;
+    }
+
+    /** رقم تليفون بصيغة دولية (+20...) - إعلانات المكالمات مبتقبلش الأرقام المحلية */
+    private function normalizePhone(string $phone, string $countryIso): string
+    {
+        $digits = preg_replace('/[^0-9+]/', '', $phone);
+        if ($digits === '' || strlen(ltrim($digits, '+')) < 7) {
+            return '';
+        }
+        if (str_starts_with($digits, '+')) {
+            return $digits;
+        }
+        if (str_starts_with($digits, '00')) {
+            return '+' . substr($digits, 2);
+        }
+        $dial = ['EG' => '20', 'SA' => '966', 'AE' => '971', 'KW' => '965', 'QA' => '974', 'BH' => '973', 'OM' => '968', 'JO' => '962', 'LB' => '961', 'MA' => '212', 'TN' => '216', 'DZ' => '213', 'TR' => '90', 'GB' => '44', 'DE' => '49', 'FR' => '33', 'IT' => '39', 'ES' => '34', 'US' => '1', 'CA' => '1'];
+        $code = $dial[strtoupper($countryIso)] ?? null;
+        if ($code === null) {
+            return '';
+        }
+        if (str_starts_with($digits, $code) && strlen($digits) > strlen($code) + 7) {
+            return '+' . $digits;
+        }
+        return '+' . $code . ltrim($digits, '0');
     }
 
     /**
@@ -2499,6 +2857,94 @@ JS;
         }
 
         return $this->success($results);
+    }
+
+    // ================================================================
+    // Search Terms Autopilot (الكلمات السلبية من مصطلحات البحث الحقيقية)
+    // ================================================================
+
+    /** GET /api/ads/search-terms/suggestions?status=pending */
+    public function listSearchTermSuggestions(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $access = $this->resolveAdsAccess('viewer');
+        if (!$access) {
+            return $this->error('غير مصرّح لك بعرض هذا الحساب', 403);
+        }
+        try {
+            return $this->success((new AdSearchTermsService())->listForUser($access['owner_id'], (string) $this->get('status', 'pending')));
+        } catch (Throwable $e) {
+            Logger::error('listSearchTermSuggestions Error', ['message' => $e->getMessage()]);
+            return $this->success([]);
+        }
+    }
+
+    /** POST /api/ads/search-terms/run - تحليل فوري لكل حملات Google المنشورة للعميل */
+    public function runSearchTermsNow(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $access = $this->resolveAdsAccess('manager');
+        if (!$access) {
+            return $this->error('غير مصرّح لك بتعديل هذا الحساب', 403);
+        }
+        $service = new AdSearchTermsService();
+        $rows = $this->db->query(
+            "SELECT c.id FROM ad_campaigns c JOIN platform_connections p ON p.id = c.platform_connection_id
+             WHERE c.user_id = ? AND p.platform = 'google_ads' AND c.external_campaign_id IS NOT NULL AND c.deleted_at IS NULL",
+            [$access['owner_id']]
+        );
+        $summary = ['campaigns' => 0, 'suggested' => 0, 'errors' => []];
+        foreach ($rows as $row) {
+            $campaign = (new AdCampaign())->find((int) $row['id']);
+            if (!$campaign) {
+                continue;
+            }
+            $r = $service->analyzeCampaign($access['owner_id'], $campaign, false);
+            $summary['campaigns']++;
+            if (empty($r['success'])) {
+                $summary['errors'][] = $campaign->getAttribute('name') . ': ' . ($r['error'] ?? '');
+            } else {
+                $summary['suggested'] += (int) $r['suggested'];
+            }
+        }
+        if ($summary['campaigns'] === 0) {
+            return $this->error('مفيش حملات Google Ads منشورة لسه', 422);
+        }
+        return $this->success($summary, "اتحللت {$summary['campaigns']} حملة - {$summary['suggested']} اقتراح جديد");
+    }
+
+    /** POST /api/ads/search-terms/suggestions/{id}/apply */
+    public function applySearchTermSuggestion(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $access = $this->resolveAdsAccess('manager');
+        if (!$access) {
+            return $this->error('غير مصرّح لك بتعديل هذا الحساب', 403);
+        }
+        $r = (new AdSearchTermsService())->apply($access['owner_id'], (int) ($params['id'] ?? 0));
+        return !empty($r['success'])
+            ? $this->success([], 'اتضافت ككلمة سلبية على Google Ads')
+            : $this->error($r['error'] ?? 'تعذر الإضافة', 422);
+    }
+
+    /** POST /api/ads/search-terms/suggestions/{id}/dismiss */
+    public function dismissSearchTermSuggestion(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $access = $this->resolveAdsAccess('manager');
+        if (!$access) {
+            return $this->error('غير مصرّح لك بتعديل هذا الحساب', 403);
+        }
+        (new AdSearchTermsService())->dismiss($access['owner_id'], (int) ($params['id'] ?? 0));
+        return $this->success([], 'تم التجاهل');
     }
 
     // ================================================================
@@ -4598,6 +5044,12 @@ JS;
             <div id="pendingActionsBox"><div class="p-loading-row">جارِ التحميل...</div></div>
         </div>
 
+        <div class="p-card" id="searchTermsCard" style="margin-bottom:16px;">
+            <div class="p-card-head"><h3>🔎 كلمات بتصرف ميزانيتك من غير حجوزات (Google)</h3><span class="p-card-sub">من تقرير مصطلحات البحث الحقيقي - بيتحلل يوميًا، وفي الوضع التلقائي الواضح منها بيتضاف كسلبي لوحده</span></div>
+            <div style="margin-bottom:8px;"><button class="p-btn outline xs" id="stRunBtn" onclick="runSearchTerms()">حلّل دلوقتي</button></div>
+            <div id="searchTermsBox"><div class="p-loading-row">جارِ التحميل...</div></div>
+        </div>
+
         <div class="p-card" id="optimizationLogCard">
             <div class="p-card-head"><h3>📜 سجل قرارات التحسين</h3><span class="p-card-sub">كل تغيير نفّذه النظام - إمتى، ليه، وقابلية التراجع</span></div>
             <div id="optimizationLogBox"><div class="p-loading-row">جارِ التحميل...</div></div>
@@ -4697,8 +5149,42 @@ JS;
         else P.toast(res.error || 'تعذر التراجع', 'error');
     };
 
+    async function loadSearchTerms() {
+        const box = document.getElementById('searchTermsBox');
+        const res = await fetchJSON('/api/ads/search-terms/suggestions');
+        if (!res.success) { box.innerHTML = '<div class="p-cell-muted">تعذر التحميل</div>'; return; }
+        if (!res.data.length) { box.innerHTML = '<div class="p-cell-muted">مفيش كلمات مهدرة حاليًا 👌</div>'; return; }
+        const reasonLabel = { wasteful: 'صرف بدون حجز', irrelevant: 'مش مرتبط بعرضك', both: 'صرف + مش مرتبط' };
+        box.innerHTML = res.data.map(t => `
+            <div style="padding:8px 0;border-bottom:1px solid var(--border-color, #eee);display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                <div style="flex:1;min-width:200px;">
+                    <b dir="auto">${esc(t.search_term)}</b> <span class="pill xs">${esc(reasonLabel[t.reason] || t.reason)}</span>
+                    <div class="p-cell-muted" style="font-size:12px;">${esc(t.campaign_name)} · ${t.clicks} ضغطة · ${esc(t.cost)} ${esc(t.currency || '')}</div>
+                    <div class="p-cell-muted" style="font-size:11.5px;">${esc(t.explanation || '')}</div>
+                </div>
+                <button class="p-btn primary xs" onclick="decideSearchTerm(${t.id}, 'apply')">➖ أضفها كسلبية</button>
+                <button class="p-btn outline xs" onclick="decideSearchTerm(${t.id}, 'dismiss')">تجاهل</button>
+            </div>`).join('');
+    }
+
+    window.decideSearchTerm = async function (id, decision) {
+        const res = await fetchJSON(`/api/ads/search-terms/suggestions/${id}/${decision}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (res.success) { P.toast(res.message || 'تم', 'success'); loadSearchTerms(); }
+        else P.toast(res.error || 'تعذر التنفيذ', 'error');
+    };
+
+    window.runSearchTerms = async function () {
+        const btn = document.getElementById('stRunBtn');
+        btn.disabled = true; btn.textContent = 'جارِ التحليل...';
+        const res = await fetchJSON('/api/ads/search-terms/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        btn.disabled = false; btn.textContent = 'حلّل دلوقتي';
+        if (res.success) { P.toast(res.message || 'تم التحليل', 'success'); if ((res.data.errors || []).length) P.toast(res.data.errors.join(' | '), 'error'); loadSearchTerms(); }
+        else P.toast(res.error || 'تعذر التحليل', 'error');
+    };
+
     loadAutopilotSettings();
     loadPendingActions();
+    loadSearchTerms();
     loadOptimizationLog();
 })();
 JS;
