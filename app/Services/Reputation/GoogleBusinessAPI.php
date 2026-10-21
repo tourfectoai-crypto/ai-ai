@@ -700,6 +700,11 @@ class GoogleBusinessAPI
                 }
             }
 
+            // صورة المنشور (اختياري): رابط عام https - Google بتسحبها بنفسها
+            if (!empty($extra['media_url']) && preg_match('#^https://#i', (string) $extra['media_url'])) {
+                $data['media'] = [['mediaFormat' => 'PHOTO', 'sourceUrl' => (string) $extra['media_url']]];
+            }
+
             $response = $this->makeRequest('POST', self::REVIEWS_BASE_URL, $endpoint, [], $data);
 
             if (!$response['success']) {

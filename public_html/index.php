@@ -1026,6 +1026,14 @@ if (strpos($path,'/sites/')!==0 && strpos($path,'/api/')!==0 && strpos($path,'/a
 }
 
 // ============================================
+// 9.3c. إسناد الحجز للسوشيال: الزائر جاي من رابط منشور (/go/{code} بيضيف ?tf_sl=) - بنحفظه على دومين الموقع ده
+// ============================================
+if (isset($_GET['tf_sl']) && strpos($path, '/sites/') === 0) {
+    try { if (class_exists('SocialAttribution')) SocialAttribution::captureFromQuery(); }
+    catch (Throwable $e) { Logger::warning('Social attribution capture failed'); }
+}
+
+// ============================================
 // 9.1 ترجمة تلقائية للنصوص العربية الثابتة لما اللغة English
 // (انظر app/Helpers/ui_autotranslate.php)
 // ============================================

@@ -7,6 +7,25 @@ require_once __DIR__ . '/../Services/SocialMedia/SocialPostReconciler.php';
 require_once __DIR__ . '/../Services/SocialMedia/PublishHealthReport.php';
 require_once __DIR__ . '/../Services/SocialMedia/MediaPreflight.php';
 require_once __DIR__ . '/../Services/SocialMedia/MetaSocialAPI.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialLinkTracker.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialAttribution.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialCommentInbox.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialBestTimes.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialReport.php';
+require_once __DIR__ . '/../Jobs/SyncSocialCommentsJob.php';
+require_once __DIR__ . '/../Jobs/SocialDailyInsightsJob.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialGrowth.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialCompetitors.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialPlanShare.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialTeam.php';
+require_once __DIR__ . '/../Services/SocialMedia/ThreadsAPI.php';
+require_once __DIR__ . '/../Services/SocialMedia/LinkedInAPI.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialPackages.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialAccounts.php';
+require_once __DIR__ . '/../Jobs/SocialPackagesRenewJob.php';
+require_once __DIR__ . '/../Jobs/SocialPlanRenewJob.php';
+require_once __DIR__ . '/../Services/Payment/CurrencyService.php';
+require_once __DIR__ . '/../Services/Subscription/BillingPlanCatalog.php';
 require_once __DIR__ . '/../Jobs/ReconcileUncertainPostsJob.php';
 require_once __DIR__ . '/../Jobs/CheckSocialConnectionsHealthJob.php';
 
@@ -27,6 +46,39 @@ class SocialMediaController extends Controller
         $this->service = new SocialPostService();
     }
 
+    /** @var array|null سياق الفريق (الحساب اللي بنشتغل عليه + الدور) */
+    private ?array $teamCtx = null;
+
+    private function team(): array
+    {
+        return $this->teamCtx ??= SocialTeam::context((int) ($this->user['id'] ?? 0));
+    }
+
+    /** الحساب اللي بيانات السوشيال بتاعته (صاحب الشركة حتى لو اللي داخل عضو في فريقه) */
+    private function uid(): int
+    {
+        return (int) $this->team()['account_id'];
+    }
+
+    /** null = مسموح، أو خطأ 403 لو دور العضو في الفريق ما يسمحش */
+    private function guard(string $permission): ?array
+    {
+        if (!SocialTeam::can($this->team(), $permission)) {
+            return $this->error('دورك في فريق الحساب ما بيسمحش بالخطوة دي - اطلبها من مدير الحساب', 403);
+        }
+        // فريق العمل في السوشيال ميزة في الباقة: العضو مايشتغلش على حساب باقته مش بتشملها
+        if (!empty($this->team()['member']) && !SocialPackages::has($this->uid(), 'team')) {
+            return $this->error('فريق العمل في السوشيال مش ضمن باقة الحساب - صاحب الحساب يقدر يرقّي من صفحة الاشتراكات', 403, ['upgrade' => true, 'feature' => 'team']);
+        }
+        return null;
+    }
+
+    /** رد موحّد لحدود الباقة: 402 + رابط تبويب الباقة */
+    private function limitError(SocialPackageLimit $e): array
+    {
+        return $this->error($e->getMessage(), 402, ['upgrade' => true, 'feature' => $e->feature, 'action' => '/subscription#social']);
+    }
+
     /** GET /social */
     public function index(array $params = []): array
     {
@@ -34,685 +86,104 @@ class SocialMediaController extends Controller
         try {
             ReconcileUncertainPostsJob::ensureScheduled();
             CheckSocialConnectionsHealthJob::ensureScheduled();
+            SyncSocialCommentsJob::ensureScheduled();
+            SocialDailyInsightsJob::ensureScheduled();
+            SocialPackages::ensureSchema();
+            SocialAccounts::ensureSchema();
+            SocialPackagesRenewJob::ensureScheduled();
+            (new SocialMonthlyPlanService())->ensurePeriodSchema();
+            SocialPlanRenewJob::ensureScheduled();
         } catch (Throwable $e) {
         }
-        $body = <<<HTML
-        <style>
-            .sp-media{border:1px dashed var(--panel-border);border-radius:12px;padding:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-            .sp-media .sp-prev{width:96px;height:96px;border-radius:10px;background:var(--panel-card-bg-2,rgba(127,127,127,.12));display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:28px;flex:none}
-            .sp-media .sp-prev img,.sp-media .sp-prev video{width:100%;height:100%;object-fit:cover}
-            .sp-lib{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin-top:10px;max-height:220px;overflow:auto}
-            .sp-lib button{border:2px solid transparent;border-radius:10px;padding:0;background:none;cursor:pointer;aspect-ratio:1;overflow:hidden}
-            .sp-lib button img,.sp-lib button video{width:100%;height:100%;object-fit:cover;display:block}
-            .sp-lib button.on{border-color:var(--panel-accent)}
-            .sp-media .sp-prev{position:relative}
-            .sp-count{position:absolute;bottom:4px;inset-inline-end:4px;background:rgba(0,0,0,.7);color:#fff;font-size:11px;border-radius:8px;padding:1px 6px}
-            #spAlbumStrip{display:none;gap:6px;flex-wrap:wrap;margin-top:8px}
-            .sp-alb{position:relative;width:52px;height:52px;border-radius:8px;overflow:hidden;flex:none}
-            .sp-alb img{width:100%;height:100%;object-fit:cover}
-            .sp-alb b{position:absolute;top:2px;inset-inline-start:3px;background:rgba(0,0,0,.65);color:#fff;font-size:10px;border-radius:6px;padding:0 4px}
-            .sp-alb i{position:absolute;top:2px;inset-inline-end:3px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;border-radius:50%;width:16px;height:16px;line-height:16px;text-align:center;cursor:pointer;font-style:normal}
-            #spAlbumBtn.on{border-color:var(--panel-accent);font-weight:700}
-            .sp-tgt{display:inline-flex;align-items:center;gap:4px;margin:2px 0 2px 6px;font-size:12px;white-space:nowrap}
-            .sp-err{font-size:11.5px;color:var(--panel-danger);margin-top:3px;max-width:420px;white-space:normal}
-            .sp-bars{display:flex;align-items:flex-end;gap:2px;height:110px;padding-top:6px}
-            .sp-bars i{flex:1;background:var(--panel-accent);border-radius:3px 3px 0 0;min-height:2px;opacity:.85;cursor:default}
-            .sp-bars i.z{opacity:.2}
-            .sp-axis{display:flex;justify-content:space-between;font-size:11px;margin-top:4px}
-            .sp-prow{display:flex;align-items:center;gap:10px;margin:9px 0;font-size:13px}
-            .sp-prow .nm{width:92px;flex:none}
-            .sp-meter{flex:1;height:8px;border-radius:6px;background:rgba(127,127,127,.18);overflow:hidden;display:flex}
-            .sp-meter b{display:block;height:100%}
-            .sp-eng{font-size:12px;white-space:nowrap;line-height:1.9}
-            .sp-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--panel-border);border-radius:999px;padding:4px 11px;font-size:12.5px;margin:3px}
-            .sp-chip.off{border-color:var(--panel-danger);color:var(--panel-danger)}
-            .sp-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;padding:12px 16px 16px}
-            .sp-cal .h{font-size:11.5px;text-align:center;padding:4px 0;color:var(--panel-muted,#888)}
-            .sp-cal .d{min-height:74px;border:1px solid var(--panel-border);border-radius:8px;padding:4px;font-size:11px;overflow:hidden}
-            .sp-cal .d.today{border-color:var(--panel-accent)}
-            .sp-cal .d.out{opacity:.45}
-            .sp-cal .d .n{font-weight:700;margin-bottom:2px}
-            .sp-cal .e{display:block;border-radius:5px;padding:1px 4px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(127,127,127,.18)}
-            .sp-cal .e.published{background:rgba(34,197,94,.22)}
-            .sp-cal .e.failed{background:rgba(239,68,68,.22)}
-            .sp-cal .e.scheduled,.sp-cal .e.pending{background:rgba(99,102,241,.25)}
-            @media (max-width:700px){.sp-cal .d{min-height:54px}.sp-cal .e{font-size:0;padding:3px}}
-            .sp-hrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 0;border-top:1px solid var(--panel-border);font-size:13px}
-            .sp-hrow.alert{background:rgba(239,68,68,.07);margin:0 -16px;padding-inline:16px}
-            .sp-hrow .nm{min-width:150px;font-weight:600}
-            .sp-hp{display:inline-block;border-radius:999px;padding:1px 9px;font-size:12px;background:rgba(127,127,127,.18)}
-            .sp-hp.ok{background:rgba(34,197,94,.2)}.sp-hp.warn{background:rgba(245,158,11,.25)}.sp-hp.bad{background:rgba(239,68,68,.22)}
-            .tt-panel{border:1px solid var(--panel-border);border-radius:12px;padding:14px;margin-top:12px}
-            .tt-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.tt-head img{width:40px;height:40px;border-radius:50%;object-fit:cover}
-            .tt-row{display:flex;gap:14px;flex-wrap:wrap;margin:8px 0}.tt-row label{display:flex;gap:6px;align-items:center;font-size:13px}
-            .tt-row label.off{opacity:.45}.tt-note{font-size:12px;line-height:1.7;margin-top:8px}.tt-sub{margin:6px 0 0 22px}
-        </style>
-        <div class="p-toolbar" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <button class="p-btn primary" onclick="openNewPost()">+ New post</button>
-                <select id="spDays" class="p-select" style="max-width:150px"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select>
-                <button class="p-btn outline" id="spMetricsBtn" onclick="refreshMetrics(true)">↻ Update Engagement of Meta</button>
-            </div>
-            <span class="p-cell-muted" id="spMetricsNote" style="font-size:12px">إنستجرام لازم صورة أو فيديو. الفيسبوك ينفع نص بس.</span>
-        </div>
-
-        <div class="p-grid cols-4" id="spStats">
-            <div class="p-card stat-tile"><div class="stat-icon blue">📝</div><div class="stat-info"><div class="stat-value" id="stTotal">-</div><div class="stat-label">إجمالي المنشورات</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon green">✅</div><div class="stat-info"><div class="stat-value" id="stPub">-</div><div class="stat-label">Published <span id="stRate" class="p-cell-muted"></span></div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon purple">🗓️</div><div class="stat-info"><div class="stat-value" id="stSched">-</div><div class="stat-label">مجدول / مسودات</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon orange">⚠️</div><div class="stat-info"><div class="stat-value" id="stFail">-</div><div class="stat-label">Failed</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon blue">👁</div><div class="stat-info"><div class="stat-value" id="stReach">-</div><div class="stat-label">الوصول</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon green">👍</div><div class="stat-info"><div class="stat-value" id="stLikes">-</div><div class="stat-label">لايكات</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon purple">💬</div><div class="stat-info"><div class="stat-value" id="stComments">-</div><div class="stat-label">تعليقات</div></div></div>
-            <div class="p-card stat-tile"><div class="stat-icon orange">🔁</div><div class="stat-info"><div class="stat-value" id="stShares">-</div><div class="stat-label">مشاركات</div></div></div>
-        </div>
-        <div class="p-card" id="spHealth" style="display:none;margin-top:14px"></div>
-
-        <div class="p-grid cols-2" style="margin-top:14px">
-            <div class="p-card"><div class="p-card-head"><h3>📈 النشر اليومي</h3><span class="p-card-sub" id="spDailySub"></span></div><div class="sp-bars" id="spDaily"></div><div class="sp-axis p-cell-muted" id="spDailyAxis"></div></div>
-            <div class="p-card"><div class="p-card-head"><h3>📊 حسب المنصة</h3></div><div id="spPlat" class="p-cell-muted">Loading...</div></div>
-        </div>
-        <div class="p-grid cols-2" style="margin-top:14px">
-            <div class="p-card"><div class="p-card-head"><h3>⏰ أفضل أوقات النشر</h3><span class="p-card-sub" id="spBestSub"></span></div><div id="spBest" class="p-cell-muted">Loading...</div></div>
-            <div class="p-card"><div class="p-card-head"><h3>🏆 أفضل المنشورات تفاعلًا</h3></div><div id="spTop" class="p-cell-muted">Loading...</div></div>
-        </div>
-        <div class="p-card" style="margin:14px 0 18px"><div class="p-card-head"><h3>🔗 الحسابات المربوطة</h3><div style="display:flex;gap:6px;flex-wrap:wrap"><a class="p-btn outline sm" href="/ads/connect/meta?for=social">+ Facebook / Instagram</a><a class="p-btn outline sm" href="/social/connect/tiktok">🎵 + TikTok</a></div></div><div id="spAccounts" class="p-cell-muted">Loading...</div></div>
-        <div class="p-card no-pad">
-            <div class="p-toolbar" style="padding:14px 16px 0;gap:8px;flex-wrap:wrap">
-                <input type="search" id="spQ" class="p-select" style="max-width:240px" placeholder="🔎 ابحث في النصوص...">
-                <select id="spFStatus" class="p-select" style="max-width:150px"><option value="">All statuses</option><option value="published">Published</option><option value="scheduled">Scheduled</option><option value="draft">Draft</option><option value="failed">Failed</option><option value="partial">Partially completed</option><option value="uncertain">Needs review</option></select>
-                <select id="spFPlat" class="p-select" style="max-width:150px"><option value="">All platforms</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="youtube">YouTube</option></select>
-            </div>
-            <div class="p-table-scroll"><table class="p-table" id="postsTable">
-                <thead><tr><th>Content</th><th>Published on</th><th>Engagement</th><th>Status</th><th>Date</th><th></th></tr></thead>
-                <tbody><tr class="p-loading-row"><td colspan="6">Loading...</td></tr></tbody>
-            </table></div>
-        </div>
-
-        <div class="p-card no-pad" style="margin-top:18px;">
-            <div class="p-card-head" style="padding:18px 20px 0;"><h3>📅 Content calendar</h3><span class="p-card-sub">Last week + next month</span></div>
-            <div class="sp-cal" id="calendarGrid"><span class="p-cell-muted">Loading...</span></div>
-        </div>
-
-        <div class="p-modal-overlay" id="newPostModal">
-            <div class="p-modal wide">
-                <div class="p-modal-head"><h3>New post</h3><button class="p-modal-close" onclick="document.getElementById('newPostModal').classList.remove('open')">×</button></div>
-                <div class="p-modal-body">
-                    <label>Topic (to generate text with AI)</label>
-                    <input type="text" id="topicInput" class="p-select" style="width:100%;margin-bottom:10px;" placeholder="Example: special offer for Hurghada trips">
-                    <button class="p-btn outline" id="aiCapBtn" onclick="generateCaption()">✨ Generate text with AI</button>
-                    <label style="margin-top:14px;display:block;">Post text</label>
-                    <textarea id="contentInput" rows="5" style="width:100%;" class="p-select"></textarea>
-
-                    <label style="margin-top:14px;display:block;">Image or video</label>
-                    <div class="sp-media">
-                        <div class="sp-prev" id="spPrev">&#128444;&#65039;</div>
-                        <div style="flex:1;min-width:200px">
-                            <div style="display:flex;gap:8px;flex-wrap:wrap">
-                                <label class="p-btn outline" style="margin:0;cursor:pointer">⬆️ ارفع من جهازك<input type="file" id="spFile" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" style="display:none"></label>
-                                <button type="button" class="p-btn outline" onclick="toggleLib()">🎨 من المكتبة</button>
-                                <button type="button" class="p-btn outline" id="spAlbumBtn" onclick="toggleAlbumMode()" title="اختار من 2 لـ 10 صور (ألبوم فيسبوك / كاروسيل إنستجرام)">🖼️ صور متعددة</button>
-                                <a class="p-btn outline" href="/creative-studio" target="_blank" rel="noopener">✨ Generate image or video AI ↗</a>
-                                <button type="button" class="p-btn ghost" id="spClear" style="display:none" onclick="clearMedia()">Remove</button>
-                            </div>
-                            <div id="spAlbumStrip"></div>
-                            <div class="p-cell-muted" id="spMediaNote" style="font-size:12px;margin-top:6px">صورة JPG/PNG/WEBP لحد 10 ميجا، أو فيديو MP4 لحد 100 ميجا. مقاس الصورة بيتظبط لإنستجرام تلقائي.</div>
-                        </div>
-                    </div>
-                    <div class="sp-lib" id="spLib" style="display:none"></div>
-
-                    <label style="margin-top:14px;display:block;">Publish on</label>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0"><button type="button" class="p-btn outline sm" onclick="refreshSocialTargets()">↻ تحديث الحسابات والصفحات</button><a class="p-btn outline sm" href="/ads/connect/meta?for=social">+ ربط صفحات Meta</a></div>
-                    <div id="targetsList" class="p-cell-muted">Loading connected pages...</div>
-                    <div id="ttPanel" class="tt-panel" hidden></div>
-                    <label style="margin-top:14px;display:block;">When?</label>
-                    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
-                        <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="spWhen" value="now" checked> Now</label>
-                        <label style="display:flex;gap:6px;align-items:center"><input type="radio" name="spWhen" value="later"> Schedule</label>
-                        <input type="datetime-local" id="spAt" class="p-select" style="display:none;max-width:240px">
-                    </div>
-                    <div class="p-cell-muted" style="font-size:12px;margin-top:6px">If you don't choose a page, the post will be saved as a draft.</div>
-                </div>
-                <div class="p-modal-foot">
-                    <button class="p-btn outline" onclick="document.getElementById('newPostModal').classList.remove('open')">Cancel</button>
-                    <button class="p-btn primary" id="spSubmit" onclick="createPost()">Publish</button>
-                </div>
-            </div>
-        </div>
-
-        <div class="p-modal-overlay" id="editPostModal">
-            <div class="p-modal">
-                <div class="p-modal-head"><h3>تعديل المنشور</h3><button class="p-modal-close" onclick="document.getElementById('editPostModal').classList.remove('open')">×</button></div>
-                <div class="p-modal-body">
-                    <label>Post text</label>
-                    <textarea id="editContent" rows="6" style="width:100%;" class="p-select"></textarea>
-                    <div id="editWhenBox" style="display:none;margin-top:14px">
-                        <label style="display:block">موعد جديد (اختياري)</label>
-                        <input type="datetime-local" id="editAt" class="p-select" style="max-width:260px">
-                    </div>
-                    <div class="p-cell-muted" style="font-size:12px;margin-top:8px">التعديل بيغيّر النص جوه المنصة بس، ومينفعش بعد ما المنشور يتنشر.</div>
-                </div>
-                <div class="p-modal-foot">
-                    <button class="p-btn outline" onclick="document.getElementById('editPostModal').classList.remove('open')">Cancel</button>
-                    <button class="p-btn primary" id="editSubmit" onclick="saveEdit()">Save</button>
-                </div>
-            </div>
-        </div>
-HTML;
-
-        $monthlyCss = htmlspecialchars(asset_v('/assets/css/social-monthly-plans.css'), ENT_QUOTES, 'UTF-8');
-        $monthlyJs = htmlspecialchars(asset_v('/assets/js/social-monthly-plans.js'), ENT_QUOTES, 'UTF-8');
-        $monthlyUid = (int)($this->user['id']??0);
-        $body = '<link rel="stylesheet" href="'.$monthlyCss.'"><section id="monthlySocialRoot" class="smp-root p-card" data-user-id="'.$monthlyUid.'" aria-label="Monthly social media plan"><p>Loading monthly plans… / جارِ تحميل الخطط الشهرية…</p></section><script defer src="'.htmlspecialchars(asset_v('/assets/js/site-photo-picker.js'), ENT_QUOTES, 'UTF-8').'"></script><script defer src="'.$monthlyJs.'"></script>'.$body;
-
-        $script = <<<'JS'
-(function () {
-    const P = window.Panel;
-    const esc = P.esc, fetchJSON = P.fetchJSON;
-    let media = null;      // {id, file_path, is_video}
-    let libLoaded = false;
-
-    const SP_ST = { draft: '<span class="pill">Draft</span>', scheduled: '<span class="pill">Scheduled</span>', pending: '<span class="pill">Scheduled</span>', publishing: '<span class="pill orange">Publishing</span>', partial:'<span class="pill orange">Partially completed</span>',uncertain:'<span class="pill orange">Outcome needs review</span>',published: '<span class="pill green">✔ Published</span>', failed: '<span class="pill red">Failed</span>' };
-    const PF = { facebook: '📘', instagram: '📸', tiktok: '🎵', youtube: '▶️' };
-    // التواريخ في الداتابيز UTC - بنعرضها بتوقيت جهاز العميل
-    const spLocal = s => window.Panel.formatDate ? window.Panel.formatDate(s) : (s || '-');
-    const isVid = p => /\.(mp4|mov)$/i.test(p || '');
-
-    function submitLabel() {
-        const later = (document.querySelector('input[name=spWhen]:checked') || {}).value === 'later';
-        const any = document.querySelectorAll('.targetCheckbox:checked').length > 0;
-        document.getElementById('spSubmit').textContent = !any ? 'Save as draft' : (later ? 'Schedule' : 'Publish Now');
-    }
-    document.addEventListener('change', e => {
-        if (!e.target) return;
-        if (e.target.name === 'spWhen') { const at = document.getElementById('spAt'); at.style.display = e.target.value === 'later' ? 'block' : 'none'; if (!at.value) { const d = new Date(Date.now() + 3600e3); d.setMinutes(0, 0, 0); at.value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); } }
-        if (e.target.name === 'spWhen' || e.target.classList.contains('targetCheckbox')) submitLabel();
-    });
-
-    window.openNewPost = function () { document.getElementById('newPostModal').classList.add('open'); submitLabel(); loadTargets(); };
-    window.refreshSocialTargets = async function () { await loadTargets(); P.toast('تم تحديث قائمة الحسابات', 'success'); };
-
-    // ALBUM-UI-BEGIN
-    // وضع الصور المتعددة: album = [{id,file_path,is_video}] بالترتيب، و media = الغلاف (أول صورة) للتوافق مع باقي الشاشة
-    let albumMode = false, album = [];
-    function paintMedia() {
-        const prev = document.getElementById('spPrev');
-        prev.innerHTML = (!media ? '&#128444;&#65039;' : (media.is_video ? '<video src="' + esc(media.file_path) + '" muted playsinline></video>' : '<img src="' + esc(media.file_path) + '" alt="">'))
-            + (album.length > 1 ? '<span class="sp-count">' + album.length + '</span>' : '');
-        const strip = document.getElementById('spAlbumStrip');
-        strip.innerHTML = album.map((m, i) => '<span class="sp-alb"><img src="' + esc(m.file_path) + '" alt=""><b>' + (i + 1) + '</b><i data-i="' + i + '" title="شيل">×</i></span>').join('');
-        strip.style.display = album.length ? 'flex' : 'none';
-        document.getElementById('spClear').style.display = (media || album.length) ? '' : 'none';
-        document.getElementById('spAlbumBtn').classList.toggle('on', albumMode);
-        document.querySelectorAll('#spLib button').forEach(b => b.classList.toggle('on', album.length ? album.some(a => a.id === +b.dataset.id) : (!!media && +b.dataset.id === media.id)));
-    }
-    function setMedia(m) { media = m; album = []; paintMedia(); }
-    function setAlbum(list) { album = list.slice(0, 10); media = album[0] || null; paintMedia(); }
-    window.toggleAlbumItem = function (item) {
-        if (item.is_video) { P.toast('الصور المتعددة للصور بس - الفيديو بيتنشر لوحده', 'error'); return; }
-        const i = album.findIndex(a => a.id === item.id);
-        if (i >= 0) setAlbum(album.filter((_, k) => k !== i));
-        else if (album.length >= 10) P.toast('الحد الأقصى 10 صور', 'error');
-        else setAlbum(album.concat([item]));
-    };
-    window.toggleAlbumMode = function () {
-        albumMode = !albumMode;
-        if (albumMode) { album = media && !media.is_video ? [media] : []; media = album[0] || null; }
-        else { media = album[0] || media; album = []; }
-        paintMedia();
-        if (albumMode && document.getElementById('spLib').style.display === 'none') window.toggleLib();
-    };
-    window.clearMedia = function () { albumMode = false; setMedia(null); document.getElementById('spFile').value = ''; };
-    document.addEventListener('click', e => {
-        const x = e.target && e.target.closest ? e.target.closest('#spAlbumStrip i') : null;
-        if (x) setAlbum(album.filter((_, k) => k !== +x.dataset.i));
-    });
-    // ALBUM-UI-END
-
-    document.getElementById('spFile').addEventListener('change', async e => {
-        const f = e.target.files && e.target.files[0];
-        if (!f) return;
-        const note = document.getElementById('spMediaNote');
-        const old = note.textContent;
-        note.textContent = 'جارِ الرفع...';
-        const fd = new FormData(); fd.append('file', f);
-        const res = await fetchJSON('/api/social/media', { method: 'POST', body: fd });
-        note.textContent = old;
-        if (res.success) { const it = res.data.item; (albumMode && !it.is_video) ? toggleAlbumItem(it) : setMedia(it); P.toast('اترفعت ✓', 'success'); libLoaded = false; }
-        else P.toast(res.error || 'Upload failed', 'error');
-    });
-
-    window.toggleLib = async function () {
-        const box = document.getElementById('spLib');
-        if (box.style.display !== 'none') { box.style.display = 'none'; return; }
-        box.style.display = 'grid';
-        if (libLoaded) return;
-        box.innerHTML = '<span class="p-cell-muted">Loading...</span>';
-        const res = await fetchJSON('/api/creative-studio/media');
-        const items = ((res.success && res.data.items) || []).filter(i => i.status === 'completed' && i.file_path);
-        libLoaded = true;
-        box.innerHTML = items.length ? items.map(i => '<button type="button" data-id="' + i.id + '" data-path="' + esc(i.file_path) + '" title="' + esc(i.prompt || '') + '">' + (isVid(i.file_path) || i.type === 'short_video' ? '<video src="' + esc(i.file_path) + '" muted></video>' : '<img loading="lazy" src="' + esc(i.thumbnail_path || i.file_path) + '" alt="">') + '</button>').join('')
-            : '<span class="p-cell-muted">مفيش صور في المكتبة لسه. <a href="/creative-studio">ولّد صورة من Creative Studio</a> أو ارفع من جهازك.</span>';
-        box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { const it = { id: +b.dataset.id, file_path: b.dataset.path, is_video: isVid(b.dataset.path) || !!b.querySelector('video') }; albumMode ? toggleAlbumItem(it) : setMedia(it); }));
-        paintMedia();
-    };
-
-    async function loadTargets() {
-        const box = document.getElementById('targetsList');
-        box.textContent = 'جارِ تحديث الصفحات المرتبطة...';
-        const res = await fetchJSON('/api/social/connections?_=' + Date.now(), { cache: 'no-store' });
-        if (!res.success) { box.innerHTML = '<div class="alert alert-danger">تعذر تحميل الصفحات: ' + esc(res.error || '') + ' <a href="#" onclick="location.reload();return false">حدّث الصفحة</a></div>'; return; }
-        const off = (res.data.disconnected || []);
-        const offHtml = off.length ? '<div class="alert alert-warning" style="margin-top:8px;font-size:12.5px">⚠️ صفحات محتاجة إعادة ربط: ' + off.map(c => (PF[c.platform] || '') + ' <b>' + esc(c.name || c.platform) + '</b>' + (c.last_error ? ' <span class="p-cell-muted">(' + esc(c.last_error) + ')</span>' : '')).join(', ') + ' — <a href="/ads/connect/meta?for=social">اربط تاني</a></div>' : '';
-        if (res.data.connections && res.data.connections.length) {
-            const miss = res.data.missing_features || [];
-            box.innerHTML = (miss.length ? '<div class="alert alert-warning" style="margin-bottom:10px;">⚠️ النشر مش هيشتغل على: <b>' + miss.map(esc).join(', ') + '</b> - صلاحيات ناقصة من Meta. <a href="/ads/connect/meta?for=social&rerequest=1">اربط تاني ووافق على كل الصلاحيات</a></div>' : '')
-                + res.data.connections.map(c => `
-                <label style="display:flex;align-items:center;gap:8px;margin:6px 0;color:var(--panel-text)">
-                    <input type="checkbox" class="targetCheckbox" value="${c.id}" data-platform="${esc(c.platform)}">
-                    ${PF[c.platform] || '•'} ${esc(c.name)} <span class="p-cell-muted" style="font-size:11.5px">(${c.platform === 'instagram' ? 'Instagram' : c.platform === 'facebook' ? 'Page Facebook' : esc(c.platform)})</span>${(c.missing || []).length ? ' <span class="p-cell-muted" title="' + esc(c.missing.join(', ')) + '">⚠️ صلاحية ناقصة</span>' : ''}
-                </label>`).join('')
-                + '<div style="margin-top:6px"><a class="p-cell-muted" style="font-size:12px" href="/ads/connect/meta?for=social">صفحة ناقصة؟ اربط تاني واختار كل الصفحات</a></div>' + offHtml;
-        } else {
-            const lc = res.data.last_connect;
-            const diag = lc ? '<div class="p-cell-muted" style="font-size:12px;margin-top:8px">آخر ربط (' + esc(lc.at || '') + '): Meta رجّعت ' + (lc.pages || 0) + ' Page' + (lc.names && lc.names.length ? ' (' + lc.names.map(esc).join(', ') + ')' : '') + (lc.error ? ' — Error: ' + esc(lc.error) : '') + (lc.skipped ? ' — صفحات من غير صلاحية: ' + lc.skipped : '') + '</div>' : '';
-            box.innerHTML = (off.length ? '' : '<div class="alert alert-warning">لم يتم العثور على صفحات قابلة للنشر. ربط حساب Meta لا يعني بالضرورة منح صلاحية إدارة الصفحات. تأكد من امتلاك صلاحية الصفحة، ثم أعد الربط مع اختيار الصفحات والموافقة على الأذونات.</div>') + '<a class="p-btn primary sm" href="/ads/connect/meta?for=social">اربط فيسبوك وإنستجرام</a>' + offHtml + diag;
-        }
-        if (new URLSearchParams(location.search).get('meta') === 'connected' && res.data.connections && res.data.connections.length) P.toast('تم العثور على صفحات النشر المرتبطة ✓', 'success');
-    }
-
-    const nf = n => Number(n || 0).toLocaleString((document.documentElement.lang || 'ar').slice(0, 2) === 'ar' ? 'ar-EG' : 'en-GB');
-    const PN = { facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
-    const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const utc = s => new Date(String(s).replace(' ', 'T') + 'Z');
-    let postsById = {};
-    let autoRefreshed = false;
-
-    function engCell(p) {
-        const t = (p.targets || []).filter(x => x.status === 'published');
-        if (!t.length) return '<span class="p-cell-muted">-</span>';
-        return '<div class="sp-eng">' + t.map(x => {
-            if (x.metrics_state === 'ok') return (PF[x.platform] || '•') + ' 👍 ' + nf(x.likes) + ' · 💬 ' + nf(x.comments) + ' · 🔁 ' + nf(x.shares) + (x.reach !== null && x.reach !== undefined ? ' · 👁 ' + nf(x.reach) + ' <span class="p-cell-muted">مشاهد فريد</span>' : (x.insights_note ? ' · <span class="p-cell-muted" title="' + esc(x.insights_note) + '">👁 غير متاح</span>' : ''));
-            if (x.metrics_state === 'unavailable') return (PF[x.platform] || '•') + ' <span class="p-cell-muted" title="' + esc(x.metrics_note || '') + '">Unavailable</span>';
-            return (PF[x.platform] || '•') + ' <span class="p-cell-muted">' + (x.platform === 'facebook' || x.platform === 'instagram' ? 'بيتحدّث...' : '-') + '</span>';
-        }).join('<br>') + '</div>';
-    }
-
-    function targetsCell(p) {
-        const t = p.targets || [];
-        if (!t.length) return '<span class="p-cell-muted">-</span>';
-        return t.map(x => '<div><span class="sp-tgt">' + (PF[x.platform] || '•') + ' ' + esc(x.name || x.platform) + ' ' + (SP_ST[x.status] || esc(x.status))
-            + (x.status === 'published' && x.permalink ? ' <a href="' + esc(x.permalink) + '" target="_blank" rel="noopener">Open ↗</a>' : '')
-            + (x.scheduled_at && x.status !== 'published' ? ' <span class="p-cell-muted">' + esc(spLocal(x.scheduled_at)) + '</span>' : '')
-            + '</span>' + ((['failed','uncertain'].includes(x.status) || x.next_retry_at) && x.last_error ? '<div class="sp-err">' + esc(x.last_error) + '</div>' : '') + '</div>').join('');
-    }
-
-    function filterQS() {
-        const q = new URLSearchParams();
-        const v = id => (document.getElementById(id) || {}).value || '';
-        if (v('spQ').trim()) q.set('q', v('spQ').trim());
-        if (v('spFStatus')) q.set('status', v('spFStatus'));
-        if (v('spFPlat')) q.set('platform', v('spFPlat'));
-        return q.toString();
-    }
-
-    let loadTimer = null;
-    async function load() {
-        clearTimeout(loadTimer);
-        const res = await fetchJSON('/api/social/posts?' + filterQS());
-        const tbody = document.querySelector('#postsTable tbody');
-        if (res.success && res.data.posts && res.data.posts.length) {
-            postsById = {};
-            tbody.innerHTML = res.data.posts.map(p => {
-                postsById[p.id] = p;
-                const failed = (p.targets || []).some(x => x.status === 'failed');
-                const uncertain = (p.targets || []).some(x => x.status === 'uncertain');
-                const busy = (p.targets || []).some(x => x.status === 'publishing');
-                const editable = ['draft', 'scheduled', 'failed'].includes(p.status) && !busy;
-                return `<tr>
-                    <td>${p.media_path ? ((p.media_type === 'short_video' || isVid(p.media_path)) ? '🎬 ' : '<img src="' + esc(p.media_path) + '" alt="" style="width:38px;height:38px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-inline-end:6px">') : ''}${esc((p.content || '').slice(0, 80))}</td>
-                    <td>${targetsCell(p)}</td>
-                    <td>${engCell(p)}</td>
-                    <td>${SP_ST[p.status] || esc(p.status)}</td>
-                    <td class="p-cell-muted">${esc(spLocal(p.created_at))}</td>
-                    <td style="white-space:nowrap">${failed ? '<button class="p-btn outline xs" onclick="retryPost(' + p.id + ', this)">↻ Retry</button> ' : ''}${uncertain ? '<button class="p-btn outline xs" onclick="reconcilePost(' + p.id + ', this)" title="نسأل فيسبوك/إنستجرام: المنشور اتنشر فعلًا؟">🔍 تحقق</button> <button class="p-btn ghost xs" onclick="resolvePost(' + p.id + ')" title="حسم يدوي">✋</button> ' : ''}${editable ? '<button class="p-btn ghost xs" onclick="editPost(' + p.id + ')" title="Edit">✏️</button>' : ''}<button class="p-btn ghost xs" onclick="duplicatePost(' + p.id + ')" title="نسخة كمسودة">📄</button>${!busy ? '<button class="p-btn ghost xs" onclick="deletePost(' + p.id + ')" title="مسح المنشور">🗑</button>' : ''}</td>
-                </tr>`;
-            }).join('');
-            if (res.data.posts.some(p => p.status === 'publishing')) loadTimer = setTimeout(load, 8000);
-            // أول مرة: لو فيه منشورات منشورة لسه مالهاش إحصائيات نسحبها تلقائي (بدون إزعاج)
-            const needs = res.data.posts.some(p => (p.targets || []).some(x => x.status === 'published' && (x.platform === 'facebook' || x.platform === 'instagram') && !x.metrics_at));
-            if (needs && !autoRefreshed) { autoRefreshed = true; refreshMetrics(false); }
-        } else {
-            tbody.innerHTML = '<tr><td colspan="6" class="p-empty">' + (filterQS() ? 'مفيش نتايج بالفلتر ده' : 'No posts yet') + '</td></tr>';
-        }
-    }
-
-    // ---------- الإحصائيات ----------
-    function bestTimes(samples) {
-        if (!samples || samples.length < 3) return null;
-        const hasScore = samples.some(s => +s.score > 0);
-        const m = {};
-        samples.forEach(s => {
-            const d = utc(s.at); if (isNaN(d)) return;
-            const k = d.getDay() + '-' + d.getHours();
-            m[k] = m[k] || { dow: d.getDay(), h: d.getHours(), n: 0, sc: 0 };
-            m[k].n++; m[k].sc += +s.score || 0;
-        });
-        return Object.values(m).sort((a, b) => hasScore ? (b.sc / b.n) - (a.sc / a.n) || b.n - a.n : b.n - a.n).slice(0, 3).map(x => ({ ...x, hasScore }));
-    }
-    const hLabel = h => (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? ' ص' : ' م');
-
-    // HEALTH-UI-BEGIN
-    // لوحة صحة النشر: بتعرض نسبة النجاح لكل صفحة + حالة الربط + أكتر الأخطاء. الصفحات اللي فيها مشكلة بتظهر الأول.
-    const HP_ERR = { token: 'ربط/توكن', permission: 'صلاحيات', rate_limit: 'حد استخدام', blocked: 'حظر مؤقت', media: 'وسائط', param: 'بيانات المنشور', transient: 'عطل مؤقت', unknown: 'غير معروف' };
-    const HP_PLAT = { facebook: 'فيسبوك', instagram: 'إنستجرام', tiktok: 'تيك توك', youtube: 'يوتيوب' };
-    function healthHtml(pages) {
-        if (!pages || !pages.length) return '';
-        const relink = ' <a href="/ads/connect/meta?for=social">اربط تاني</a>';
-        const rows = pages.map(p => {
-            const h = p.connection_health || {};
-            const rate = p.success_rate;
-            const cls = rate === null || rate === undefined ? '' : (rate >= 95 ? 'ok' : (rate >= 80 ? 'warn' : 'bad'));
-            let conn = '';
-            if (h.state === 'expired' || h.state === 'invalid') conn = '<span class="sp-hp bad">❌ محتاج إعادة ربط</span>' + relink;
-            else if (h.state === 'missing_permissions') conn = '<span class="sp-hp bad">⚠️ صلاحيات ناقصة: ' + esc(h.missing_scopes || '') + '</span>' + relink;
-            else if (h.state === 'expiring') conn = '<span class="sp-hp warn">⏳ الربط قرّب ينتهي</span>' + relink;
-            else if (h.state === 'ok') conn = '<span class="sp-hp ok">✅ الربط سليم</span>';
-            const errs = Object.entries(p.top_errors || {}).slice(0, 3).map(([k, v]) => esc(HP_ERR[k] || k) + ' ×' + (+v)).join('، ');
-            const stats = p.attempts > 0
-                ? '<span class="sp-hp ' + cls + '">' + rate + '% نجاح</span> <span class="p-cell-muted">(' + (+p.attempts) + ' محاولة' + (p.avg_publish_ms ? ' · متوسط ' + (p.avg_publish_ms / 1000).toFixed(1) + ' ث' : '') + ')</span>'
-                : '<span class="p-cell-muted">مفيش محاولات نشر في الفترة دي</span>';
-            return '<div class="sp-hrow' + (p.alert ? ' alert' : '') + '"><span class="nm">' + (p.alert ? '🚨 ' : '') + esc(HP_PLAT[p.platform] || p.platform || '') + ' · ' + esc(p.name || '') + '</span>'
-                + stats + (errs ? ' <span class="p-cell-muted">أخطاء: ' + errs + '</span>' : '') + (conn ? ' ' + conn : '') + '</div>';
-        }).join('');
-        return '<div style="padding:14px 16px"><b>🩺 صحة النشر</b>' + rows + '</div>';
-    }
-    // HEALTH-UI-END
-
-    async function loadHealth() {
-        const box = document.getElementById('spHealth');
-        if (!box) return;
-        try {
-            const days = +document.getElementById('spDays').value || 30;
-            const res = await fetchJSON('/api/social/health?days=' + days);
-            const html = res.success ? healthHtml(res.data.pages) : ''; // لو الـ migration لسه ما اتشغّلتش بنخفي اللوحة بهدوء
-            box.innerHTML = html; box.style.display = html ? '' : 'none';
-        } catch (e) { box.style.display = 'none'; }
-    }
-
-    async function loadStats() {
-        loadHealth();
-        const days = +document.getElementById('spDays').value || 30;
-        const res = await fetchJSON('/api/social/stats?days=' + days);
-        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-        if (!res.success) {
-            ['stTotal', 'stPub', 'stSched', 'stFail', 'stReach', 'stLikes', 'stComments', 'stShares'].forEach(i => set(i, '-'));
-            document.getElementById('spPlat').innerHTML = '<span class="p-cell-muted">' + esc(res.error || 'تعذر تحميل الإحصائيات') + '</span>';
-            document.getElementById('spBest').innerHTML = document.getElementById('spTop').innerHTML = '';
-            return;
-        }
-        const d = res.data, st = d.by_status || {}, e = d.engagement || {};
-        set('stTotal', nf(d.total_posts)); set('stPub', nf(st.published)); set('stRate', d.success_rate !== null ? '(' + nf(d.success_rate) + '% Success)' : '');
-        set('stSched', nf((st.scheduled || 0) + (st.publishing || 0)) + ' / ' + nf(st.draft)); set('stFail', nf(st.failed));
-        const hasM = (e.measured || 0) > 0;
-        set('stReach', hasM ? nf(e.reach) : '-'); set('stLikes', hasM ? nf(e.likes) : '-'); set('stComments', hasM ? nf(e.comments) : '-'); set('stShares', hasM ? nf(e.shares) : '-');
-        if (e.last_fetch) document.getElementById('spMetricsNote').textContent = 'Last updated للتفاعل: ' + spLocal(e.last_fetch);
-
-        // النشر اليومي
-        const ser = d.daily || [], max = Math.max(1, ...ser.map(x => x.count));
-        document.getElementById('spDaily').innerHTML = ser.map(x => '<i class="' + (x.count ? '' : 'z') + '" style="height:' + Math.max(2, Math.round(x.count / max * 100)) + '%" title="' + esc(x.date) + ': ' + x.count + '"></i>').join('');
-        document.getElementById('spDailyAxis').innerHTML = ser.length ? '<span>' + esc(ser[0].date.slice(5)) + '</span><span>' + esc(ser[ser.length - 1].date.slice(5)) + '</span>' : '';
-        document.getElementById('spDailySub').textContent = nf(ser.reduce((a, x) => a + x.count, 0)) + ' Publish';
-
-        // حسب المنصة
-        const pl = Object.entries(d.by_platform || {});
-        document.getElementById('spPlat').innerHTML = pl.length ? pl.map(([k, v]) => {
-            const tot = Math.max(1, v.total);
-            return '<div class="sp-prow"><span class="nm">' + (PF[k] || '•') + ' ' + esc(PN[k] || k) + '</span><div class="sp-meter" title="Published ' + v.published + ' · Failed ' + v.failed + ' · Scheduled ' + v.scheduled + '"><b style="width:' + v.published / tot * 100 + '%;background:#22c55e"></b><b style="width:' + v.scheduled / tot * 100 + '%;background:#6366f1"></b><b style="width:' + v.failed / tot * 100 + '%;background:#ef4444"></b></div><span style="width:34px;text-align:end">' + nf(v.total) + '</span></div>';
-        }).join('') + '<div class="p-cell-muted" style="font-size:11.5px">🟢 Published &nbsp;🟣 Scheduled &nbsp;🔴 Failed</div>' : '<span class="p-cell-muted">مفيش بيانات في الفترة دي</span>';
-
-        // أفضل الأوقات (بتوقيت جهازك)
-        const bt = bestTimes(d.samples);
-        document.getElementById('spBestSub').textContent = bt ? (bt[0].hasScore ? 'حسب متوسط التفاعل' : 'حسب عدد مرات النشر') : '';
-        document.getElementById('spBest').innerHTML = bt ? bt.map((x, i) => '<div class="sp-prow"><span style="font-size:18px">' + ['🥇', '🥈', '🥉'][i] + '</span><b>' + DAYS[x.dow] + '</b><span>' + hLabel(x.h) + '</span><span class="p-cell-muted" style="margin-inline-start:auto">' + nf(x.n) + ' Post</span></div>').join('') : '<span class="p-cell-muted">محتاج 3 منشورات منشورة على الأقل عشان نقترح أفضل ميعاد.</span>';
-
-        // أفضل المنشورات
-        const top = d.top_posts || [];
-        document.getElementById('spTop').innerHTML = top.length ? top.map(x => '<div class="sp-prow"><span>' + (PF[x.platform] || '•') + '</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x.content) + '</span><span class="sp-eng">👍 ' + nf(x.likes) + ' · 💬 ' + nf(x.comments) + ' · 🔁 ' + nf(x.shares) + '</span></div>').join('') : '<span class="p-cell-muted">لسه مفيش بيانات تفاعل. اضغط «تحديث التفاعل من Meta».</span>';
-    }
-
-    window.refreshMetrics = async function (manual) {
-        const btn = document.getElementById('spMetricsBtn');
-        if (manual) { btn.disabled = true; btn.textContent = 'جارِ السحب من Meta...'; }
-        const res = await fetchJSON('/api/social/metrics/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: manual ? 1 : 0 }) });
-        btn.disabled = false; btn.textContent = '↻ Update Engagement of Meta';
-        if (res.success) {
-            if (manual) P.toast(res.data.checked ? 'Updated Engagement for ' + res.data.updated + ' Post' + (res.data.unavailable ? ' (' + res.data.unavailable + ' غير متاح - غالبًا صلاحية read_insights ناقصة)' : '') : 'مفيش منشورات منشورة على فيسبوك/إنستجرام للتحديث', res.data.unavailable ? 'error' : 'success');
-            loadStats(); load();
-        } else if (manual) P.toast(res.error || 'Could not update', 'error');
-    };
-
-    // ---------- الحسابات ----------
-    async function loadAccounts() {
-        const box = document.getElementById('spAccounts');
-        const res = await fetchJSON('/api/social/connections?_=' + Date.now(), { cache: 'no-store' });
-        if (!res.success) { box.textContent = res.error || 'Could not load'; return; }
-        const on = res.data.connections || [], off = res.data.disconnected || [];
-        box.innerHTML = (on.length ? on.map(c => '<span class="sp-chip">' + (PF[c.platform] || '•') + ' ' + esc(c.name || c.platform) + ' <span style="color:#22c55e">●</span></span>').join('') : '<span class="p-cell-muted">مفيش حسابات متصلة. اربط فيسبوك/إنستجرام من الزرار فوق.</span>')
-            + off.map(c => '<span class="sp-chip off" title="' + esc(c.last_error || '') + '">' + (PF[c.platform] || '•') + ' ' + esc(c.name || c.platform) + ' — محتاج إعادة ربط</span>').join('');
-    }
-
-    // ---------- التقويم (شبكة شهرية) ----------
-    async function loadCalendar() {
-        const res = await fetchJSON('/api/social/calendar');
-        const box = document.getElementById('calendarGrid');
-        const rows = (res.success && res.data.items) || [];
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        const start = new Date(today); start.setDate(start.getDate() - 7);
-        start.setDate(start.getDate() - ((start.getDay() + 1) % 7)); // الأسبوع يبدأ السبت
-        const key = d => d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
-        const byDay = {};
-        rows.forEach(r => { const d = utc(r.scheduled_at); if (!isNaN(d)) (byDay[key(d)] = byDay[key(d)] || []).push({ d, r }); });
-        let html = ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(n => '<div class="h">' + n + '</div>').join('');
-        for (let i = 0; i < 42; i++) {
-            const d = new Date(start); d.setDate(start.getDate() + i);
-            const ev = (byDay[key(d)] || []).sort((a, b) => a.d - b.d);
-            html += '<div class="d' + (+d === +today ? ' today' : '') + (d < today ? ' out' : '') + '"><div class="n">' + d.getDate() + (d.getDate() === 1 ? ' / ' + (d.getMonth() + 1) : '') + '</div>'
-                + ev.slice(0, 3).map(x => '<span class="e ' + esc(x.r.status) + '" title="' + esc((x.r.content || '').slice(0, 120)) + '">' + (PF[x.r.platform] || '•') + ' ' + x.d.toLocaleTimeString((document.documentElement.lang || 'ar').slice(0, 2) === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB', { hour: 'numeric', minute: '2-digit' }) + ' ' + esc((x.r.content || '').slice(0, 14)) + '</span>').join('')
-                + (ev.length > 3 ? '<span class="p-cell-muted">+' + (ev.length - 3) + '</span>' : '') + '</div>';
-        }
-        box.innerHTML = html;
-    }
-
-    // ---------- Edit / Copy ----------
-    let editId = null;
-    window.editPost = function (id) {
-        const p = postsById[id]; if (!p) return;
-        editId = id;
-        document.getElementById('editContent').value = p.content || '';
-        document.getElementById('editAt').value = '';
-        document.getElementById('editWhenBox').style.display = (p.targets || []).some(x => x.status === 'scheduled') ? 'block' : 'none';
-        document.getElementById('editPostModal').classList.add('open');
-    };
-    window.saveEdit = async function () {
-        const content = document.getElementById('editContent').value.trim();
-        if (!content) { P.toast('Write Post text', 'error'); return; }
-        const atVal = document.getElementById('editAt').value;
-        const btn = document.getElementById('editSubmit'); btn.disabled = true;
-        const res = await fetchJSON('/api/social/posts/' + editId + '/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, scheduled_at: atVal || '' }) });
-        btn.disabled = false;
-        if (res.success) { document.getElementById('editPostModal').classList.remove('open'); P.toast('اتحفظ التعديل ✔', 'success'); load(); loadCalendar(); }
-        else P.toast(res.error || 'Could not save', 'error');
-    };
-    window.duplicatePost = async function (id) {
-        const res = await fetchJSON('/api/social/posts/' + id + '/duplicate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        if (res.success) { P.toast('اتعملت نسخة كمسودة - عدّلها وانشرها', 'success'); load(); loadStats(); } else P.toast(res.error || 'Could not', 'error');
-    };
-
-    window.generateCaption = async function () {
-        const topic = document.getElementById('topicInput').value.trim();
-        if (!topic) { P.toast('اكتب الموضوع الأول', 'error'); return; }
-        const btn = document.getElementById('aiCapBtn'); btn.disabled = true;
-        const res = await fetchJSON('/api/social/generate-caption', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic, platform: 'instagram', website_id: P.getCurrentWebsiteId ? P.getCurrentWebsiteId() : null }) });
-        btn.disabled = false;
-        if (res.success) document.getElementById('contentInput').value = res.data.content;
-        else P.toast(res.error || 'Generation failed', 'error');
-    };
-
-    // ---- شاشة النشر على تيك توك (شروط TikTok Content Posting API)
-    let tt = null; // بيانات الحساب من تيك توك
-    const TT_PRIV = { PUBLIC_TO_EVERYONE: 'الكل (Public)', MUTUAL_FOLLOW_FRIENDS: 'الأصدقاء', FOLLOWER_OF_CREATOR: 'المتابعين', SELF_ONLY: 'أنا بس (Private)' };
-    async function renderTikTok() {
-        const panel = document.getElementById('ttPanel');
-        const cb = document.querySelector('.targetCheckbox[data-platform="tiktok"]:checked');
-        if (!cb) { panel.hidden = true; tt = null; return; }
-        panel.hidden = false;
-        if (tt && tt.cid === cb.value) return;
-        panel.innerHTML = '<span class="p-cell-muted">بنجيب بيانات حساب تيك توك...</span>';
-        const res = await fetchJSON('/api/social/tiktok/creator-info?connection_id=' + encodeURIComponent(cb.value));
-        if (!res.success) { panel.innerHTML = '<div class="alert alert-danger">' + esc(res.error || 'تعذر الوصول لتيك توك') + ' <a href="/social/connect/tiktok">اربط تيك توك تاني</a></div>'; tt = null; return; }
-        tt = Object.assign({ cid: cb.value }, res.data);
-        const opt = (k, label, disabled) => '<label class="' + (disabled ? 'off' : '') + '"><input type="checkbox" id="tt_' + k + '"' + (disabled ? ' disabled' : '') + '> ' + label + (disabled ? ' <span class="p-cell-muted">(مقفولة من إعدادات حسابك)</span>' : '') + '</label>';
-        panel.innerHTML = '<div class="tt-head">' + (tt.avatar ? '<img src="' + esc(tt.avatar) + '" alt="" referrerpolicy="no-referrer">' : '🎵') + '<div><b>هيتنشر على تيك توك: ' + esc(tt.nickname) + '</b>' + (tt.username ? '<div class="p-cell-muted" dir="ltr">@' + esc(tt.username) + '</div>' : '') + '</div></div>'
-            + '<label style="display:block;font-size:13px">مين يقدر يشوف الفيديو؟ <select id="tt_privacy" class="p-select" style="max-width:260px;margin-top:4px;display:block"><option value="">اختار...</option>' + tt.privacy_level_options.map(o => '<option value="' + esc(o) + '">' + esc(TT_PRIV[o] || o) + '</option>').join('') + '</select></label>'
-            + '<div class="tt-row">' + opt('comment', 'السماح بالتعليقات', tt.comment_disabled) + opt('duet', 'السماح بالـ Duet', tt.duet_disabled) + opt('stitch', 'السماح بالـ Stitch', tt.stitch_disabled) + '</div>'
-            + '<label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:6px"><input type="checkbox" id="tt_commercial"> الفيديو ده بيروّج لبراند أو منتج أو خدمة (Disclose commercial content)</label>'
-            + '<div id="tt_comm_box" class="tt-sub" hidden><label style="display:flex;gap:6px;font-size:13px"><input type="checkbox" id="tt_brand_organic"> علامتك التجارية (Your brand) — هيظهر عليه "Promotional content"</label><label style="display:flex;gap:6px;font-size:13px;margin-top:4px"><input type="checkbox" id="tt_brand_content"> محتوى مدفوع لبراند تاني (Branded content) — هيظهر عليه "Paid partnership"</label></div>'
-            + '<div class="tt-note p-cell-muted" id="tt_consent"></div>'
-            + (tt.max_video_post_duration_sec ? '<div class="tt-note p-cell-muted">أقصى مدة للفيديو على حسابك: ' + Math.floor(tt.max_video_post_duration_sec / 60) + ' دقيقة. تيك توك بيقبل فيديو بس، وممكن ياخد كام دقيقة لحد ما يظهر على البروفايل.</div>' : '');
-        ttConsent();
-    }
-    function ttConsent() {
-        const box = document.getElementById('tt_consent'); if (!box) return;
-        const bc = document.getElementById('tt_brand_content')?.checked;
-        box.innerHTML = 'بالنشر انت موافق على ' + (bc ? '<a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener">Branded Content Policy</a> و' : '') + '<a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a> الخاصة بتيك توك.'
-            + '<br><span dir="ltr">By posting, you agree to TikTok\'s ' + (bc ? 'Branded Content Policy and ' : '') + 'Music Usage Confirmation.</span>';
-        const priv = document.getElementById('tt_privacy');
-        if (priv) { const self = [...priv.options].find(o => o.value === 'SELF_ONLY'); if (self) { self.disabled = !!bc; self.textContent = TT_PRIV.SELF_ONLY + (bc ? ' — مش متاح مع المحتوى المدفوع' : ''); if (bc && priv.value === 'SELF_ONLY') priv.value = ''; } }
-    }
-    document.addEventListener('change', e => {
-        if (!e.target) return;
-        if (e.target.classList.contains('targetCheckbox')) renderTikTok();
-        if (e.target.id === 'tt_commercial') { document.getElementById('tt_comm_box').hidden = !e.target.checked; if (!e.target.checked) { document.getElementById('tt_brand_organic').checked = false; document.getElementById('tt_brand_content').checked = false; } ttConsent(); }
-        if (e.target.id === 'tt_brand_content' || e.target.id === 'tt_brand_organic') ttConsent();
-    });
-    function tikTokOptions() {
-        if (!document.querySelector('.targetCheckbox[data-platform="tiktok"]:checked')) return { ok: true, value: null };
-        if (!tt) return { ok: false, error: 'استنى لحد ما بيانات حساب تيك توك تظهر' };
-        if (!media || !media.is_video) return { ok: false, error: 'تيك توك بيقبل فيديو بس - اختار فيديو' };
-        const v = id => document.getElementById(id);
-        if (!v('tt_privacy').value) return { ok: false, error: 'اختار مين يقدر يشوف الفيديو على تيك توك' };
-        const commercial = v('tt_commercial').checked;
-        if (commercial && !v('tt_brand_organic').checked && !v('tt_brand_content').checked) return { ok: false, error: 'حدد نوع المحتوى التجاري، أو شيل علامة "بيروّج لبراند"' };
-        const prev = document.querySelector('#spPrev video');
-        if (prev && tt.max_video_post_duration_sec && prev.duration && prev.duration > tt.max_video_post_duration_sec) return { ok: false, error: 'الفيديو أطول من المسموح على حسابك في تيك توك' };
-        return { ok: true, value: { privacy_level: v('tt_privacy').value, allow_comment: !!v('tt_comment')?.checked, allow_duet: !!v('tt_duet')?.checked, allow_stitch: !!v('tt_stitch')?.checked, commercial, brand_organic: v('tt_brand_organic').checked, brand_content: v('tt_brand_content').checked } };
-    }
-
-    window.createPost = async function () {
-        const content = document.getElementById('contentInput').value.trim();
-        if (!content) { P.toast('Write Post text', 'error'); return; }
-        const later = (document.querySelector('input[name=spWhen]:checked') || {}).value === 'later';
-        const atVal = document.getElementById('spAt').value;
-        if (later && !atVal) { P.toast('Pick a publish time', 'error'); return; }
-        const checked = Array.from(document.querySelectorAll('.targetCheckbox:checked'));
-        const albumIds = album.length >= 2 ? album.map(a => a.id) : null;
-        if (albumIds && checked.some(cb => ['tiktok', 'youtube'].includes(cb.dataset.platform))) { P.toast('الصور المتعددة لفيسبوك وإنستجرام بس - شيل تيك توك/يوتيوب أو اختار صورة واحدة', 'error'); return; }
-        if (!media && checked.some(cb => cb.dataset.platform === 'instagram')) { P.toast('إنستجرام محتاج صورة أو فيديو - ارفع صورة الأول', 'error'); return; }
-        const ttOpts = tikTokOptions();
-        if (!ttOpts.ok) { P.toast(ttOpts.error, 'error'); return; }
-        const scheduledAt = later ? atVal : null; // UTC
-        const targets = checked.map(cb => ({ platform_connection_id: parseInt(cb.value, 10), scheduled_at: scheduledAt }));
-        const btn = document.getElementById('spSubmit'); btn.disabled = true; const lbl = btn.textContent; btn.textContent = targets.length && !later ? 'Publishing...' : 'Saving...';
-        const res = await fetchJSON('/api/social/posts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, targets, media_item_id: media ? media.id : null, media_item_ids: albumIds, tiktok: ttOpts.value }) });
-        btn.disabled = false; btn.textContent = lbl;
-        if (res.success) {
-            document.getElementById('newPostModal').classList.remove('open');
-            const st = res.data.post && res.data.post.status;
-            P.toast(!targets.length ? 'Saved as draft' : (later ? 'Scheduled ✔' : st === 'published' ? 'Published ✔' : st === 'failed' ? 'النشر فشل - شوف السبب في الجدول' : (ttOpts.value ? 'اتبعت لتيك توك ✔ الفيديو ممكن ياخد كام دقيقة لحد ما يظهر على البروفايل' : 'Publishing...')), st === 'failed' ? 'error' : 'success');
-            document.getElementById('contentInput').value = ''; document.getElementById('topicInput').value = ''; clearMedia();
-            load(); loadCalendar(); loadStats();
-        } else {
-            P.toast(res.error || 'Save failed', 'error');
-        }
-    };
-
-    window.retryPost = async function (id, btn) {
-        if (btn) { btn.disabled = true; btn.textContent = 'Publishing...'; }
-        const res = await fetchJSON('/api/social/posts/' + id + '/retry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        if (res.success) P.toast(res.data.status === 'published' ? 'Published ✔' : res.data.status === 'failed' ? 'لسه فاشل - شوف السبب' : 'Publishing...', res.data.status === 'failed' ? 'error' : 'success');
-        else P.toast(res.error || 'Could not', 'error');
-        load();
-    };
-
-    window.deletePost = async function (id) {
-        const p = postsById[id] || {};
-        const onFb = (p.targets || []).some(x => x.status === 'published' && x.platform === 'facebook');
-        let remote = false;
-        if (onFb) {
-            // OK = يتمسح من فيسبوك كمان | Cancel = نسأل تاني (مسح من المنصة بس أو إلغاء)
-            remote = confirm('المنشور منشور على فيسبوك.\nOK = امسحه من فيسبوك ومن المنصة\nCancel = خيارات تانية');
-            if (!remote && !confirm('تمسحه من المنصة بس (هيفضل ظاهر على فيسبوك)؟')) return;
-        } else if (!confirm('مسح المنشور من المنصة؟ (مش هيتمسح من إنستجرام لو كان اتنشر - Meta ما بتسمحش بحذفه من هنا)')) return;
-        const res = await fetchJSON('/api/social/posts/' + id + '/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remote }) });
-        if (res.success) { P.toast('اتمسح', 'success'); load(); loadCalendar(); loadStats(); } else P.toast(res.error || 'Could not', 'error');
-    };
-
-    window.reconcilePost = async function (id, btn) {
-        if (btn) { btn.disabled = true; btn.textContent = '...'; }
-        const res = await fetchJSON('/api/social/posts/' + id + '/reconcile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        if (res.success) {
-            const r = (res.data.results || [])[0] || {};
-            P.toast(r.message || 'تم التحقق', r.outcome === 'still_uncertain' ? 'error' : 'success');
-        } else P.toast(res.error || 'Could not', 'error');
-        load();
-    };
-
-    window.resolvePost = async function (id) {
-        const a = prompt('المنشور ظاهر على الصفحة؟\n1 = أيوه اتنشر\n2 = لأ ماتنشرش (هيتسمح بإعادة النشر)');
-        const resolution = a === '1' ? 'published' : (a === '2' ? 'not_published' : null);
-        if (!resolution) return;
-        const res = await fetchJSON('/api/social/posts/' + id + '/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resolution }) });
-        if (res.success) P.toast('تم الحسم', 'success'); else P.toast(res.error || 'Could not', 'error');
-        load();
-    };
-
-    let qTimer = null;
-    ['spFStatus', 'spFPlat'].forEach(id => document.getElementById(id).addEventListener('change', load));
-    document.getElementById('spQ').addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(load, 350); });
-    document.getElementById('spDays').addEventListener('change', loadStats);
-
-    load();
-    loadStats();
-    loadCalendar();
-    loadAccounts();
-    loadTargets();
-})();
-JS;
+        $ar = current_lang() === 'ar';
+        $asset = static fn (string $path): string => htmlspecialchars(asset_v($path), ENT_QUOTES, 'UTF-8');
+        $view = static function (array $vars): string {
+            extract($vars, EXTR_SKIP);
+            ob_start();
+            include __DIR__ . '/../Views/social/index.php';
+            return (string) ob_get_clean();
+        };
+        $body = $view([
+            'ar' => $ar,
+            'uid' => $this->uid(),
+            'team' => $this->team(),
+            'cssUrl' => $asset('/assets/css/social-pro.css'),
+            'jsUrl' => $asset('/assets/js/social-pro.js'),
+            'iconsJs' => $asset('/assets/js/sp-icons.js'),
+            'deployWarning' => $this->deployWarning(),
+            // العميل بيتنقل بين أقسام السوشيال من القايمة اللي بتنزل من زرار الخدمة في الهيدر؛ الأدمن (من غير الهيدر ده) بيفضل شايف التبويبات
+            'headerNav' => !in_array($this->user['role'] ?? 'user', ['admin', 'super_admin'], true) || !empty($_SESSION['admin_customer_view']),
+            'monthlyCss' => $asset('/assets/css/social-monthly-plans.css'),
+            'monthlyJs' => $asset('/assets/js/social-monthly-plans.js'),
+            'pickerJs' => $asset('/assets/js/site-photo-picker.js'),
+        ]);
 
         header('Content-Type: text/html; charset=utf-8');
-        echo $this->renderPanelPage('social', 'Social media', 'Manage and publish social media content across all connected platforms', $body, $script);
+        echo $this->renderPanelPage(
+            'social',
+            $ar ? 'السوشيال ميديا' : 'Social media',
+            $ar ? 'انشر وجدول ورد على عملائك وتابع النتائج على كل المنصات' : 'Publish, schedule, answer customers and track results across all platforms',
+            $body,
+            ''
+        );
         exit;
+    }
+
+    /**
+     * فحص رفع ناقص (للأدمن بس): لو ملفات الواجهة اترفعت وملف المسارات لأ، كل التبويبات الجديدة بتطلع "تعذر التحميل".
+     * @return string[] الملفات القديمة على السيرفر
+     */
+    private function deployWarning(): array
+    {
+        if (!in_array($this->user['role'] ?? '', ['admin', 'super_admin'], true)) {
+            return [];
+        }
+        $root = dirname(__DIR__, 2);
+        $need = [
+            '/app/routes/api.php' => '/api/social/connections/{id}/active',
+            '/app/routes/web.php' => '/review/{token}',
+            '/app/Services/SocialMedia/SocialPackages.php' => 'quoteCustom',
+            '/app/Services/SocialMedia/SocialAccounts.php' => 'refreshStale',
+        ];
+        $stale = [];
+        foreach ($need as $file => $marker) {
+            $src = @file_get_contents($root . $file);
+            if ($src === false || strpos($src, $marker) === false) {
+                $stale[] = ltrim($file, '/');
+            }
+        }
+        return $stale;
     }
 
     /** Monthly-plan endpoints share the same owner scope and delivery service. */
     private function monthlyRequest(string $action,array $params=[]): array
     {
         if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
-        $write=in_array($action,['create','edit','approve','pause','resume','cancel'],true);
+        $write=in_array($action,['create','edit','live','renew','approve','pause','resume','cancel'],true);
+        if($write&&($denied=$this->guard('manage')))return $denied;
         if($write&&($error=$this->verifyCsrf()))return $error;
         if($write&&($error=$this->rateLimitGuard('user',$action==='create'?'social_monthly_ai':'social_monthly_write',$action==='create'?4:40,60)))return $error;
-        $uid=(int)$this->user['id'];$id=(int)($params['id']??0);$service=new SocialMonthlyPlanService();
+        $uid=$this->uid();$id=(int)($params['id']??0);$service=new SocialMonthlyPlanService();
         try {
             if($action==='setup'){$result=$service->setup($uid);$result['csrf_token']=Csrf::token();return $this->success($result);}
             if($action==='list')return $this->success(['plans'=>$service->listPlans($uid)]);
             if($action==='detail')return $this->success($service->detail($uid,$id));
-            if($action==='create')return $this->success($service->create($uid,$this->data),'Monthly generation queued',201);
+            if($action==='create'){
+                SocialPackages::assertMonthlyPlan($uid,array_map('intval',(array)($this->data['connection_ids']??[])));
+                $key=is_string($this->data['request_key']??null)?$this->data['request_key']:'';
+                $isNew=!$this->db->query('SELECT id FROM social_monthly_plans WHERE user_id=? AND request_key=? LIMIT 1',[$uid,$key]);
+                $out=$service->create($uid,$this->data);
+                if($isNew)SocialPackages::record($uid,'monthly_plans');
+                return $this->success($out,'Monthly generation queued',201);
+            }
             if($action==='edit')return $this->success($service->edit($uid,$id,(int)($params['item_id']??0),$this->data));
+            if($action==='live')return $this->success($service->liveEdit($uid,$id,(int)($params['item_id']??0),$this->data));
+            if($action==='renew')return $this->success($service->setRenew($uid,$id,!empty($this->data['renew']),!empty($this->data['auto_approve'])));
             if($action==='approve'&&$this->get('reviewed')!==true)return $this->error('Confirm review before automatic publishing.',422);
-            if($action==='approve')return $this->success($service->approve($uid,$id,(int)$this->get('version',0)));
+            if($action==='approve')return $this->success($service->approve($uid,$id,(int)$this->get('version',0),is_array($this->get('tiktok'))?$this->get('tiktok'):null));
             return $this->success($service->changeState($uid,$id,$action));
-        }catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
+        }catch(SocialPackageLimit $e){return $this->limitError($e);}
+        catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
         catch(ProviderRequestFailure $e){return $this->error('تعذر إعداد الخطة. حدّث قائمة الخطط قبل المحاولة مجددًا / Could not prepare the plan. Refresh the list before retrying.',502);}
         catch(Throwable $e){Logger::error('Monthly social plan action failed',['action'=>$action,'plan_id'=>$id,'user_id'=>$uid,'error'=>$e->getMessage()]);return $this->error('تعذر تنفيذ الطلب. تحقق من تركيب SQL وتشغيل مهام النشر ثم حدّث قائمة الخطط / Could not complete the request. Check migration and publishing worker, then refresh the plan list.',503);}
     }
@@ -721,6 +192,8 @@ JS;
     public function monthlyDetail(array $params=[]): array{return $this->monthlyRequest('detail',$params);}
     public function monthlyCreate(array $params=[]): array{return $this->monthlyRequest('create',$params);}
     public function monthlyEdit(array $params=[]): array{return $this->monthlyRequest('edit',$params);}
+    public function monthlyLiveEdit(array $params=[]): array{return $this->monthlyRequest('live',$params);}
+    public function monthlyRenew(array $params=[]): array{return $this->monthlyRequest('renew',$params);}
     public function monthlyApprove(array $params=[]): array{return $this->monthlyRequest('approve',$params);}
     public function monthlyPause(array $params=[]): array{return $this->monthlyRequest('pause',$params);}
     public function monthlyResume(array $params=[]): array{return $this->monthlyRequest('resume',$params);}
@@ -732,10 +205,13 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
         if ($rateError = $this->rateLimitGuard('user', 'social_upload', 30, 60)) {
             return $rateError;
         }
-        $r = SocialMediaUpload::handle((int) $this->user['id'], $_FILES['file'] ?? null);
+        $r = SocialMediaUpload::handle($this->uid(), $_FILES['file'] ?? null);
         if (!$r['ok']) {
             return $this->error($r['error'], 422);
         }
@@ -748,11 +224,14 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_brand_kit', 20, 60))) {
             return $error;
         }
         try {
-            $kit = (new SocialBrandStudio())->saveKit((int) $this->user['id'], (int) ($_POST['website_id'] ?? $this->get('website_id', 0)), $_FILES['logo'] ?? null, (string) ($_POST['primary'] ?? $this->get('primary', '')), (string) ($_POST['accent'] ?? $this->get('accent', '')));
+            $kit = (new SocialBrandStudio())->saveKit($this->uid(), (int) ($_POST['website_id'] ?? $this->get('website_id', 0)), $_FILES['logo'] ?? null, (string) ($_POST['primary'] ?? $this->get('primary', '')), (string) ($_POST['accent'] ?? $this->get('accent', '')));
             return $this->success(['brand' => $kit], 'اتحفظت هوية الشركة');
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 422);
@@ -768,13 +247,16 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_site_import', 4, 300))) {
             return $error;
         }
         require_once __DIR__ . '/../Services/SocialMedia/SiteImageImporter.php';
         @set_time_limit(90);
         try {
-            $uid = (int) $this->user['id'];
+            $uid = $this->uid();
             $wid = (int) $this->get('website_id', 0);
             $importer = new SiteImageImporter();
             if ($wid > 0) {
@@ -810,12 +292,15 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_site_scan', 10, 300))) {
             return $error;
         }
         require_once __DIR__ . '/../Services/SocialMedia/SiteImageImporter.php';
         @set_time_limit(90);
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $wid = (int) $this->get('website_id', 0);
         if ($wid < 1) {
             $row = $this->db->query('SELECT id FROM websites WHERE user_id = ? ORDER BY id DESC LIMIT 1', [$uid]);
@@ -846,6 +331,9 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_site_pick', 60, 300))) {
             return $error;
         }
@@ -862,7 +350,7 @@ JS;
             }
         }
         try {
-            return $this->success((new SiteImageImporter())->importItems((int) $this->user['id'], $clean, $this->get('folders') === true));
+            return $this->success((new SiteImageImporter())->importItems($this->uid(), $clean, $this->get('folders') === true));
         } catch (Throwable $e) {
             Logger::error('Selected image import failed', ['error' => $e->getMessage()]);
             return $this->error('مقدرناش نسحب الصور دلوقتي، جرّب تاني', 500);
@@ -875,11 +363,14 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_learn', 40, 60))) {
             return $error;
         }
         try {
-            $v = (new SocialBrandStudio())->learn((int) $this->user['id'], (int) ($params['id'] ?? 0));
+            $v = (new SocialBrandStudio())->learn($this->uid(), (int) ($params['id'] ?? 0));
             return $this->success(['vision' => $v]);
         } catch (InvalidArgumentException $e) {
             return $this->error('الصورة مش موجودة', 404);
@@ -894,6 +385,9 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
         if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_design', 20, 60))) {
             return $error;
         }
@@ -901,7 +395,7 @@ JS;
         if (mb_strlen($headline) < 3 || mb_strlen($headline) > 90) {
             return $this->error('اكتب عنوان قصير للتصميم (من 3 لـ 90 حرف)', 422);
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $mediaId = (int) $this->get('media_id', 0);
         try {
             $studio = new SocialBrandStudio();
@@ -922,7 +416,10 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
+        $uid = $this->uid();
         $postId = (int) ($params['id'] ?? 0);
         if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $uid])) {
             return $this->error('المنشور مش موجود', 404);
@@ -954,8 +451,11 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
         $postId = (int) ($params['id'] ?? 0);
-        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, (int) $this->user['id']])) {
+        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $this->uid()])) {
             return $this->error('المنشور مش موجود', 404);
         }
         if ($this->db->query("SELECT id FROM social_post_targets WHERE social_post_id = ? AND status = 'publishing' LIMIT 1", [$postId])) {
@@ -1007,11 +507,14 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
         if ($csrfError = $this->verifyCsrf()) {
             return $csrfError;
         }
         $postId = (int) ($params['id'] ?? 0);
-        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, (int) $this->user['id']])) {
+        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $this->uid()])) {
             return $this->error('المنشور مش موجود', 404);
         }
         if ($rateError = $this->rateLimitGuard('user', 'social_reconcile', 10, 60)) {
@@ -1035,11 +538,14 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
         if ($csrfError = $this->verifyCsrf()) {
             return $csrfError;
         }
         $postId = (int) ($params['id'] ?? 0);
-        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, (int) $this->user['id']])) {
+        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $this->uid()])) {
             return $this->error('المنشور مش موجود', 404);
         }
         $resolution = (string) $this->get('resolution', '');
@@ -1062,11 +568,14 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
         if ($csrfError = $this->verifyCsrf()) {
             return $csrfError;
         }
         $postId = (int) ($params['id'] ?? 0);
-        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, (int) $this->user['id']])) {
+        if (!$this->db->query('SELECT id FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $this->uid()])) {
             return $this->error('المنشور مش موجود', 404);
         }
         $content = trim((string) $this->get('content', ''));
@@ -1094,7 +603,7 @@ JS;
                 $res = ['success' => false, 'error' => 'تعذر فك التوكن'];
             }
             if (!$res['success']) {
-                $errors[] = $res['friendly'] ?? $res['error'] ?? 'فشل التعديل';
+                $errors[] = SocialCommentInbox::readableError($res, 'تعذر الوصول لفيسبوك دلوقتي (عطل مؤقت أو مشكلة اتصال). النص ما اتغيّرش، جرّب تاني بعد شوية.');
             }
         }
         if ($errors) {
@@ -1113,7 +622,7 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $days = max(1, min(90, (int) $this->get('days', 30)));
         try {
             $rows = $this->db->query(
@@ -1136,9 +645,678 @@ JS;
         return $this->success(['days' => $days, 'pages' => $pages]);
     }
 
+    // ------------------------------------------------------------------
+    // صندوق التعليقات
+    // ------------------------------------------------------------------
+
+    /** GET /api/social/inbox?status=open|new|replied|hidden|done|all&intent=&page={connection_id} */
+    public function inboxList(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $inbox = new SocialCommentInbox();
+        if (!$inbox->ready()) {
+            return $this->success(['installed' => false, 'comments' => [], 'counts' => ['open' => 0, 'hot' => 0]]);
+        }
+        try {
+            $inbox->ensurePagesSchema();
+            $r = $inbox->list($this->uid(), (string) $this->get('status', 'open'), (string) $this->get('intent', ''), 60, (int) $this->get('page', 0));
+            // الصفحات اللي الصندوق بيسحب منها ويرد عليها (مع سبب أي صفحة مش شغالة)
+            return $this->success(['installed' => true, 'pages' => $inbox->pages($this->uid())] + $r);
+        } catch (Throwable $e) {
+            Logger::error('Social inbox list failed', ['message' => $e->getMessage()]);
+            return $this->error('تعذر تحميل التعليقات', 500);
+        }
+    }
+
+    /** POST /api/social/inbox/sync - سحب التعليقات الجديدة دلوقتي */
+    public function inboxSync(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_sync', 6, 300))) {
+            return $error;
+        }
+        $inbox = new SocialCommentInbox();
+        if (!$inbox->ready()) {
+            return $this->error('شغّل migration السوشيال الاحترافي (2026_10_20_000001_social_pro.sql) الأول', 422);
+        }
+        @set_time_limit(120);
+        try {
+            return $this->success($inbox->sync($this->uid(), 15));
+        } catch (Throwable $e) {
+            Logger::error('Social inbox sync failed', ['message' => $e->getMessage()]);
+            return $this->error('تعذر سحب التعليقات من Meta دلوقتي، جرّب تاني', 500);
+        }
+    }
+
+    /** POST /api/social/inbox/{id}/suggest - رد مقترح بالذكاء الاصطناعي */
+    public function inboxSuggest(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'ai', 30, 60))) {
+            return $error;
+        }
+        try {
+            $uid = $this->uid();
+            return $this->success((new SocialCommentInbox())->suggest($uid, (int) ($params['id'] ?? 0), ContentLanguageService::forUser($uid, null)));
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
+        } catch (Throwable $e) {
+            Logger::warning('Social inbox suggest failed', ['message' => $e->getMessage()]);
+            return $this->error('مقدرناش نجهّز رد دلوقتي، اكتب ردك أو جرّب تاني', 502);
+        }
+    }
+
+    /** POST /api/social/inbox/{id}/reply  body: {text} */
+    public function inboxReply(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_reply', 60, 60))) {
+            return $error;
+        }
+        try {
+            return $this->success((new SocialCommentInbox())->reply($this->uid(), (int) ($params['id'] ?? 0), (string) $this->get('text', '')), 'اتبعت الرد');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            return $this->error(CustomerError::message($e->getMessage(), 502), 502);
+        }
+    }
+
+    /** POST /api/social/inbox/{id}/hide - إخفاء تعليق سبام/مسيء */
+    public function inboxHide(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_reply', 60, 60))) {
+            return $error;
+        }
+        try {
+            return $this->success((new SocialCommentInbox())->hide($this->uid(), (int) ($params['id'] ?? 0)), 'اتخفى التعليق');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            return $this->error(CustomerError::message($e->getMessage(), 502), 502);
+        }
+    }
+
+    /** POST /api/social/inbox/{id}/done - تم التعامل معاه (من غير رد علني) */
+    public function inboxDone(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
+        if ($error = $this->verifyCsrf()) {
+            return $error;
+        }
+        try {
+            return $this->success((new SocialCommentInbox())->done($this->uid(), (int) ($params['id'] ?? 0)));
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
+        }
+    }
+
+    /** POST /api/social/inbox/{id}/private  body: {text?} - رد خاص (ماسنجر/دايركت) لصاحب التعليق */
+    public function inboxPrivate(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('inbox')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_reply', 60, 60))) {
+            return $error;
+        }
+        try {
+            SocialPackages::assertFeature($this->uid(), 'private_reply');
+            $text = $this->get('text');
+            return $this->success((new SocialCommentInbox())->privateReply($this->uid(), (int) ($params['id'] ?? 0), is_string($text) ? $text : null, (bool) $this->get('ack', false)), 'اتبعت الرد الخاص');
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            return $this->error(CustomerError::message($e->getMessage(), 502), 502);
+        }
+    }
+
+    /** GET /api/social/inbox-settings */
+    public function inboxSettings(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $inbox = new SocialCommentInbox();
+        $inbox->ensurePagesSchema();
+        // allowed = الباقة فيها الرد التلقائي (لو مش فيها الإعداد بيفضل محفوظ بس مش بيشتغل)
+        return $this->success(['installed' => $inbox->privateReady(), 'allowed' => SocialPackages::has($this->uid(), 'auto_private'), 'pages' => $inbox->ready() ? $inbox->pages($this->uid()) : []] + $inbox->settings($this->uid()));
+    }
+
+    /** POST /api/social/inbox-settings  body: {auto_private, auto_intents[], private_template, public_ack, auto_pages[]?} */
+    public function inboxSettingsSave(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_inbox_settings', 20, 60))) {
+            return $error;
+        }
+        $inbox = new SocialCommentInbox();
+        if (!$inbox->privateReady()) {
+            return $this->error('شغّل migration السوشيال (2026_10_21_000001_social_growth.sql) الأول', 422);
+        }
+        try {
+            if (!empty($this->data['auto_private'])) {
+                SocialPackages::assertFeature($this->uid(), 'auto_private');
+            }
+            $saved = $inbox->saveSettings($this->uid(), $this->data);
+            if (isset($this->data['auto_pages']) && is_array($this->data['auto_pages'])) {
+                $inbox->setAutoPages($this->uid(), $this->data['auto_pages']);
+            }
+            return $this->success($saved + ['pages' => $inbox->pages($this->uid())], 'اتحفظت إعدادات الرد');
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
+        } catch (InvalidArgumentException | RuntimeException $e) {
+            return $this->error($e->getMessage(), 422);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // رابط موافقة العميل على الخطة الشهرية
+    // ------------------------------------------------------------------
+
+    /** GET /api/social/monthly-plans/{id}/share - الروابط + ملاحظات العميل */
+    public function planShareList(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $share = new SocialPlanShare();
+        try {
+            $uid = $this->uid();
+            $id = (int) ($params['id'] ?? 0);
+            return $this->success(['installed' => $share->ready(), 'links' => $share->links($uid, $id), 'feedback' => $share->feedback($uid, $id)]);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
+        }
+    }
+
+    /** POST /api/social/monthly-plans/{id}/share  body: {can_approve, client_name, days} */
+    public function planShareCreate(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_plan_share', 10, 300))) {
+            return $error;
+        }
+        try {
+            SocialPackages::assertFeature($this->uid(), 'client_review');
+            return $this->success((new SocialPlanShare())->create($this->uid(), (int) ($params['id'] ?? 0), (bool) $this->get('can_approve', true), (string) $this->get('client_name', ''), (int) $this->get('days', 14)), 'اتعمل الرابط', 201);
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        }
+    }
+
+    /** POST /api/social/monthly-plans/{id}/share/{link_id}/revoke */
+    public function planShareRevoke(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if ($error = $this->verifyCsrf()) {
+            return $error;
+        }
+        try {
+            return $this->success(['links' => (new SocialPlanShare())->revoke($this->uid(), (int) ($params['id'] ?? 0), (int) ($params['link_id'] ?? 0))], 'اتلغى الرابط');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
+        }
+    }
+
+    /**
+     * GET /api/social/onboarding - خط سير العميل الجديد لتشغيل الخدمة (كل خطوة: اتعملت ولا لأ + تروح فين).
+     * كل فحص لوحده جوه try: جدول ناقص مايوقعش القايمة كلها.
+     */
+    public function onboarding(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $uid = $this->uid();
+        $n = function (string $sql, array $args = []): int {
+            try {
+                return (int) (($this->db->query($sql, $args)[0]['n'] ?? 0));
+            } catch (Throwable $e) {
+                return 0;
+            }
+        };
+        $own = '(user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?))';
+        $accounts = $n("SELECT COUNT(*) AS n FROM platform_connections WHERE {$own} AND platform IN ('facebook','instagram','tiktok','youtube','google_business','threads','linkedin') AND status = 'connected'", [$uid, $uid]);
+        $sites = $n('SELECT COUNT(*) AS n FROM websites WHERE user_id = ?', [$uid]) + $n('SELECT COUNT(*) AS n FROM generated_websites WHERE user_id = ?', [$uid]);
+        $trips = $n("SELECT COUNT(*) AS n FROM crm_products WHERE user_id = ? AND is_active = 1 AND tour_slug IS NOT NULL AND tour_slug <> ''", [$uid]);
+        $brand = $n("SELECT COUNT(*) AS n FROM brand_profiles WHERE user_id = ? AND logo_path IS NOT NULL AND logo_path <> ''", [$uid]);
+        $media = $n("SELECT COUNT(*) AS n FROM media_items WHERE user_id = ? AND status = 'completed' AND deleted_at IS NULL", [$uid]);
+        $posts = $n('SELECT COUNT(*) AS n FROM social_posts WHERE user_id = ?', [$uid]);
+        $plans = $n("SELECT COUNT(*) AS n FROM social_monthly_plans WHERE user_id = ? AND status IN ('draft','active','paused','completed')", [$uid]);
+        $inbox = $n('SELECT COUNT(*) AS n FROM social_inbox_settings WHERE user_id = ?', [$uid]);
+        $season = $n('SELECT COUNT(*) AS n FROM season_post_drafts WHERE user_id = ?', [$uid]);
+        $ar = current_lang() === 'ar';
+        $L = static fn (string $a, string $e) => $ar ? $a : $e;
+        $steps = [
+            ['key' => 'accounts', 'done' => $accounts > 0, 'icon' => 'link', 'title' => $L('اربط صفحاتك', 'Connect your pages'),
+                'text' => $L('اربط فيسبوك وإنستجرام (وتيك توك ويوتيوب لو بتستخدمهم)، واختار الصفحات اللي هتنشر عليها.', 'Connect Facebook & Instagram (and TikTok/YouTube if you use them), then pick the pages you publish to.'),
+                'href' => '/social#accounts', 'cta' => $L('اربط الحسابات', 'Connect accounts')],
+            ['key' => 'site', 'done' => $sites > 0, 'icon' => 'external', 'title' => $L('ضيف موقع شركتك ورحلاتك', 'Add your website & trips'),
+                'text' => $L('الموقع والرحلات بيخلّوا المنشورات فيها روابط حجز حقيقية، وبيشغّلوا «رحلات الموسم» والخطة الشهرية.', 'Your site and trips put real booking links in posts and power Season trips and the monthly plan.'),
+                'href' => $sites > 0 ? '/website-builder' : '/websites', 'cta' => $L('ضيف الموقع', 'Add website')],
+            ['key' => 'brand', 'done' => $brand > 0 && $media > 0, 'icon' => 'images', 'title' => $L('لوجو شركتك وصورك', 'Your logo & photos'),
+                'text' => $L('ارفع اللوجو وصور رحلاتك (أو اسحبها من موقعك) عشان التصميمات تطلع بهوية شركتك.', 'Upload your logo and trip photos (or pull them from your site) so designs carry your brand.'),
+                'href' => '/social#plan', 'cta' => $L('ارفع اللوجو والصور', 'Upload logo & photos')],
+            ['key' => 'post', 'done' => $posts > 0, 'icon' => 'send', 'title' => $L('أول منشور', 'Your first post'),
+                'text' => $L('اكتب موضوع والذكاء الصناعي يكتبلك 3 نسخ بالهاشتاجات، واختار الصفحات وانشر أو جدول.', 'Type a topic and AI writes 3 versions with hashtags; pick pages and publish or schedule.'),
+                'action' => 'new_post', 'cta' => $L('اعمل منشور', 'Create a post')],
+            ['key' => 'plan', 'done' => $plans > 0, 'icon' => 'planCheck', 'title' => $L('خطة الشهر كاملة', 'A full monthly plan'),
+                'text' => $L('خطة منشورات للشهر كله بالصور والمواعيد، تراجعها مرة واحدة وتتنشر لوحدها.', 'A whole month of posts with images and times — review once and it publishes itself.'),
+                'href' => '/social#plan', 'cta' => $L('جهّز الخطة', 'Prepare the plan')],
+            ['key' => 'inbox', 'done' => $inbox > 0, 'icon' => 'chat', 'title' => $L('الرد على التعليقات', 'Answer comments'),
+                'text' => $L('كل التعليقات في مكان واحد، وفعّل الرد الخاص التلقائي على اللي بيسأل عن السعر.', 'All comments in one place — turn on auto private replies for price questions.'),
+                'href' => '/social#inbox', 'cta' => $L('افتح صندوق التعليقات', 'Open the inbox')],
+            ['key' => 'season', 'done' => $season > 0, 'icon' => 'trend', 'title' => $L('رحلات الموسم', 'Season trips'),
+                'text' => $L('بنشوف من حجوزاتك الرحلات المطلوبة في الموسم ونعملها منشورات جاهزة.', 'We spot the trips in demand from your bookings and turn them into ready posts.'),
+                'href' => '/revenue/intelligence#season', 'cta' => $L('شوف رحلات الموسم', 'See season trips'), 'needs' => $trips > 0 ? null : $L('محتاجة رحلات على موقعك', 'Needs trips on your site')],
+        ];
+        $done = count(array_filter($steps, static fn ($s) => $s['done']));
+        return $this->success(['steps' => $steps, 'done' => $done, 'total' => count($steps), 'next' => array_values(array_filter($steps, static fn ($s) => !$s['done']))[0]['key'] ?? null]);
+    }
+
+    /** GET /api/social/me - دور المستخدم في فريق الحساب (للواجهة) */
+    public function me(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $t = $this->team();
+        $ent = SocialPackages::entitlements($this->uid());
+        return $this->success(['role' => $t['role'], 'member' => $t['member'], 'can' => $t['can'], 'team_locked' => $t['member'] && empty($ent['features']['team']),
+            'package' => ['tier' => $ent['tier'], 'name' => $ent['tier_name'], 'features' => $ent['features'], 'platforms' => $ent['platforms']]]);
+    }
+
+    /** GET /api/social/growth?days=30 - نمو المتابعين لكل حساب (لقطة يومية) */
+    public function growth(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $uid = $this->uid();
+        if (!SocialGrowth::ready()) {
+            return $this->success(['installed' => false, 'accounts' => []]);
+        }
+        if (!SocialPackages::has($uid, 'growth')) {
+            return $this->success(['installed' => true, 'locked' => true, 'accounts' => []]);
+        }
+        // أول مرة النهارده: ناخد لقطة لحسابات العميل فورًا بدل ما يستنى المهمة اليومية (حساباته بس - خفيفة)
+        try {
+            SocialGrowth::snapshot($uid, 10);
+        } catch (Throwable $e) {
+        }
+        return $this->success(['installed' => true, 'accounts' => SocialGrowth::series($uid, (int) $this->get('days', 30))]);
+    }
+
+    /** GET /api/social/competitors */
+    public function competitors(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        return $this->success((new SocialCompetitors())->list($this->uid()));
+    }
+
+    /** POST /api/social/competitors  body: {username} */
+    public function competitorAdd(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_competitors', 10, 300))) {
+            return $error;
+        }
+        try {
+            SocialPackages::assertCompetitorSlot($this->uid());
+            return $this->success((new SocialCompetitors())->add($this->uid(), (string) $this->get('username', '')), 'اتضاف المنافس');
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            Logger::warning('Competitor add failed', ['message' => $e->getMessage()]);
+            return $this->error('مقدرناش نوصل لإنستجرام دلوقتي، جرّب تاني بعد شوية', 502);
+        }
+    }
+
+    /** POST /api/social/competitors/refresh */
+    public function competitorRefresh(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if (($error = $this->verifyCsrf()) || ($error = $this->rateLimitGuard('user', 'social_competitors_refresh', 3, 600))) {
+            return $error;
+        }
+        @set_time_limit(90);
+        $svc = new SocialCompetitors();
+        $svc->refreshUser($this->uid());
+        return $this->success($svc->list($this->uid()));
+    }
+
+    /** POST /api/social/competitors/{id}/delete */
+    public function competitorDelete(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('manage')) {
+            return $denied;
+        }
+        if ($error = $this->verifyCsrf()) {
+            return $error;
+        }
+        $svc = new SocialCompetitors();
+        $svc->remove($this->uid(), (int) ($params['id'] ?? 0));
+        return $this->success($svc->list($this->uid()));
+    }
+
+    /** GET /api/social/best-times?connection_id= - أفضل مواعيد النشر بتوقيت حساب العميل */
+    public function bestTimes(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $uid = $this->uid();
+        $cid = (int) $this->get('connection_id', 0) ?: null;
+        $tz = (string) (($this->db->query('SELECT timezone FROM users WHERE id = ?', [$uid])[0]['timezone'] ?? '') ?: 'UTC');
+        $samples = SocialBestTimes::samples($uid, $cid);
+        $prefs = SocialBestTimes::preferencesFrom($samples, $tz);
+        return $this->success([
+            'timezone' => $tz,
+            'source' => $prefs['source'],
+            'measured' => $prefs['measured'],
+            'min_measured' => SocialBestTimes::MIN_MEASURED,
+            'by_day' => $prefs['times'],
+            'top' => $prefs['source'] === 'measured' ? SocialBestTimes::rank($samples, $tz, 3) : [],
+        ]);
+    }
+
+    /** GET /social/report?month=YYYY-MM - تقرير أداء شهري جاهز للطباعة / الحفظ PDF (بهوية الشركة) */
+    public function report(array $params = []): void
+    {
+        $uid = $this->uid();
+        $month = (string) ($_GET['month'] ?? '');
+        if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/D', $month)) {
+            $month = gmdate('Y-m', strtotime('first day of last month'));
+        }
+        $data = SocialReport::build($uid, $month);
+        header('Content-Type: text/html; charset=utf-8');
+        echo SocialReport::render($data, current_lang() === 'ar');
+        exit;
+    }
+
     private static array $colCache = [];
 
     /** فحص وجود عمود (بيتكاش) - عشان الكود ما يقعش لو الـ migration لسه ما اتشغّلتش */
+    // ------------------------------------------------------------------
+    // باقات السوشيال (صفحة الاشتراكات) + إعدادات الأدمن
+    // ------------------------------------------------------------------
+
+    private function priceLabels(float $usd, string $cur, bool $ar): array
+    {
+        // المبلغ اللي بيتخصم بالدولار بالظبط (format بيقرّب الأرقام الكبيرة لأقرب 5 - ينفع للعرض المحلي بس)
+        $exact = '$' . (floor($usd) == $usd ? number_format($usd, 0) : number_format($usd, 2));
+        return ['usd' => round($usd, 2), 'label' => $cur === 'USD' ? $exact : '≈ ' . CurrencyService::format($usd, $cur, $ar) . ' (' . $exact . ')', 'usd_label' => $exact];
+    }
+
+    /** GET /api/social/package - الباقة الحالية + الاستخدام + الكتالوج بأسعار عملة العميل */
+    public function package(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        SocialPackages::ensureSchema();
+        $ar = current_lang() === 'ar';
+        $cur = CurrencyService::forViewer($this->user);
+        $cfg = SocialPackages::config();
+        $tiers = [];
+        foreach ($cfg['tiers'] as $k => $t) {
+            $tiers[] = ['key' => $k, 'name' => $ar ? $t['name'] : $t['name_en'], 'for_sale' => (bool) $t['for_sale'], 'rank' => SocialPackages::RANK[$k],
+                'monthly' => $this->priceLabels((float) $t['price_monthly'], $cur, $ar), 'yearly' => $this->priceLabels((float) $t['price_yearly'], $cur, $ar),
+                'limits' => array_intersect_key($t, array_flip(SocialPackages::LIMIT_KEYS)), 'platforms' => array_values(array_intersect($cfg['platforms_enabled'], $t['platforms'])),
+                'features' => array_map('boolval', array_intersect_key($t, array_flip(SocialPackages::FEATURE_KEYS)))];
+        }
+        $addons = [];
+        foreach ($cfg['addons'] as $k => $a) {
+            if ($a['enabled']) {
+                $addons[] = ['key' => $k, 'kind' => $a['kind'], 'qty' => $a['qty'], 'icon' => $a['icon'], 'price' => $this->priceLabels((float) $a['price'], $cur, $ar)];
+            }
+        }
+        // أسماء باقات المنصة للعرض بدل المفاتيح (starter/professional...)، والباقات المتاحة بس
+        $planNames = [];
+        $planMap = [];
+        try {
+            foreach (BillingPlanCatalog::read() as $k => $pl) {
+                $planNames[$k] = (string) $pl['name'];
+                if (isset($cfg['plan_map'][$k])) {
+                    $planMap[$k] = $cfg['plan_map'][$k];
+                }
+            }
+        } catch (Throwable $e) {
+            $planMap = $cfg['plan_map'];
+        }
+        $balance = null;
+        try {
+            $balance = $this->priceLabels((new WalletService())->getBalance(SocialPackages::owner($this->uid())), $cur, $ar);
+        } catch (Throwable $e) {
+        }
+        $b = $cfg['builder'];
+        $builder = $b['enabled'] ? ['channel' => $this->priceLabels((float) $b['channel'], $cur, $ar), 'posts_per_channel' => $b['posts_per_channel'], 'ai_per_channel' => $b['ai_per_channel'], 'max_channels' => $b['max_channels'],
+            'posts_block' => ['qty' => $b['posts_block']['qty'], 'price' => $this->priceLabels((float) $b['posts_block']['price'], $cur, $ar)],
+            'ai_block' => ['qty' => $b['ai_block']['qty'], 'price' => $this->priceLabels((float) $b['ai_block']['price'], $cur, $ar)],
+            'competitors_block' => ['qty' => $b['competitors_block']['qty'], 'price' => $this->priceLabels((float) $b['competitors_block']['price'], $cur, $ar)],
+            'monthly_plan' => $this->priceLabels((float) $b['monthly_plan'], $cur, $ar),
+            'features' => array_map(fn ($v) => $this->priceLabels((float) $v, $cur, $ar), $b['features']), 'yearly_months' => $b['yearly_months']] : null;
+        return $this->success(SocialPackages::summary($this->uid()) + [
+            'builder' => $builder, 'platforms_enabled' => $cfg['platforms_enabled'],
+            'catalog' => $tiers, 'addons' => $addons, 'plan_map' => $planMap, 'plan_names' => $planNames, 'labels' => SocialPackages::LABELS, 'platform_names' => SocialPackages::PLATFORM_NAMES,
+            'balance' => $balance, 'can_buy' => SocialTeam::can($this->team(), 'manage'), 'csrf_token' => Csrf::token(),
+        ]);
+    }
+
+    private function packageFail(Throwable $e): array
+    {
+        if ($e instanceof DomainException) {
+            $d = json_decode($e->getMessage(), true) ?: [];
+            $cur = CurrencyService::forViewer($this->user);
+            $msg = 'رصيد محفظتك مش كفاية.';
+            if (isset($d['shortfall']) && $d['shortfall'] > 0) {
+                $msg .= ' ناقص ' . CurrencyService::format((float) $d['shortfall'], $cur, current_lang() === 'ar') . ' - اشحن المحفظة وكمّل.';
+            }
+            return $this->error($msg, 402, ['action' => '/subscription#wallet', 'shortfall' => $d['shortfall'] ?? null]);
+        }
+        if ($e instanceof InvalidArgumentException) {
+            return $this->error($e->getMessage(), 422);
+        }
+        Logger::error('Social package action failed', ['error' => $e->getMessage()]);
+        return $this->error('حصلت مشكلة، جرّب تاني أو كلّم الدعم.', 500);
+    }
+
+    /** POST /api/social/package/subscribe  body: {tier, cycle, request_key} - الدفع من المحفظة */
+    public function packageSubscribe(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($denied = $this->guardOwner()) || ($denied = $this->verifyCsrf()) || ($denied = $this->rateLimitGuard('user', 'social_package_buy', 10, 300))) {
+            return $denied;
+        }
+        try {
+            $key = $this->get('request_key');
+            $custom = $this->get('custom');
+            $r = SocialPackages::subscribe(SocialPackages::owner($this->uid()), (string) $this->get('tier', ''), (string) $this->get('cycle', 'monthly'), is_string($key) && strlen($key) >= 8 ? $key : null, is_array($custom) ? $custom : null);
+            $msg = ['subscribed' => 'اشتركت في الباقة ✅', 'upgraded' => 'اترقّت باقتك ✅', 'scheduled' => 'التغيير هيتطبق عند التجديد', 'resumed' => 'رجع التجديد التلقائي ✅', 'already' => 'اتنفذ قبل كده'][$r['action']] ?? 'تم';
+            return $this->success($r + ['package' => SocialPackages::summary($this->uid())], $msg);
+        } catch (Throwable $e) {
+            return $this->packageFail($e);
+        }
+    }
+
+    /** POST /api/social/package/quote  body: {custom} - سعر «فصّل باقتك» من السيرفر (هو المرجع، مش حساب المتصفح) */
+    public function packageQuote(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($e = $this->rateLimitGuard('user', 'social_package_quote', 120, 60)) {
+            return $e;
+        }
+        try {
+            $q = SocialPackages::quoteCustom(is_array($this->get('custom')) ? $this->get('custom') : []);
+            $ar = current_lang() === 'ar';
+            $cur = CurrencyService::forViewer($this->user);
+            $q['monthly_label'] = $this->priceLabels($q['monthly'], $cur, $ar);
+            $q['yearly_label'] = $this->priceLabels($q['yearly'], $cur, $ar);
+            return $this->success($q);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        }
+    }
+
+    /** POST /api/social/package/auto-renew  body: {on} */
+    public function packageAutoRenew(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($denied = $this->guardOwner()) || ($denied = $this->verifyCsrf())) {
+            return $denied;
+        }
+        try {
+            $on = (bool) $this->get('on', false);
+            return $this->success(SocialPackages::setAutoRenew(SocialPackages::owner($this->uid()), $on), $on ? 'التجديد التلقائي اشتغل' : 'اتلغى التجديد - الباقة شغالة لآخر المدة');
+        } catch (Throwable $e) {
+            return $this->packageFail($e);
+        }
+    }
+
+    /** POST /api/social/package/addon  body: {addon, request_key} */
+    public function packageAddon(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($denied = $this->guardOwner()) || ($denied = $this->verifyCsrf()) || ($denied = $this->rateLimitGuard('user', 'social_package_addon', 20, 300))) {
+            return $denied;
+        }
+        try {
+            $key = $this->get('request_key');
+            return $this->success(SocialPackages::buyAddon(SocialPackages::owner($this->uid()), (string) $this->get('addon', ''), is_string($key) && strlen($key) >= 8 ? $key : null), 'الإضافة اتضافت ✅');
+        } catch (Throwable $e) {
+            return $this->packageFail($e);
+        }
+    }
+
+    /** الدفع من محفظة صاحب الحساب: صاحب الحساب أو مدير في فريقه بس */
+    private function guardOwner(): ?array
+    {
+        return SocialTeam::can($this->team(), 'manage') ? null : $this->error('الاشتراك والإضافات من صلاحيات مدير الحساب', 403);
+    }
+
+    private function isAdmin(): bool
+    {
+        return in_array($this->user['role'] ?? '', ['admin', 'super_admin'], true);
+    }
+
+    /** GET /api/admin/social-packages */
+    public function adminPackages(array $params = []): array
+    {
+        if (!$this->isAuthenticated() || !$this->isAdmin()) {
+            return $this->error('غير مصرح', 403);
+        }
+        header('Cache-Control: private, no-store');
+        SocialPackages::ensureSchema();
+        $stats = ['active' => 0, 'mrr' => 0.0, 'by_tier' => []];
+        try {
+            foreach ($this->db->query("SELECT tier, cycle, COUNT(*) AS n, SUM(price_paid) AS s FROM social_subscriptions WHERE status = 'active' AND period_end > UTC_TIMESTAMP() GROUP BY tier, cycle") ?: [] as $r) {
+                $stats['active'] += (int) $r['n'];
+                $stats['by_tier'][$r['tier']] = ($stats['by_tier'][$r['tier']] ?? 0) + (int) $r['n'];
+                $stats['mrr'] += $r['cycle'] === 'yearly' ? (float) $r['s'] / 12 : (float) $r['s'];
+            }
+        } catch (Throwable $e) {
+        }
+        $stats['mrr'] = round($stats['mrr'], 2);
+        $plans = [];
+        try {
+            foreach ($this->db->query("SELECT DISTINCT SUBSTRING_INDEX(plan_code, '_', 1) AS k, name FROM subscription_plans WHERE is_active = 1") ?: [] as $r) {
+                $plans[$r['k']] = $r['name'];
+            }
+        } catch (Throwable $e) {
+        }
+        return $this->success(['config' => SocialPackages::config(), 'defaults' => SocialPackages::DEFAULTS, 'labels' => SocialPackages::LABELS, 'platform_names' => SocialPackages::PLATFORM_NAMES,
+            'limit_keys' => SocialPackages::LIMIT_KEYS, 'feature_keys' => SocialPackages::FEATURE_KEYS, 'platform_plans' => $plans, 'stats' => $stats, 'ready' => SocialPackages::ready(), 'csrf_token' => Csrf::token()]);
+    }
+
+    /** POST /api/admin/social-packages  body: {config} */
+    public function adminPackagesSave(array $params = []): array
+    {
+        if (!$this->isAuthenticated() || !$this->isAdmin()) {
+            return $this->error('غير مصرح', 403);
+        }
+        if (($e = $this->verifyCsrf()) || ($e = $this->rateLimitGuard('user', 'social_packages_admin', 30, 60))) {
+            return $e;
+        }
+        $in = $this->get('config', []);
+        return $this->success(['config' => SocialPackages::saveConfig(is_array($in) ? $in : [])], 'اتحفظت باقات السوشيال');
+    }
+
     private function hasColumn(string $table, string $col): bool
     {
         $k = $table . '.' . $col;
@@ -1190,13 +1368,16 @@ JS;
             $all = $this->db->query(
                 "SELECT id, platform, external_location_id, external_location_name AS name, status, last_error
                  FROM platform_connections
-                 WHERE (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND platform IN ('facebook', 'instagram', 'tiktok', 'youtube')
+                 WHERE (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND platform IN ('facebook', 'instagram', 'tiktok', 'youtube', 'google_business', 'threads', 'linkedin')
                  ORDER BY (status = 'connected') DESC, id DESC",
-                [$this->user['id'], $this->user['id']]
+                [$this->uid(), $this->uid()]
             );
             $rows = [];
             $broken = [];
             $seen = [];
+            // منصة مقفولة على المنصة كلها (زي LinkedIn دلوقتي): حساباتها ما بتظهرش خالص
+            $enabled = SocialPackages::config()['platforms_enabled'];
+            $all = array_values(array_filter($all ?: [], static fn ($r) => in_array($r['platform'], $enabled, true)));
             foreach ($all as $r) {
                 $k = $r['platform'] . ':' . ($r['external_location_id'] ?: 'connection-' . $r['id']);
                 if (isset($seen[$k])) {
@@ -1209,8 +1390,21 @@ JS;
                     $broken[] = ['platform' => $r['platform'], 'name' => $r['name'], 'status' => $r['status'], 'last_error' => $r['last_error'] ? mb_substr((string) $r['last_error'], 0, 300) : null];
                 }
             }
+            // صور الصفحات وأسماؤها: بنحدّث القديم بس (لحد 4 في الطلب - الباقي بيتحدث في المهمة اليومية)
+            try {
+                SocialAccounts::refreshStale($this->uid(), 4);
+            } catch (Throwable $e) {
+            }
+            $locked = SocialPackages::locked($this->uid());
+            $prof = SocialAccounts::profiles(array_column($rows, 'id'));
             foreach ($rows as &$r0) {
                 unset($r0['external_location_id'], $r0['status'], $r0['last_error']);
+                $pf = $prof[(int) $r0['id']] ?? [];
+                $r0['locked'] = $locked[(int) $r0['id']] ?? null;
+                $r0['active'] = !isset($pf['is_active']) || (int) $pf['is_active'] === 1;
+                $r0['avatar'] = !empty($pf['avatar_url']) ? (string) $pf['avatar_url'] : null;
+                $r0['username'] = $pf['username'] ?? null;
+                $r0['followers'] = isset($pf['followers']) ? (int) $pf['followers'] : null;
             }
             unset($r0);
             // Schema-safe: platform_connections in the supplied SQL has no meta_json column.
@@ -1227,6 +1421,36 @@ JS;
         }
     }
 
+    /** POST /api/social/connections/{id}/active  body: {active} - العميل بيختار الصفحات اللي بيشتغل عليها */
+    public function connectionActive(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($denied = $this->guard('manage')) || ($denied = $this->verifyCsrf()) || ($denied = $this->rateLimitGuard('user', 'social_conn_active', 60, 60))) {
+            return $denied;
+        }
+        $uid = $this->uid();
+        $id = (int) ($params['id'] ?? 0);
+        $on = (bool) $this->get('active', true);
+        try {
+            if ($on) {
+                $ent = SocialPackages::entitlements($uid);
+                $max = $ent['limits']['accounts'];
+                $usage = SocialPackages::usage($uid)['accounts'];
+                $conn = $this->db->query('SELECT platform FROM platform_connections WHERE id = ? LIMIT 1', [$id])[0] ?? null;
+                if ($ent['enforced'] && $max >= 0 && $usage >= $max && $conn && in_array($conn['platform'], $ent['platforms'], true)) {
+                    return $this->limitError(new SocialPackageLimit('باقتك فيها ' . $max . ' حسابات وكلهم شغالين - وقّف حساب تاني الأول أو زوّد الحسابات من صفحة الاشتراكات.', 'accounts'));
+                }
+            }
+            SocialAccounts::setActive($uid, $id, $on);
+            SocialPackages::flush();
+            return $this->success(['active' => $on, 'locked' => SocialPackages::locked($uid)], $on ? 'الحساب اشتغل' : 'الحساب اتوقف من النشر');
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 404);
+        }
+    }
+
     /** GET /api/social/posts - كل منشور ومعاه نتيجة كل صفحة (اتنشر/فشل + السبب + الإحصائيات) - فلاتر: status, platform, q */
     public function listPosts(array $params = []): array
     {
@@ -1234,17 +1458,17 @@ JS;
             return $this->error('Unauthorized', 401);
         }
 
-        $this->catchUpOverdue((int) $this->user['id']);
+        $this->catchUpOverdue($this->uid());
 
         $where = ['sp.user_id = ?'];
-        $args = [(int) $this->user['id']];
+        $args = [$this->uid()];
         $status = (string) $this->get('status', '');
         if (in_array($status, ['draft', 'scheduled', 'publishing', 'published', 'failed', 'partial', 'uncertain'], true)) {
             $where[] = 'sp.status = ?';
             $args[] = $status;
         }
         $platform = (string) $this->get('platform', '');
-        if (in_array($platform, ['facebook', 'instagram', 'tiktok', 'youtube'], true)) {
+        if (in_array($platform, ['facebook', 'instagram', 'tiktok', 'youtube', 'google_business', 'threads', 'linkedin'], true)) {
             $where[] = 'EXISTS (SELECT 1 FROM social_post_targets tt JOIN platform_connections cc ON cc.id = tt.platform_connection_id WHERE tt.social_post_id = sp.id AND cc.platform = ?)';
             $args[] = $platform;
         }
@@ -1256,13 +1480,13 @@ JS;
         $limit = max(10, min(100, (int) $this->get('limit', 50)));
 
         $posts = $this->db->query(
-            'SELECT sp.id, sp.content, sp.status, sp.media_item_id, sp.created_at, m.file_path AS media_path, m.type AS media_type, m.user_id AS media_owner, m.deleted_at AS media_deleted, m.status AS media_status
+            'SELECT sp.id, sp.content, sp.status, sp.media_item_id, sp.created_at, ' . (SocialPostService::proSchema() ? 'sp.post_format' : "'feed' AS post_format") . (SocialPostService::growthSchema() ? ', sp.approval_state, sp.review_note, sp.created_by, (SELECT COALESCE(NULLIF(u.display_name, \'\'), u.first_name, u.email) FROM users u WHERE u.id = sp.created_by) AS author' : '') . ', m.file_path AS media_path, m.type AS media_type, m.user_id AS media_owner, m.deleted_at AS media_deleted, m.status AS media_status
                FROM social_posts sp LEFT JOIN media_items m ON m.id = sp.media_item_id
               WHERE ' . implode(' AND ', $where) . ' ORDER BY sp.created_at DESC, sp.id DESC LIMIT ' . $limit,
             $args
         );
         foreach ($posts as &$mediaPost) {
-            if ((int)($mediaPost['media_owner'] ?? 0) !== (int)$this->user['id'] || !empty($mediaPost['media_deleted']) || ($mediaPost['media_status'] ?? '') !== 'completed') {
+            if ((int)($mediaPost['media_owner'] ?? 0) !== $this->uid() || !empty($mediaPost['media_deleted']) || ($mediaPost['media_status'] ?? '') !== 'completed') {
                 $mediaPost['media_path'] = null;
             } elseif (PrivateMedia::valid((string)($mediaPost['media_path'] ?? ''))) {
                 $mediaPost['media_path'] = PrivateMedia::preview((int)$mediaPost['media_item_id']);
@@ -1274,7 +1498,7 @@ JS;
         $byPost = [];
         if ($ids) {
             $extraT = $this->hasColumn('social_post_targets', 'error_category') ? ', t.error_category, t.error_code, t.retry_count, t.next_retry_at, t.fbtrace_id' : '';
-            $extraM = $this->hasColumn('social_post_metrics', 'views') ? ', pm.views, pm.insights_note' : '';
+            $extraM = ($this->hasColumn('social_post_metrics', 'views') ? ', pm.views, pm.insights_note' : '') . ($this->hasColumn('social_post_metrics', 'saves') ? ', pm.saves' : '');
             $rows = $this->db->query(
                 'SELECT t.id AS target_id, t.social_post_id, t.status, t.last_error, t.scheduled_at, t.published_at, t.external_post_id' . $extraT . ',
                         c.platform, c.external_location_name AS name,
@@ -1291,8 +1515,10 @@ JS;
                 $byPost[(int) $r['social_post_id']][] = $r;
             }
         }
+        $attr = SocialAttribution::forPosts($this->uid(), $ids);
         foreach ($posts as &$p) {
             $p['targets'] = $byPost[(int) $p['id']] ?? [];
+            $p['attribution'] = $attr[(int) $p['id']] ?? null;
             if ($p['targets'] && $p['status'] === 'scheduled') {
                 // منشورات قديمة: الحالة ماكانتش بتتحدث - نحسبها من الأهداف
                 $p['status'] = SocialPostService::refreshPostStatus((int) $p['id']);
@@ -1312,7 +1538,7 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $days = max(7, min(90, (int) $this->get('days', 30)));
 
         try {
@@ -1411,6 +1637,7 @@ JS;
                 ],
                 'top_posts' => $top,
                 'samples' => $samples,
+                'bookings' => SocialAttribution::totals($uid, gmdate('Y-m-d H:i:s', time() - $days * 86400), gmdate('Y-m-d H:i:s', time() + 60)),
             ]);
         } catch (Throwable $e) {
             Logger::error('Social stats error', ['message' => $e->getMessage(), 'line' => $e->getLine()]);
@@ -1430,7 +1657,7 @@ JS;
         if ($rateError = $this->rateLimitGuard('user', 'social_metrics', 6, 60)) {
             return $rateError;
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $force = (bool) $this->get('force', false);
         @set_time_limit(90);
 
@@ -1460,7 +1687,16 @@ JS;
                 }
                 if ($res['success']) {
                     $ok++;
-                    if ($this->hasColumn('social_post_metrics', 'views')) {
+                    if ($this->hasColumn('social_post_metrics', 'saves')) {
+                        $this->db->query(
+                            "INSERT INTO social_post_metrics (target_id, likes, comments, shares, reach, views, saves, permalink, state, note, insights_note, fetched_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ok', NULL, ?, NOW())
+                             ON DUPLICATE KEY UPDATE likes = VALUES(likes), comments = VALUES(comments), shares = VALUES(shares),
+                                 reach = VALUES(reach), views = VALUES(views), saves = VALUES(saves), permalink = VALUES(permalink), state = 'ok', note = NULL,
+                                 insights_note = VALUES(insights_note), fetched_at = NOW()",
+                            [(int) $r['id'], $res['likes'], $res['comments'], $res['shares'], $res['reach'], $res['views'] ?? null, $res['saves'] ?? null, $res['permalink'], isset($res['insights_error']) ? mb_substr((string) $res['insights_error'], 0, 290) : null]
+                        );
+                    } elseif ($this->hasColumn('social_post_metrics', 'views')) {
                         // reach هنا = مشاهدون فريدون (post_total_media_view_unique)؛ insights_note بيشرح ليه الرقم فاضي بدل null صامت
                         $this->db->query(
                             "INSERT INTO social_post_metrics (target_id, likes, comments, shares, reach, views, permalink, state, note, insights_note, fetched_at)
@@ -1501,7 +1737,10 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
+        $uid = $this->uid();
         $postId = (int) ($params['id'] ?? 0);
         $rows = $this->db->query('SELECT content, media_item_id, website_id, hashtags FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $uid]);
         if (!$rows) {
@@ -1532,7 +1771,10 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
-        $uid = (int) $this->user['id'];
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
+        $uid = $this->uid();
         $postId = (int) ($params['id'] ?? 0);
         $rows = $this->db->query('SELECT id, status FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1', [$postId, $uid]);
         if (!$rows) {
@@ -1548,7 +1790,7 @@ JS;
         $at = null;
         $atRaw = trim((string) $this->get('scheduled_at', ''));
         if ($atRaw !== '') {
-            try{$ts=InternationalSettingsService::scheduledTimestamp((int)$this->user['id'],$atRaw);}catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
+            try{$ts=InternationalSettingsService::scheduledTimestamp($this->uid(),$atRaw);}catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
             if ($ts === false || $ts < time() - 60 || $ts > time() + 366 * 86400) {
                 return $this->error('موعد النشر لازم يكون في المستقبل (وخلال سنة)', 422);
             }
@@ -1623,17 +1865,24 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
+        // الستوري ما لهاش نص على المنصة: النص هنا ملاحظة داخلية اختيارية
+        if ((string) $this->get('post_format', '') === 'story' && trim((string) $this->get('content', '')) === '') {
+            $this->data['content'] = 'Story';
+        }
         if (!$this->validate(['content' => 'required'])) {
             return $this->error('Missing data', 422, $this->getErrors());
         }
 
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         // 🔒 الصفحات لازم تكون بتاعة العميل نفسه، والموعد بيتحفظ UTC
         $targets = [];
         foreach ((array) $this->get('targets', []) as $t) {
             $cid = (int) ($t['platform_connection_id'] ?? 0);
             $ok = $cid > 0 && $this->db->query(
-                "SELECT id FROM platform_connections WHERE id = ? AND (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND platform IN ('facebook','instagram','tiktok','youtube') AND status = 'connected' LIMIT 1",
+                "SELECT id FROM platform_connections WHERE id = ? AND (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND platform IN ('facebook','instagram','tiktok','youtube','google_business','threads','linkedin') AND status = 'connected' LIMIT 1",
                 [$cid, $uid, $uid]
             );
             if (!$ok) {
@@ -1694,21 +1943,74 @@ JS;
             $mediaId = $albumIds[0];
         }
 
+        // الستوري: صورة/فيديو واحد على فيسبوك وإنستجرام بس
+        $format = (string) $this->get('post_format', 'feed') === 'story' ? 'story' : 'feed';
+        if ($format === 'story') {
+            if ($mediaId <= 0 || $albumIds) {
+                return $this->error('الستوري محتاجة صورة أو فيديو واحد بالظبط', 422);
+            }
+            if ($targets) {
+                $cids = implode(',', array_map('intval', array_column($targets, 'platform_connection_id')));
+                if ($this->db->query("SELECT id FROM platform_connections WHERE id IN ({$cids}) AND platform NOT IN ('facebook','instagram') LIMIT 1")) {
+                    return $this->error('الستوري متاحة لفيسبوك وإنستجرام بس', 422);
+                }
+            }
+        }
+        $websiteId = (int) $this->get('website_id', 0);
+        if ($websiteId > 0 && !$this->db->query('SELECT id FROM websites WHERE id = ? AND user_id = ? LIMIT 1', [$websiteId, $uid])) {
+            $websiteId = 0;
+        }
+        $utm = $this->get('utm_campaign', '');
+        $utm = is_string($utm) ? SocialLinkTracker::slug($utm) : '';
+
+        // عضو الفريق اللي ما يقدرش ينشر (مبيعات/دعم): المنشور بيتحفظ مسودة "منتظر الاعتماد" والمدير ينشره بنقرة
+        $needsApproval = $targets && !SocialTeam::can($this->team(), 'publish');
+        if ($needsApproval && !SocialPostService::growthSchema()) {
+            return $this->error('شغّل migration السوشيال (2026_10_21_000001_social_growth.sql) عشان أعضاء الفريق يبعتوا منشورات للاعتماد', 422);
+        }
+        $approvalData = $needsApproval
+            ? ['approval_state' => 'pending', 'requested_targets_json' => json_encode(['targets' => $targets, 'tiktok' => $tiktokOpts]), 'created_by' => (int) ($this->user['id'] ?? 0)]
+            : (SocialPostService::growthSchema() ? ['created_by' => (int) ($this->user['id'] ?? 0)] : []);
+
+        if ($this->get('track_links', false) && $format !== 'story' && !SocialPackages::has($uid, 'attribution')) {
+            return $this->limitError(new SocialPackageLimit('«' . SocialPackages::LABELS['attribution'][0] . '» مش ضمن باقتك - شيل علامة "روابط قصيرة لتتبع الحجوزات" أو رقّي من صفحة الاشتراكات.', 'attribution'));
+        }
+        try {
+            $cids = array_column($targets, 'platform_connection_id');
+            // عضو الفريق: نتأكد بس إن الحسابات مش مقفولة (المنشورات بتتحسب لما المدير يعتمد)
+            $needsApproval ? SocialPackages::assertConnections($uid, $cids) : SocialPackages::assertPublish($uid, $cids, count($targets));
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
+        }
+
         try {
             $post = $this->service->createPost(
                 $uid,
                 // كان media_item_id بيتشال هنا، فاللي جاي من Creative Studio كان بيتنشر نص بس
-                ['content' => $this->get('content'), 'website_id' => $this->get('website_id'), 'media_item_id' => $mediaId ?: null,
+                ['content' => $this->get('content'), 'website_id' => $websiteId ?: null, 'media_item_id' => $mediaId ?: null,
                  'media_item_ids' => $albumIds ?: null,
-                 'hashtags' => $this->cleanHashtags($this->get('hashtags')), 'first_comment' => $this->cleanFirstComment($this->get('first_comment'))],
-                $targets
+                 'hashtags' => $this->cleanHashtags($this->get('hashtags')), 'first_comment' => $this->cleanFirstComment($this->get('first_comment')),
+                 'post_format' => $format, 'utm_campaign' => $utm, 'track_links' => $format !== 'story' && (bool) $this->get('track_links', false)] + $approvalData,
+                $needsApproval ? [] : $targets
             );
+            if ($needsApproval) {
+                foreach (SocialTeam::approvers($uid) as $approver) {
+                    try {
+                        Notification::notify($approver, 'social_post_approval', 'منشور محتاج اعتمادك', ($this->user['name'] ?? $this->user['email'] ?? 'عضو في الفريق') . ': «' . mb_substr((string) $this->get('content'), 0, 80) . '»', '/social#posts');
+                    } catch (Throwable $e) {
+                    }
+                }
+                $out = $post->toArray();
+                $out['approval_state'] = 'pending';
+                return $this->success(['post' => $out, 'pending_approval' => true], 'اتبعت للمدير يعتمده', 201);
+            }
             if ($tiktokOpts) {
                 $pdo = $this->db->getConnection();
                 foreach ($this->db->query('SELECT id FROM social_post_targets WHERE social_post_id = ? AND platform_connection_id IN (' . implode(',', array_map('intval', $tiktokIds)) . ')', [(int) $post->getAttribute('id')]) ?: [] as $row) {
                     TikTokAPI::saveOptions($pdo, (int) $row['id'], $tiktokOpts);
                 }
             }
+            SocialPackages::record($uid, 'posts', count($targets));
             // النشر الفوري بيتنفذ في نفس الطلب (مش مستني الكرون)
             SocialPostService::runNow($this->service->immediateJobIds);
             $postId = (int) $post->getAttribute('id');
@@ -1723,6 +2025,88 @@ JS;
             Logger::error('createPost Error', ['message' => $e->getMessage()]);
             return $this->error('Could not create the post', 500);
         }
+    }
+
+    /**
+     * POST /api/social/posts/{id}/review  body: {decision: approve|reject, note}
+     * المدير بيعتمد منشور عضو الفريق (بيتنشر/يتجدول بنفس الصفحات والمواعيد اللي اختارها العضو) أو يرفضه بملاحظة.
+     */
+    public function reviewPost(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($denied = $this->guard('publish')) {
+            return $denied;
+        }
+        if ($error = $this->verifyCsrf()) {
+            return $error;
+        }
+        $uid = $this->uid();
+        $postId = (int) ($params['id'] ?? 0);
+        if (!SocialPostService::growthSchema()) {
+            return $this->error('شغّل migration السوشيال (2026_10_21_000001_social_growth.sql) الأول', 422);
+        }
+        $row = $this->db->query("SELECT id, approval_state, requested_targets_json, created_by, content FROM social_posts WHERE id = ? AND user_id = ? LIMIT 1", [$postId, $uid])[0] ?? null;
+        if (!$row || $row['approval_state'] !== 'pending') {
+            return $this->error('المنشور مش منتظر اعتماد', 422);
+        }
+        $decision = (string) $this->get('decision', '');
+        $note = mb_substr(trim((string) $this->get('note', '')), 0, 500);
+        $reviewer = (int) ($this->user['id'] ?? 0);
+        if ($decision === 'reject') {
+            $this->db->query("UPDATE social_posts SET approval_state = 'rejected', reviewed_by = ?, review_note = ? WHERE id = ?", [$reviewer, $note ?: null, $postId]);
+            if ((int) $row['created_by']) {
+                try {
+                    Notification::notify((int) $row['created_by'], 'social_post_rejected', 'منشورك محتاج تعديل', ($note ?: 'المدير رجّع المنشور للتعديل') . ' — «' . mb_substr((string) $row['content'], 0, 60) . '»', '/social#posts');
+                } catch (Throwable $e) {
+                }
+            }
+            return $this->success(['approval_state' => 'rejected']);
+        }
+        if ($decision !== 'approve') {
+            return $this->error('القرار لازم يكون approve أو reject', 422);
+        }
+        $req = json_decode((string) $row['requested_targets_json'], true) ?: [];
+        $targets = [];
+        foreach ((array) ($req['targets'] ?? []) as $t) {
+            $cid = (int) ($t['platform_connection_id'] ?? 0);
+            if (!$cid || !$this->db->query("SELECT id FROM platform_connections WHERE id = ? AND (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND status = 'connected' LIMIT 1", [$cid, $uid, $uid])) {
+                return $this->error('صفحة من الصفحات المختارة اتفصلت - اربطها تاني أو عدّل المنشور', 422);
+            }
+            $at = $t['scheduled_at'] ?? null;
+            // الميعاد اللي عدّى وقت ما المدير بيعتمد: يتنشر دلوقتي بدل ما يضيع
+            $targets[] = ['platform_connection_id' => $cid, 'scheduled_at' => ($at && strtotime($at . ' UTC') > time() + 60) ? $at : null];
+        }
+        if (!$targets) {
+            return $this->error('المنشور مالوش صفحات نشر', 422);
+        }
+        try {
+            SocialPackages::assertPublish($uid, array_column($targets, 'platform_connection_id'), count($targets));
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
+        }
+        try {
+            $this->service->addTargets($postId, $targets);
+            SocialPackages::record($uid, 'posts', count($targets));
+            if (!empty($req['tiktok'])) {
+                foreach ($this->db->query("SELECT t.id FROM social_post_targets t JOIN platform_connections c ON c.id = t.platform_connection_id WHERE t.social_post_id = ? AND c.platform = 'tiktok'", [$postId]) ?: [] as $tt) {
+                    TikTokAPI::saveOptions($this->db->getConnection(), (int) $tt['id'], $req['tiktok']);
+                }
+            }
+            $this->db->query("UPDATE social_posts SET approval_state = 'approved', reviewed_by = ?, review_note = ? WHERE id = ?", [$reviewer, $note ?: null, $postId]);
+            SocialPostService::runNow($this->service->immediateJobIds);
+        } catch (Throwable $e) {
+            Logger::error('reviewPost approve failed', ['message' => $e->getMessage()]);
+            return $this->error('تعذر اعتماد المنشور', 500);
+        }
+        if ((int) $row['created_by'] && (int) $row['created_by'] !== $reviewer) {
+            try {
+                Notification::notify((int) $row['created_by'], 'social_post_approved', 'منشورك اتعتمد ✅', '«' . mb_substr((string) $row['content'], 0, 60) . '»', '/social#posts');
+            } catch (Throwable $e) {
+            }
+        }
+        return $this->success(['approval_state' => 'approved', 'status' => SocialPostService::refreshPostStatus($postId)]);
     }
 
     /**
@@ -1747,7 +2131,7 @@ JS;
                  WHERE sp.user_id = ? AND COALESCE(spt.scheduled_at, spt.published_at) IS NOT NULL
                  AND COALESCE(spt.scheduled_at, spt.published_at) BETWEEN DATE_SUB(NOW(), INTERVAL 14 DAY) AND DATE_ADD(NOW(), INTERVAL 35 DAY)
                  ORDER BY COALESCE(spt.scheduled_at, spt.published_at) ASC",
-                [$this->user['id']]
+                [$this->uid()]
             );
             return $this->success(['items' => $rows]);
         } catch (Exception $e) {
@@ -1762,6 +2146,9 @@ JS;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($denied = $this->guard('draft')) {
+            return $denied;
+        }
         if ($rateError = $this->rateLimitGuard('user', 'ai', 20, 60)) {
             return $rateError;
         }
@@ -1769,10 +2156,29 @@ JS;
             return $this->error('Topic is required', 422);
         }
 
-        $result = $this->service->generateCaption(
-            (string) $this->get('topic'),
-            (string) $this->get('platform', 'instagram'),
-            ContentLanguageService::forUser((int)$this->user['id'], (int)$this->get('website_id',0) ?: null)
+        $uid = $this->uid();
+        $wid = (int) $this->get('website_id', 0) ?: null;
+        if ($wid && !$this->db->query('SELECT id FROM websites WHERE id = ? AND user_id = ? LIMIT 1', [$wid, $uid])) {
+            $wid = null;
+        }
+        $platforms = $this->get('platforms', []);
+        $platforms = is_array($platforms) ? array_values(array_filter($platforms, 'is_string')) : [];
+        if (!$platforms && is_string($this->get('platform'))) {
+            $platforms = [(string) $this->get('platform')];
+        }
+        $language = (string) $this->get('language', '');
+        if (!in_array($language, ['ar', 'en'], true)) {
+            $language = ContentLanguageService::forUser($uid, $wid);
+        }
+        $result = $this->service->generateCaptionPro(
+            $uid,
+            $wid,
+            mb_substr((string) $this->get('topic'), 0, 400),
+            $platforms,
+            $language,
+            (string) $this->get('tone', 'friendly'),
+            (string) $this->get('goal', 'engagement'),
+            (string) $this->get('format', 'feed') === 'story' ? 'story' : 'feed'
         );
 
         if (!$result['success']) {
@@ -1791,7 +2197,7 @@ JS;
         if ($rateError = $this->rateLimitGuard('user', 'tiktok_creator_info', 30, 60)) {
             return $rateError;
         }
-        $uid = (int) $this->user['id'];
+        $uid = $this->uid();
         $cid = (int) $this->get('connection_id', 0);
         $own = $this->db->query("SELECT id FROM platform_connections WHERE id = ? AND platform = 'tiktok' AND status = 'connected' AND (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) LIMIT 1", [$cid, $uid, $uid]);
         $conn = $own ? (new PlatformConnection())->where(['id' => $cid], [], 1) : [];
@@ -1826,6 +2232,16 @@ JS;
     {
         if (!$this->isAuthenticated()) {
             header('Location: /login?redirect=' . urlencode('/social'));
+            exit;
+        }
+        if (!SocialTeam::can($this->team(), 'manage')) {
+            $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
+            exit;
+        }
+        try {
+            SocialPackages::assertConnect($this->uid(), 'tiktok');
+        } catch (SocialPackageLimit $e) {
+            $this->renderOAuthError($e->getMessage());
             exit;
         }
 
@@ -1910,12 +2326,12 @@ JS;
         $encryption = new Encryption();
 
         $existing = (new PlatformConnection())->where([
-            'user_id'  => (int) $this->user['id'],
+            'user_id'  => $this->uid(),
             'platform' => 'tiktok',
         ], [], 1);
 
         $connData = [
-            'user_id'               => (int) $this->user['id'],
+            'user_id'               => $this->uid(),
             'platform'              => 'tiktok',
             'status'                => 'connected',
             'access_token'          => $encryption->encrypt($accessToken),
@@ -1940,11 +2356,150 @@ JS;
         exit;
     }
 
+    /** حفظ/تحديث اتصال على مستوى الحساب (Threads/LinkedIn): نفس الحساب الخارجي = نفس الصف */
+    private function saveAccountConnection(string $platform, string $externalId, string $name, string $token, int $expiresIn, ?string $refresh = null): void
+    {
+        $enc = new Encryption();
+        $uid = $this->uid();
+        $row = $this->db->query('SELECT id FROM platform_connections WHERE user_id = ? AND platform = ? AND external_location_id = ? LIMIT 1', [$uid, $platform, $externalId])[0] ?? null;
+        $vals = [$enc->encrypt($token), $refresh ? $enc->encrypt($refresh) : null, mb_substr($name, 0, 120), gmdate('Y-m-d H:i:s', time() + max(3600, $expiresIn))];
+        if ($row) {
+            $this->db->query("UPDATE platform_connections SET access_token = ?, refresh_token = ?, external_location_name = ?, token_expires_at = ?, status = 'connected', last_error = NULL, updated_at = NOW() WHERE id = ?", array_merge($vals, [(int) $row['id']]));
+        } else {
+            $this->db->query("INSERT INTO platform_connections (user_id, platform, access_token, refresh_token, external_location_name, token_expires_at, external_location_id, status, connected_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?, 'connected', NOW(), NOW(), NOW())", array_merge([$uid, $platform], $vals, [$externalId]));
+        }
+    }
+
+    /** GET /social/connect/threads */
+    public function connectThreads(array $params = []): void
+    {
+        if (!$this->isAuthenticated()) {
+            header('Location: /login?redirect=' . urlencode('/social'));
+            exit;
+        }
+        if (!SocialTeam::can($this->team(), 'manage')) {
+            $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
+            exit;
+        }
+        try {
+            SocialPackages::assertConnect($this->uid(), 'threads');
+        } catch (SocialPackageLimit $e) {
+            $this->renderOAuthError($e->getMessage());
+            exit;
+        }
+        if (!ThreadsAPI::configured()) {
+            $this->renderOAuthError('ربط Threads لسه مش مفعّل على المنصة (THREADS_APP_ID / THREADS_APP_SECRET ناقصين).');
+            exit;
+        }
+        $nonce = bin2hex(random_bytes(16));
+        $_SESSION['threads_oauth_nonce'] = $nonce;
+        header('Location: ' . ThreadsAPI::authorizeUrl(OAuthState::issue(['aud' => 'threads', 'nonce' => $nonce], (int) ($this->user['id'] ?? 0))));
+        exit;
+    }
+
+    /** GET /social/connect/threads/callback */
+    public function threadsCallback(array $params = []): void
+    {
+        if (!$this->isAuthenticated()) {
+            header('Location: /login');
+            exit;
+        }
+        if ($this->get('error') || !$this->get('code')) {
+            $this->renderOAuthError('Threads: الربط اتلغى أو رجع من غير موافقة.');
+            exit;
+        }
+        if (!OAuthState::verify((string) $this->get('state'), (int) ($this->user['id'] ?? 0), $_SESSION['threads_oauth_nonce'] ?? null, 'threads')) {
+            $this->renderOAuthError('الجلسة انتهت أو المحاولة مش موثوقة - جرّب تاني.');
+            exit;
+        }
+        $tok = ThreadsAPI::exchangeCode((string) $this->get('code'));
+        if (empty($tok['success'])) {
+            $this->renderOAuthError('Threads: ' . htmlspecialchars((string) ($tok['error'] ?? 'تعذر الربط'), ENT_QUOTES, 'UTF-8'));
+            exit;
+        }
+        $me = (new ThreadsAPI($tok['access_token']))->me();
+        $id = (string) (($me['id'] ?? '') ?: $tok['user_id']);
+        $this->saveAccountConnection('threads', $id, '@' . (string) (($me['username'] ?? '') ?: 'threads'), $tok['access_token'], (int) $tok['expires_in']);
+        unset($_SESSION['threads_oauth_nonce']);
+        header('Location: /social?connected=threads#accounts');
+        exit;
+    }
+
+    /** GET /social/connect/linkedin */
+    public function connectLinkedIn(array $params = []): void
+    {
+        if (!$this->isAuthenticated()) {
+            header('Location: /login?redirect=' . urlencode('/social'));
+            exit;
+        }
+        if (!SocialTeam::can($this->team(), 'manage')) {
+            $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
+            exit;
+        }
+        try {
+            SocialPackages::assertConnect($this->uid(), 'linkedin');
+        } catch (SocialPackageLimit $e) {
+            $this->renderOAuthError($e->getMessage());
+            exit;
+        }
+        if (!LinkedInAPI::configured()) {
+            $this->renderOAuthError('ربط LinkedIn لسه مش مفعّل على المنصة (LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET ناقصين).');
+            exit;
+        }
+        $nonce = bin2hex(random_bytes(16));
+        $_SESSION['linkedin_oauth_nonce'] = $nonce;
+        header('Location: ' . LinkedInAPI::authorizeUrl(OAuthState::issue(['aud' => 'linkedin', 'nonce' => $nonce], (int) ($this->user['id'] ?? 0))));
+        exit;
+    }
+
+    /** GET /social/connect/linkedin/callback - بيربط البروفايل الشخصي + أي صفحة شركة العميل أدمن عليها */
+    public function linkedInCallback(array $params = []): void
+    {
+        if (!$this->isAuthenticated()) {
+            header('Location: /login');
+            exit;
+        }
+        if ($this->get('error') || !$this->get('code')) {
+            $this->renderOAuthError('LinkedIn: الربط اتلغى أو رجع من غير موافقة.');
+            exit;
+        }
+        if (!OAuthState::verify((string) $this->get('state'), (int) ($this->user['id'] ?? 0), $_SESSION['linkedin_oauth_nonce'] ?? null, 'linkedin')) {
+            $this->renderOAuthError('الجلسة انتهت أو المحاولة مش موثوقة - جرّب تاني.');
+            exit;
+        }
+        $tok = LinkedInAPI::exchangeCode((string) $this->get('code'));
+        if (empty($tok['success'])) {
+            $this->renderOAuthError(htmlspecialchars((string) ($tok['error'] ?? 'تعذر الربط'), ENT_QUOTES, 'UTF-8'));
+            exit;
+        }
+        $api = new LinkedInAPI($tok['access_token']);
+        $me = $api->me();
+        if (!empty($me['success'])) {
+            $this->saveAccountConnection('linkedin', $me['urn'], $me['name'] . ' (LinkedIn)', $tok['access_token'], (int) $tok['expires_in'], $tok['refresh_token']);
+        }
+        foreach ($api->organizations() as $org) {
+            $this->saveAccountConnection('linkedin', $org['urn'], $org['name'], $tok['access_token'], (int) $tok['expires_in'], $tok['refresh_token']);
+        }
+        unset($_SESSION['linkedin_oauth_nonce']);
+        header('Location: /social?connected=linkedin#accounts');
+        exit;
+    }
+
     /** GET /social/connect/youtube */
     public function connectYouTube(array $params = []): void
     {
         if (!$this->isAuthenticated()) {
             header('Location: /login?redirect=' . urlencode('/social'));
+            exit;
+        }
+        if (!SocialTeam::can($this->team(), 'manage')) {
+            $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
+            exit;
+        }
+        try {
+            SocialPackages::assertConnect($this->uid(), 'youtube');
+        } catch (SocialPackageLimit $e) {
+            $this->renderOAuthError($e->getMessage());
             exit;
         }
 
@@ -2031,12 +2586,12 @@ JS;
         $encryption = new Encryption();
 
         $existing = (new PlatformConnection())->where([
-            'user_id'  => (int) $this->user['id'],
+            'user_id'  => $this->uid(),
             'platform' => 'youtube',
         ], [], 1);
 
         $connData = [
-            'user_id'                => (int) $this->user['id'],
+            'user_id'                => $this->uid(),
             'platform'               => 'youtube',
             'status'                 => 'connected',
             'access_token'           => $encryption->encrypt($accessToken),

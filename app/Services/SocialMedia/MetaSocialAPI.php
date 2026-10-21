@@ -279,6 +279,41 @@ class MetaSocialAPI
     }
 
     /**
+     * Story بفيديو على صفحة فيسبوك (video_stories) - نفس مراحل الـ Reel: start ← رفع من رابط ← finish.
+     * فيسبوك بيعالج الفيديو بعد finish؛ الرد فيه post_id لما يتقبل.
+     */
+    public function publishVideoStoryToFacebookPage(string $pageId, string $pageAccessToken, string $videoUrl): array
+    {
+        $start = $this->post("{$pageId}/video_stories", ['upload_phase' => 'start'], $pageAccessToken);
+        if (!$start['success']) {
+            return $start + ['stage' => 'start'];
+        }
+        $videoId = (string) ($start['data']['video_id'] ?? '');
+        $uploadUrl = (string) ($start['data']['upload_url'] ?? '');
+        if ($videoId === '' || $uploadUrl === '') {
+            return $this->localError('بدء رفع فيديو الـ Story فشل: فيسبوك ما رجّعش video_id/upload_url', MetaApiError::UNKNOWN) + ['stage' => 'start'];
+        }
+        $host = strtolower((string) parse_url($uploadUrl, PHP_URL_HOST));
+        if (parse_url($uploadUrl, PHP_URL_SCHEME) !== 'https' || !($host === 'facebook.com' || str_ends_with($host, '.facebook.com'))) {
+            return $this->localError('upload_url غير موثوق: ' . $host, MetaApiError::PARAM) + ['stage' => 'start'];
+        }
+        $upload = $this->request('POST', '', [], [], [
+            'url' => $uploadUrl,
+            'headers' => ['Authorization: OAuth ' . $pageAccessToken, 'file_url: ' . $videoUrl],
+            'raw_token' => true,
+            'timeout' => 120,
+        ]);
+        if (!$upload['success']) {
+            return $upload + ['stage' => 'upload', 'video_id' => $videoId];
+        }
+        $finish = $this->post("{$pageId}/video_stories", ['upload_phase' => 'finish', 'video_id' => $videoId], $pageAccessToken);
+        if (!$finish['success']) {
+            return $finish + ['stage' => 'finish', 'video_id' => $videoId];
+        }
+        return ['success' => true, 'video_id' => $videoId, 'post_id' => (string) ($finish['data']['post_id'] ?? $videoId), 'post_url' => null];
+    }
+
+    /**
      * نشر فيديو على صفحة فيسبوك عن طريق رابط عام (file_url) - فيسبوك
      * بيسحب الفيديو بنفسه ويعالجه، مفيش رفع bytes مباشر مطلوب هنا.
      */
@@ -443,6 +478,23 @@ class MetaSocialAPI
     }
 
     /**
+     * container ستوري إنستجرام (صورة أو فيديو). الستوري ما لهاش كابشن. بعده polling ثم publishInstagramContainer.
+     * @return array ['success'=>bool, 'container_id'=>?string]
+     */
+    public function createInstagramStoryContainer(string $igUserId, string $pageAccessToken, string $mediaUrl, bool $isVideo): array
+    {
+        $result = $this->post("{$igUserId}/media", ['media_type' => 'STORIES', $isVideo ? 'video_url' : 'image_url' => $mediaUrl], $pageAccessToken);
+        if (!$result['success']) {
+            return $result;
+        }
+        $containerId = $result['data']['id'] ?? null;
+        if (!$containerId) {
+            return $this->localError('تعذر إنشاء container الستوري في انستجرام', MetaApiError::UNKNOWN);
+        }
+        return ['success' => true, 'container_id' => $containerId];
+    }
+
+    /**
      * كاروسيل إنستجرام (2-10 صور): children ثم container الكاروسيل. بعده لازم polling ثم publishInstagramContainer.
      * @param string[] $imageUrls
      */
@@ -528,6 +580,75 @@ class MetaSocialAPI
         return ['success' => true, 'comment_id' => $r['data']['id'] ?? null];
     }
 
+    /**
+     * تعليقات منشور (أول مستوى، الأحدث أولًا) بشكل موحّد للمنصتين.
+     * فيسبوك: pages_read_engagement + pages_read_user_content. إنستجرام: instagram_manage_comments.
+     * @return array ['success'=>bool,'comments'=>[['id','message','author_name','author_id','created_time','like_count','hidden','reply_count']]]
+     */
+    public function getObjectComments(string $platform, string $objectId, string $pageAccessToken, int $limit = 50): array
+    {
+        $api = $this->withToken($pageAccessToken);
+        $limit = max(1, min(100, $limit));
+        $r = $platform === 'instagram'
+            ? $api->get("{$objectId}/comments", ['fields' => 'id,text,username,from{id,username},timestamp,like_count,hidden,replies.limit(25){from{id}}', 'limit' => $limit])
+            : $api->get("{$objectId}/comments", ['fields' => 'id,message,from{id,name},created_time,like_count,is_hidden,comment_count,comments.limit(25){from{id}}', 'filter' => 'toplevel', 'order' => 'reverse_chronological', 'limit' => $limit]);
+        if (!$r['success']) {
+            return $r;
+        }
+        $out = [];
+        foreach ((array) ($r['data']['data'] ?? []) as $c) {
+            if (empty($c['id'])) {
+                continue;
+            }
+            $out[] = $platform === 'instagram'
+                ? ['id' => (string) $c['id'], 'message' => (string) ($c['text'] ?? ''), 'author_name' => (string) ($c['username'] ?? $c['from']['username'] ?? ''), 'author_id' => (string) ($c['from']['id'] ?? ''),
+                   'created_time' => $c['timestamp'] ?? null, 'like_count' => (int) ($c['like_count'] ?? 0), 'hidden' => !empty($c['hidden']), 'reply_count' => count((array) ($c['replies']['data'] ?? [])),
+                   'reply_author_ids' => array_values(array_filter(array_map(static fn ($x) => (string) ($x['from']['id'] ?? ''), (array) ($c['replies']['data'] ?? []))))]
+                : ['id' => (string) $c['id'], 'message' => (string) ($c['message'] ?? ''), 'author_name' => (string) ($c['from']['name'] ?? ''), 'author_id' => (string) ($c['from']['id'] ?? ''),
+                   'created_time' => $c['created_time'] ?? null, 'like_count' => (int) ($c['like_count'] ?? 0), 'hidden' => !empty($c['is_hidden']), 'reply_count' => (int) ($c['comment_count'] ?? 0),
+                   'reply_author_ids' => array_values(array_filter(array_map(static fn ($x) => (string) ($x['from']['id'] ?? ''), (array) ($c['comments']['data'] ?? []))))];
+        }
+        return ['success' => true, 'comments' => $out];
+    }
+
+    /** رد على تعليق: فيسبوك /{comment}/comments - إنستجرام /{comment}/replies */
+    public function replyToComment(string $platform, string $commentId, string $pageAccessToken, string $message): array
+    {
+        $r = $this->post($platform === 'instagram' ? "{$commentId}/replies" : "{$commentId}/comments", ['message' => $message], $pageAccessToken);
+        if (!$r['success']) {
+            return $r;
+        }
+        return ['success' => true, 'reply_id' => $r['data']['id'] ?? null];
+    }
+
+    /**
+     * رد خاص (Private Reply) على تعليق: رسالة واحدة في الماسنجر/دايركت إنستجرام لصاحب التعليق.
+     * بيتبعت عن طريق الصفحة نفسها (me/messages بتوكن الصفحة) لفيسبوك وإنستجرام الاتنين.
+     * قيود Meta: رسالة واحدة بس لكل تعليق، وخلال 7 أيام من التعليق. محتاج pages_messaging (+ instagram_manage_messages).
+     */
+    public function sendPrivateReply(string $commentId, string $pageAccessToken, string $text): array
+    {
+        $r = $this->post('me/messages', [
+            'recipient' => json_encode(['comment_id' => $commentId]),
+            'message' => json_encode(['text' => mb_substr($text, 0, 1900)], JSON_UNESCAPED_UNICODE),
+            'messaging_type' => 'RESPONSE',
+        ], $pageAccessToken);
+        if (!$r['success']) {
+            return $r;
+        }
+        return ['success' => true, 'message_id' => $r['data']['message_id'] ?? null];
+    }
+
+    /** إخفاء تعليق (سبام/إساءة) - بيفضل ظاهر لصاحبه بس */
+    public function hideComment(string $platform, string $commentId, string $pageAccessToken, bool $hide = true): array
+    {
+        $r = $this->post($commentId, $platform === 'instagram' ? ['hide' => $hide ? 'true' : 'false'] : ['is_hidden' => $hide ? 'true' : 'false'], $pageAccessToken);
+        if (!$r['success']) {
+            return $r;
+        }
+        return ['success' => true];
+    }
+
     /** تعديل نص منشور فيسبوك بعد النشر */
     public function editFacebookPost(string $postId, string $pageAccessToken, string $message): array
     {
@@ -603,7 +724,7 @@ class MetaSocialAPI
     public function getPostMetrics(string $platform, string $postId, string $pageAccessToken): array
     {
         $api = $this->withToken($pageAccessToken);
-        $out = ['success' => false, 'likes' => 0, 'comments' => 0, 'shares' => 0, 'reach' => null, 'views' => null, 'permalink' => null, 'insights_error' => null];
+        $out = ['success' => false, 'likes' => 0, 'comments' => 0, 'shares' => 0, 'reach' => null, 'views' => null, 'saves' => null, 'permalink' => null, 'insights_error' => null];
 
         if ($platform === 'instagram') {
             $r = $api->get($postId, ['fields' => 'like_count,comments_count,permalink']);
@@ -614,15 +735,29 @@ class MetaSocialAPI
             $out['likes'] = (int) ($d['like_count'] ?? 0);
             $out['comments'] = (int) ($d['comments_count'] ?? 0);
             $out['permalink'] = $d['permalink'] ?? null;
-            $ins = $api->get($postId . '/insights', ['metric' => 'reach,shares']);
+            // مقاييس إنستجرام بتختلف حسب نوع الوسائط والإصدار: بنجرّب الأشمل الأول وبعدين الأبسط
+            $ins = ['success' => false];
+            foreach (['reach,shares,saved,views', 'reach,shares,saved', 'reach,shares'] as $metrics) {
+                $ins = $api->get($postId . '/insights', ['metric' => $metrics]);
+                if ($ins['success']) {
+                    break;
+                }
+            }
             if ($ins['success']) {
                 foreach (($ins['data']['data'] ?? []) as $m) {
                     $v = $m['values'][0]['value'] ?? ($m['total_value']['value'] ?? null);
-                    if (($m['name'] ?? '') === 'reach' && $v !== null) {
-                        $out['reach'] = (int) $v;
+                    if ($v === null || is_array($v)) {
+                        continue;
                     }
-                    if (($m['name'] ?? '') === 'shares' && $v !== null) {
+                    $name = (string) ($m['name'] ?? '');
+                    if ($name === 'reach') {
+                        $out['reach'] = (int) $v;
+                    } elseif ($name === 'shares') {
                         $out['shares'] = (int) $v;
+                    } elseif ($name === 'saved') {
+                        $out['saves'] = (int) $v;
+                    } elseif ($name === 'views') {
+                        $out['views'] = (int) $v;
                     }
                 }
             } else {
@@ -665,6 +800,72 @@ class MetaSocialAPI
         }
         $out['success'] = true;
         return $out;
+    }
+
+    /**
+     * عدد متابعين الحساب ومنشوراته (لمنحنى نمو المتابعين اليومي).
+     * @return array ['success'=>bool,'followers'=>?int,'posts_count'=>?int]
+     */
+    public function getAccountStats(string $platform, string $accountId, string $pageAccessToken): array
+    {
+        $api = $this->withToken($pageAccessToken);
+        $r = $platform === 'instagram'
+            ? $api->get($accountId, ['fields' => 'followers_count,media_count'])
+            : $api->get($accountId, ['fields' => 'followers_count,fan_count']);
+        if (!$r['success']) {
+            return $r;
+        }
+        $d = $r['data'];
+        $followers = $d['followers_count'] ?? ($d['fan_count'] ?? null);
+        return ['success' => true, 'followers' => $followers === null ? null : (int) $followers, 'posts_count' => isset($d['media_count']) ? (int) $d['media_count'] : null];
+    }
+
+    /**
+     * صورة واسم الصفحة/الحساب (لكروت الحسابات واختيار الصفحات في المحرر).
+     * @return array ['success'=>bool,'avatar'=>?string,'username'=>?string,'name'=>?string,'followers'=>?int]
+     */
+    public function getProfile(string $platform, string $accountId, string $pageAccessToken): array
+    {
+        $api = $this->withToken($pageAccessToken);
+        $r = $platform === 'instagram'
+            ? $api->get($accountId, ['fields' => 'username,name,profile_picture_url,followers_count'])
+            : $api->get($accountId, ['fields' => 'name,username,picture.type(large){url},followers_count,fan_count']);
+        if (!$r['success']) {
+            return $r;
+        }
+        $d = $r['data'];
+        $avatar = $platform === 'instagram' ? ($d['profile_picture_url'] ?? null) : ($d['picture']['data']['url'] ?? null);
+        $followers = $d['followers_count'] ?? ($d['fan_count'] ?? null);
+        return ['success' => true, 'avatar' => is_string($avatar) && str_starts_with($avatar, 'https://') ? $avatar : null,
+            'username' => isset($d['username']) ? (string) $d['username'] : null, 'name' => isset($d['name']) ? (string) $d['name'] : null,
+            'followers' => $followers === null ? null : (int) $followers];
+    }
+
+    /**
+     * بيانات حساب إنستجرام بيزنس تاني (منافس) عن طريق Business Discovery - متاح بصلاحية instagram_basic.
+     * @return array ['success'=>bool,'profile'=>['username','name','followers','media_count'],'media'=>[['caption','likes','comments','timestamp','type','permalink']]]
+     */
+    public function businessDiscovery(string $igUserId, string $pageAccessToken, string $username, int $limit = 12): array
+    {
+        $username = ltrim(trim($username), '@');
+        if (!preg_match('/^[A-Za-z0-9._]{1,30}$/', $username)) {
+            return $this->localError('اسم حساب إنستجرام مش صالح', MetaApiError::PARAM);
+        }
+        $fields = 'business_discovery.username(' . $username . '){username,name,followers_count,media_count,media.limit(' . max(1, min(25, $limit)) . '){caption,like_count,comments_count,timestamp,media_type,permalink}}';
+        $r = $this->withToken($pageAccessToken)->get($igUserId, ['fields' => $fields]);
+        if (!$r['success']) {
+            return $r;
+        }
+        $bd = (array) ($r['data']['business_discovery'] ?? []);
+        if (!$bd) {
+            return $this->localError('الحساب ده مش حساب بيزنس/كريتور أو مش موجود', MetaApiError::PARAM);
+        }
+        $media = [];
+        foreach ((array) ($bd['media']['data'] ?? []) as $m) {
+            $media[] = ['caption' => mb_substr((string) ($m['caption'] ?? ''), 0, 300), 'likes' => (int) ($m['like_count'] ?? 0), 'comments' => (int) ($m['comments_count'] ?? 0),
+                'timestamp' => $m['timestamp'] ?? null, 'type' => (string) ($m['media_type'] ?? ''), 'permalink' => $m['permalink'] ?? null];
+        }
+        return ['success' => true, 'profile' => ['username' => (string) ($bd['username'] ?? $username), 'name' => (string) ($bd['name'] ?? ''), 'followers' => isset($bd['followers_count']) ? (int) $bd['followers_count'] : null, 'media_count' => isset($bd['media_count']) ? (int) $bd['media_count'] : null], 'media' => $media];
     }
 
     // ------------------------------------------------------------------

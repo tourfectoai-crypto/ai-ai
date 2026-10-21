@@ -137,6 +137,12 @@ class TikTokAPI
 
     // ------------------------------------------------------------ اختيارات العميل لكل منشور
 
+    /** لازم تتنادى برّه أي transaction: CREATE TABLE بيعمل commit ضمني في MySQL */
+    public static function ensureOptionsTable(PDO $pdo): void
+    {
+        self::optionsTable($pdo);
+    }
+
     private static function optionsTable(PDO $pdo): void
     {
         static $done = false;

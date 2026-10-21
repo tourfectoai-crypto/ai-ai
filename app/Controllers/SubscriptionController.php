@@ -991,7 +991,12 @@ JS;
     {
         $css = htmlspecialchars(asset_v('/assets/css/plans-studio.css'), ENT_QUOTES, 'UTF-8');
         $js = htmlspecialchars(asset_v('/assets/js/plans-studio.js'), ENT_QUOTES, 'UTF-8');
-        return '<link rel="stylesheet" href="' . $css . '"><section id="plansStudio" class="ps" aria-live="polite"></section><script defer src="' . $js . '"></script>';
+        // باقات السوشيال ميديا جنب باقات المنصة (نفس المحفظة) - #social بيوصل لها من صفحة السوشيال
+        $sCss = htmlspecialchars(asset_v('/assets/css/social-packages.css'), ENT_QUOTES, 'UTF-8');
+        $sIcons = htmlspecialchars(asset_v('/assets/js/sp-icons.js'), ENT_QUOTES, 'UTF-8');
+        $sJs = htmlspecialchars(asset_v('/assets/js/social-packages.js'), ENT_QUOTES, 'UTF-8');
+        return '<link rel="stylesheet" href="' . $css . '"><section id="plansStudio" class="ps" aria-live="polite"></section><script defer src="' . $js . '"></script>'
+            . '<link rel="stylesheet" href="' . $sCss . '"><div id="social"></div><section id="socialPackages" aria-live="polite"></section><script defer src="' . $sIcons . '"></script><script defer src="' . $sJs . '"></script>';
     }
 
     /** تحت السعر بالدولار: بعملة العميل لو اختار عملة، وإلا بالجنيه (شرط بنك الدفع) */

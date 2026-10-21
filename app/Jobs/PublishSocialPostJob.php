@@ -8,6 +8,9 @@
  * v5: Reels على فيسبوك بتدفق async حقيقي، قرار النتيجة عبر PublishPolicy (success/retry_later/failed/uncertain)،
  *     إعادة تلقائية لحدود الاستخدام، pre-flight للوسائط، أول تعليق، سجل نشر للمراقبة.
  */
+require_once __DIR__ . '/../Services/SocialMedia/SocialLinkTracker.php';
+require_once __DIR__ . '/../Services/SocialMedia/ThreadsAPI.php';
+require_once __DIR__ . '/../Services/SocialMedia/LinkedInAPI.php';
 if (!class_exists('SocialMonthlyPlanService', false)) {
     require_once __DIR__.'/../Services/SocialMedia/SocialMonthlyPlanService.php';
 }
@@ -80,7 +83,7 @@ class PublishSocialPostJob implements QueueJobInterface
 
         $platform = (string) $connection->getAttribute('platform');
 
-        if (!in_array($platform, ['facebook', 'instagram', 'tiktok', 'youtube'], true)) {
+        if (!in_array($platform, ['facebook', 'instagram', 'tiktok', 'youtube', 'google_business', 'threads', 'linkedin'], true)) {
             $target->setAttribute('status', 'failed');
             $target->setAttribute('last_error', "النشر الفعلي على منصة {$platform} لسه مش متاح (المنصات المدعومة: فيسبوك، انستجرام، تيك توك، يوتيوب).");
             if(!$target->save())throw new RuntimeException('Target persistence failed');
@@ -89,7 +92,9 @@ class PublishSocialPostJob implements QueueJobInterface
 
         try {
             $encryption = new Encryption();
-            $message = PublishPolicy::composeMessage((string) $post->getAttribute('content'), (string) $post->getAttribute('hashtags'));
+            // المحتوى + الهاشتاجات + تتبّع UTM لروابط موقع العميل (نفس التركيب اللي المصالحة بتطابق بيه)
+            $message = SocialLinkTracker::finalMessage($post, $platform, $targetId);
+            $isStory = (string) ($post->getAttribute('post_format') ?: 'feed') === 'story';
 
             $media = $this->resolveMedia((int) $post->getAttribute('media_item_id'));
             if($media&&(int)$media->getAttribute('user_id')!==(int)$post->getAttribute('user_id'))throw new RuntimeException('Media ownership mismatch');
@@ -113,6 +118,16 @@ class PublishSocialPostJob implements QueueJobInterface
 
             if ((in_array($platform, ['instagram', 'tiktok'], true) && !$mediaUrl) || ($platform === 'youtube' && !$media)) {
                 $this->fail($target, "{$platform} محتاج صورة أو فيديو إجباريًا - المنشور ده مفيهوش وسائط. ارفع صورة أو فيديو من فورم المنشور، أو اختار واحدة من Creative Studio.");
+                return;
+            }
+
+            if ($isStory) {
+                $this->publishStory($target, $post, $platform, $connection, $encryption, $albumUrls, $mediaUrl, (bool) $isVideo);
+                return;
+            }
+
+            if (in_array($platform, ['google_business', 'threads', 'linkedin'], true)) {
+                $this->publishExtra($target, $post, $platform, $connection, $encryption, $message, $media, $albumUrls ? $albumUrls[0] : $mediaUrl, (bool) $isVideo);
                 return;
             }
 
@@ -217,6 +232,171 @@ class PublishSocialPostJob implements QueueJobInterface
                 'message'   => $e->getMessage(),
             ]);
         }
+    }
+
+    // --- Stories ---
+    /**
+     * ستوري فيسبوك/إنستجرام: صورة أو فيديو واحد من غير نص (الستوري ما لهاش كابشن).
+     * إنستجرام بيعدّي بنفس دورة الـ container (إنشاء ← polling ← نشر). فيسبوك صورة = طلب واحد، فيديو = 3 مراحل.
+     */
+    private function publishStory(SocialPostTarget $target, SocialPost $post, string $platform, PlatformConnection $connection, Encryption $encryption, array $albumUrls, ?string $mediaUrl, bool $isVideo): void
+    {
+        if (!in_array($platform, ['facebook', 'instagram'], true)) {
+            $this->fail($target, 'الستوري متاحة لفيسبوك وإنستجرام بس.');
+            return;
+        }
+        if ($albumUrls) {
+            $this->fail($target, 'الستوري بتاخد صورة أو فيديو واحد بس - شيل الصور المتعددة.');
+            return;
+        }
+        if (!$mediaUrl) {
+            $this->fail($target, 'الستوري محتاجة صورة أو فيديو.');
+            return;
+        }
+        $token = $encryption->decrypt((string) $connection->getAttribute('access_token'));
+        $api = $this->metaApi($token);
+        $accountId = (string) $connection->getAttribute('external_location_id');
+        $uid = (int) $post->getAttribute('user_id');
+
+        if ($platform === 'instagram') {
+            if ((string) ($target->getAttribute('provider_ref') ?: '') === '') {
+                if (!$this->preflightOk($target, $post, $platform, '', $mediaUrl, $isVideo)) {
+                    return;
+                }
+                $this->markAttempt($target);
+            }
+            $this->handleInstagramVideo($target, $post, $api, $accountId, $token, $mediaUrl, '', fn () => $api->createInstagramStoryContainer($accountId, $token, $mediaUrl, $isVideo));
+            return;
+        }
+
+        if (!$this->preflightOk($target, $post, $platform, '', $mediaUrl, $isVideo)) {
+            return;
+        }
+        $this->markAttempt($target);
+        $result = $isVideo
+            ? ExternalExecution::run($this->stepKey($target, 'step9'), $uid, fn () => $api->publishVideoStoryToFacebookPage($accountId, $token, $mediaUrl))
+            : ExternalExecution::run($this->stepKey($target, 'step10'), $uid, fn () => $api->publishPhotoStoryToFacebookPage($accountId, $token, $mediaUrl));
+        $this->finishOrFail($target, $post, $platform, $result);
+    }
+
+    // --- Google Business / Threads / LinkedIn ---
+    /** @var callable|null حقن عملاء المنصات الإضافية في الاختبارات: fn(string $platform, PlatformConnection $c, string $token): object */
+    public static $extraFactory = null;
+
+    /**
+     * نشر على Google Business (Local Post بصورة + زرار للموقع)، Threads (نص/صورة/فيديو)، LinkedIn (نص + صورة).
+     * الصور المتعددة: بيتنشر الغلاف (أول صورة) بس على المنصات دي.
+     */
+    private function publishExtra(SocialPostTarget $target, SocialPost $post, string $platform, PlatformConnection $connection, Encryption $encryption, string $message, ?MediaItem $media, ?string $mediaUrl, bool $isVideo): void
+    {
+        $uid = (int) $post->getAttribute('user_id');
+        $ref = (string) ($target->getAttribute('provider_ref') ?: '');
+
+        if ($platform === 'google_business') {
+            if ($isVideo) {
+                $this->fail($target, 'Google Business بيقبل صور بس من هنا - اختار صورة للمنشور ده أو شيل Google Business.');
+                return;
+            }
+            $text = trim(preg_replace('/(?:\s*#[\p{L}\p{N}_]+)+\s*$/u', '', $message)); // Google ما بتستخدمش هاشتاجات
+            if (mb_strlen($text) > 1500) {
+                $this->fail($target, 'نص Google Business أقصاه 1500 حرف - اختصر النص.');
+                return;
+            }
+            $site = Database::getInstance()->query('SELECT main_url, target_language FROM websites WHERE id = ? LIMIT 1', [(int) $post->getAttribute('website_id') ?: 0])[0] ?? null;
+            $cta = $site ? (string) $site['main_url'] : null;
+            $campaign = (string) ($post->getAttribute('utm_campaign') ?? '');
+            if ($cta && $campaign !== '') {
+                $cta = SocialLinkTracker::apply($cta, 'google_business', $campaign, SocialLinkTracker::hostsFor($uid, (int) $post->getAttribute('website_id') ?: null));
+            }
+            $this->markAttempt($target);
+            $result = ExternalExecution::run($this->stepKey($target, 'step11'), $uid, function () use ($connection, $text, $site, $cta, $mediaUrl) {
+                $api = self::$extraFactory ? (self::$extraFactory)('google_business', $connection, '') : new GoogleBusinessAPI((new GoogleReviewSyncService())->getValidAccessToken($connection), (string) $connection->getAttribute('external_account_id'), (string) $connection->getAttribute('external_location_id'));
+                return $api->publishPost($text, ($site['target_language'] ?? '') ?: 'ar', $cta ?: null, ['media_url' => $mediaUrl]);
+            });
+            $this->finishOrFail($target, $post, $platform, self::extraOutcome($result));
+            return;
+        }
+
+        $token = $encryption->decrypt((string) $connection->getAttribute('access_token'));
+
+        if ($platform === 'threads') {
+            if (mb_strlen($message) > ThreadsAPI::TEXT_LIMIT) {
+                $this->fail($target, 'Threads حده ' . ThreadsAPI::TEXT_LIMIT . ' حرف (النص مع الهاشتاجات) - اختصر النص أو شيل Threads.');
+                return;
+            }
+            // التوكن بيعيش 60 يوم: بنجدده لو فاضل أقل من 7 أيام
+            $exp = (string) ($connection->getAttribute('token_expires_at') ?? '');
+            if ($exp !== '' && strtotime($exp . ' UTC') < time() + 7 * 86400 && !self::$extraFactory) {
+                $ref2 = ThreadsAPI::refresh($token);
+                if (!empty($ref2['success'])) {
+                    $token = $ref2['access_token'];
+                    Database::getInstance()->query('UPDATE platform_connections SET access_token = ?, token_expires_at = ? WHERE id = ?', [$encryption->encrypt($token), gmdate('Y-m-d H:i:s', time() + (int) $ref2['expires_in']), (int) $connection->getAttribute('id')]);
+                }
+            }
+            $api = self::$extraFactory ? (self::$extraFactory)('threads', $connection, $token) : new ThreadsAPI($token, (string) $connection->getAttribute('external_location_id'));
+            if ($ref === '') {
+                $this->markAttempt($target);
+                $c = ExternalExecution::run($this->stepKey($target, 'step12'), $uid, fn () => $api->createContainer($message, $isVideo ? null : $mediaUrl, $isVideo ? $mediaUrl : null));
+                if (empty($c['success'])) {
+                    $this->finishOrFail($target, $post, $platform, self::extraOutcome($c));
+                    return;
+                }
+                if (!$mediaUrl) {
+                    $this->finishOrFail($target, $post, $platform, self::extraOutcome(ExternalExecution::run($this->stepKey($target, 'step13'), $uid, fn () => $api->publish((string) $c['container_id']))));
+                    return;
+                }
+                // صورة/فيديو: Threads بتعالج الوسائط الأول - نستنى ونتابع
+                $target->setAttribute('provider_ref', 'th:' . $c['container_id']);
+                $target->setAttribute('status', 'publishing');
+                if (!$target->save()) throw new RuntimeException('Target persistence failed');
+                $this->requeue((int) $target->getAttribute('id'), 30);
+                return;
+            }
+            $containerId = substr($ref, 3);
+            $attempts = (int) $target->getAttribute('poll_attempts');
+            if ($attempts >= self::MAX_POLL_ATTEMPTS) {
+                $this->fail($target, 'Threads أخدت وقت طويل في معالجة الوسائط - حاول تاني.');
+                return;
+            }
+            $st = $api->status($containerId);
+            if (!empty($st['success']) && in_array($st['status'], ['ERROR', 'EXPIRED'], true)) {
+                $this->fail($target, 'Threads رفضت الوسائط: ' . ($st['error'] ?? $st['status']));
+                return;
+            }
+            if (empty($st['success']) || $st['status'] !== 'FINISHED') {
+                $target->setAttribute('poll_attempts', $attempts + 1);
+                if (!$target->save()) throw new RuntimeException('Target persistence failed');
+                $this->requeue((int) $target->getAttribute('id'));
+                return;
+            }
+            $this->finishOrFail($target, $post, $platform, self::extraOutcome(ExternalExecution::run($this->stepKey($target, 'step13'), $uid, fn () => $api->publish($containerId))));
+            return;
+        }
+
+        // LinkedIn
+        if ($isVideo) {
+            $this->fail($target, 'LinkedIn: الفيديو لسه مش مدعوم من هنا - استخدم صورة، أو انشر الفيديو من LinkedIn مباشرة.');
+            return;
+        }
+        $path = null;
+        if ($media) {
+            $fp = (string) $media->getAttribute('file_path');
+            $path = PrivateMedia::valid($fp) ? PrivateMedia::resolve($fp) : ROOT_PATH . '/public_html/' . ltrim($fp, '/');
+        }
+        $api = self::$extraFactory ? (self::$extraFactory)('linkedin', $connection, $token) : new LinkedInAPI($token);
+        $this->markAttempt($target);
+        $result = ExternalExecution::run($this->stepKey($target, 'step14'), $uid, fn () => $api->publish((string) $connection->getAttribute('external_location_id'), $message, $path));
+        $this->finishOrFail($target, $post, $platform, self::extraOutcome($result));
+    }
+
+    /** نتيجة المنصات الإضافية بنفس شكل قرار النشر: رفض واضح = فشل، غير كده = غامض (مصالحة يدوية) */
+    private static function extraOutcome(array $r): array
+    {
+        if (!empty($r['success'])) {
+            return $r;
+        }
+        $definitive = !empty($r['definitive']) || in_array((string) ($r['error_code'] ?? ''), ['AUTH_REQUIRED', 'TOKEN_EXPIRED', 'PERMISSION_DENIED', 'NOT_FOUND', 'INVALID_ARGUMENT', 'NOT_SUPPORTED'], true);
+        return ['success' => false, 'error' => (string) ($r['error'] ?? 'المنصة رفضت المنشور'), 'outcome_state' => $definitive ? 'failed' : 'uncertain'];
     }
 
     // --- Instagram ---
@@ -330,7 +510,9 @@ class PublishSocialPostJob implements QueueJobInterface
                 return;
             }
 
-            $result = ExternalExecution::run('social:'.$target->getAttribute('id').':step7',(int)$post->getAttribute('user_id'),fn()=>$api->uploadShort($fullPath, $title, $title, [], 'public'));
+            // يوتيوب: العنوان أقصاه 100 حرف ومن غير < > (كان النص كله بيتبعت عنوان فالرفع بيفشل مع أي كابشن طويل)
+            [$ytTitle, $ytTags] = self::youTubeMeta($title);
+            $result = ExternalExecution::run('social:'.$target->getAttribute('id').':step7',(int)$post->getAttribute('user_id'),fn()=>$api->uploadShort($fullPath, $ytTitle, $title, $ytTags, 'public'));
             if (!$result['success']) {
                 $this->fail($target, $result['error'] ?? 'تعذر رفع الفيديو على YouTube',($result['outcome_state']??'uncertain')==='uncertain');
                 return;
@@ -371,6 +553,29 @@ class PublishSocialPostJob implements QueueJobInterface
         $this->finishOrFail($target, $post, 'youtube', ['success' => true, 'post_id' => $videoId]);
     }
 
+    /** عنوان يوتيوب (أول سطر من غير هاشتاجات، ≤100 حرف، من غير < >) + tags من الهاشتاجات - نقية */
+    public static function youTubeMeta(string $message): array
+    {
+        preg_match_all('/#([\p{L}\p{N}_]+)/u', $message, $m);
+        $tags = array_slice(array_values(array_unique($m[1] ?? [])), 0, 15);
+        $first = '';
+        foreach (preg_split('/\R/u', $message) as $line) {
+            $line = trim(preg_replace('/#[\p{L}\p{N}_]+/u', '', $line));
+            if ($line !== '') {
+                $first = $line;
+                break;
+            }
+        }
+        $first = trim(str_replace(['<', '>'], '', $first));
+        if ($first === '') {
+            $first = 'Shorts';
+        }
+        if (mb_strlen($first) > 100) {
+            $first = rtrim(mb_substr($first, 0, 97)) . '...';
+        }
+        return [$first, $tags];
+    }
+
     private function finishOrFail(SocialPostTarget $target, SocialPost $post, string $platform, array $result): void
     {
         $targetId = (int) $target->getAttribute('id');
@@ -396,6 +601,9 @@ class PublishSocialPostJob implements QueueJobInterface
             'instagram' => 'انستجرام',
             'tiktok'    => 'تيك توك',
             'youtube'   => 'يوتيوب',
+            'google_business' => 'Google Business',
+            'threads'   => 'Threads',
+            'linkedin'  => 'LinkedIn',
             default     => $platform,
         };
 
@@ -634,7 +842,7 @@ class PublishSocialPostJob implements QueueJobInterface
     {
         $comment = trim((string) $post->getAttribute('first_comment'));
         $objectId = (string) $target->getAttribute('external_post_id');
-        if ($comment === '' || $objectId === '' || !in_array($platform, ['facebook', 'instagram'], true)) {
+        if ($comment === '' || $objectId === '' || !in_array($platform, ['facebook', 'instagram'], true) || (string) $post->getAttribute('post_format') === 'story') {
             return;
         }
         try {

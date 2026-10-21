@@ -14,6 +14,7 @@
  * @version 1.0.0
  */
 require_once __DIR__ . '/FacebookPostMatcher.php';
+require_once __DIR__ . '/SocialLinkTracker.php';
 require_once __DIR__ . '/PublishPolicy.php';
 require_once __DIR__ . '/MetaSocialAPI.php';
 
@@ -74,6 +75,11 @@ class SocialPostReconciler
                 return self::res('still_uncertain', 'الـ Reel لسه بيتعالج عند فيسبوك.');
             }
 
+            // الستوري ما بتظهرش في منشورات الصفحة: مفيش حاجة نطابق بيها - الحسم يدوي عشان ما نكرّرش ستوري
+            if ((string) $post->getAttribute('post_format') === 'story') {
+                return self::res('still_uncertain', 'الستوري ما بتظهرش في قائمة منشورات الصفحة - افتح الصفحة واتأكد بنفسك ثم احسمها يدويًا.');
+            }
+
             // 2) مطابقة بآخر منشورات الصفحة/الحساب
             $attempt = self::attemptTimestamp($target, $now);
             $list = $platform === 'facebook'
@@ -82,7 +88,7 @@ class SocialPostReconciler
             if (!$list['success']) {
                 return self::res('still_uncertain', 'تعذر قراءة منشورات الصفحة من Meta: ' . ($list['error'] ?? ''));
             }
-            $expected = PublishPolicy::composeMessage((string) $post->getAttribute('content'), (string) $post->getAttribute('hashtags'));
+            $expected = SocialLinkTracker::finalMessage($post, $platform, (int) $target->getAttribute('id'));
             $m = FacebookPostMatcher::match($list['posts'], $expected, $attempt - self::WINDOW_BEFORE, $attempt + self::WINDOW_AFTER);
 
             if ($m['status'] === FacebookPostMatcher::STATUS_MATCH) {
