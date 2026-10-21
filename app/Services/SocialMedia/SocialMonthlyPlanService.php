@@ -15,6 +15,24 @@ class SocialMonthlyPlanService
         return $n===2;
     }
     private function requireReady(): void { if(!$this->ready())throw new RuntimeException('Install the monthly-plan SQL migration first.'); }
+    private static ?bool $periodReady=null;
+    /** أعمدة الفترة والتجديد (شهرية/نص شهرية/دايمة) - idempotent وبرا أي transaction عشان الـ DDL بيعمل commit */
+    public function ensurePeriodSchema(): void {
+        if($this->periodReady()||$this->pdo->inTransaction()||!$this->ready())return;
+        try{$this->pdo->exec("ALTER TABLE social_monthly_plans ADD COLUMN period_type VARCHAR(12) NOT NULL DEFAULT 'month', ADD COLUMN starts_on DATE NULL, ADD COLUMN ends_on DATE NULL, ADD COLUMN renew TINYINT(1) NOT NULL DEFAULT 0, ADD COLUMN auto_approve TINYINT(1) NOT NULL DEFAULT 0, ADD COLUMN parent_plan_id BIGINT UNSIGNED NULL, ADD COLUMN renewed_plan_id BIGINT UNSIGNED NULL, ADD COLUMN renew_error VARCHAR(300) NULL, ADD COLUMN renew_checked_at DATETIME NULL, ADD KEY ix_social_monthly_renew (renew,renewed_plan_id,ends_on)");}
+        catch(Throwable $e){Logger::warning('Monthly plan period schema failed',['message'=>$e->getMessage()]);}
+        self::$periodReady=null;
+    }
+    public function periodReady(): bool {
+        if(self::$periodReady===null){try{self::$periodReady=(bool)$this->q("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='social_monthly_plans' AND column_name='renewed_plan_id'")->fetchColumn();}catch(Throwable $e){self::$periodReady=false;}}
+        return self::$periodReady;
+    }
+    /** مواعيد البوستات حسب فترة الخطة (الخطط القديمة = الشهر كله) */
+    private static function slotsFor(array $brief,int $count,?array $prefs): array {
+        return !empty($brief['start_date'])&&!empty($brief['end_date'])
+            ?self::scheduleRange($brief['start_date'],$brief['end_date'],$brief['timezone'],$brief['publish_time'],$count,null,$prefs)
+            :self::schedule($brief['month'],$brief['timezone'],$brief['publish_time'],$count,null,$prefs);
+    }
     public static function worker(): array {
         $base=defined('TOURFECTO_STORAGE')?TOURFECTO_STORAGE:dirname(__DIR__,3).'/storage';
         $r=json_decode((string)@file_get_contents($base.'/cache/queue-heartbeat.json'),true);
@@ -59,13 +77,34 @@ class SocialMonthlyPlanService
     }
     /** $clock='smart': كل يوم بميعاده الأفضل ($prefs = [dow=>'HH:MM'] من SocialBestTimes) بدل ساعة واحدة ثابتة طول الشهر */
     public static function schedule(string $month,string $timezone,string $clock,int $count,?DateTimeImmutable $now=null,?array $prefs=null): array {
+        if(!preg_match('/^\d{4}-\d{2}$/D',$month)||!in_array($timezone,DateTimeZone::listIdentifiers(),true))throw new InvalidArgumentException('Invalid month, timezone, time or post count');
+        $zone=new DateTimeZone($timezone);$first=DateTimeImmutable::createFromFormat('!Y-m-d',$month.'-01',$zone);$tzNow=($now??new DateTimeImmutable('now'))->setTimezone($zone);
+        if(!$first||$first->format('Y-m')!==$month||$month<$tzNow->format('Y-m')||$month>$tzNow->modify('+6 months')->format('Y-m'))throw new InvalidArgumentException('Choose this month or one of the next six months');
+        return self::scheduleRange($first->format('Y-m-d'),$first->format('Y-m-t'),$timezone,$clock,$count,$now,$prefs);
+    }
+    /** فترات الخطة: شهر كامل من يوم البداية، أو نص شهر (15 يوم) */
+    public const PERIODS=['month','half'];
+    public const COUNTS=[2,4,6,8,10,12,16,20];
+    /** يوم البداية والنهاية (بتوقيت العميل) لفترة بتبدأ من $startDate */
+    public static function period(string $type,string $startDate,string $timezone,?DateTimeImmutable $now=null): array {
+        if(!in_array($type,self::PERIODS,true))throw new InvalidArgumentException('Choose a monthly or half-month plan');
+        if(!in_array($timezone,DateTimeZone::listIdentifiers(),true))throw new InvalidArgumentException('Invalid timezone');
+        $zone=new DateTimeZone($timezone);$start=DateTimeImmutable::createFromFormat('!Y-m-d',$startDate,$zone);
+        if(!$start||$start->format('Y-m-d')!==$startDate)throw new InvalidArgumentException('Choose a valid start date');
+        $today=($now??new DateTimeImmutable('now'))->setTimezone($zone)->setTime(0,0);
+        if($start<$today||$start>$today->modify('+6 months'))throw new InvalidArgumentException('Choose a start date from today up to six months ahead');
+        $end=$type==='half'?$start->modify('+14 days'):$start->modify('+1 month')->modify('-1 day');
+        return ['type'=>$type,'start'=>$start->format('Y-m-d'),'end'=>$end->format('Y-m-d'),'month'=>$start->format('Y-m')];
+    }
+    /** مواعيد النشر موزّعة بالتساوي على أيام الفترة [$from..$to] (بتوقيت العميل) */
+    public static function scheduleRange(string $from,string $to,string $timezone,string $clock,int $count,?DateTimeImmutable $now=null,?array $prefs=null): array {
         $smart=$clock==='smart';if($smart){$prefs=$prefs?:SocialBestTimes::BENCHMARK;$clock='00:00';}
-        if(!preg_match('/^\d{4}-\d{2}$/D',$month)||!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/D',$clock)||!in_array($timezone,DateTimeZone::listIdentifiers(),true)||$count<1||$count>20)throw new InvalidArgumentException('Invalid month, timezone, time or post count');
+        if(!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/D',$clock)||!in_array($timezone,DateTimeZone::listIdentifiers(),true)||$count<1||$count>20)throw new InvalidArgumentException('Invalid month, timezone, time or post count');
         $zone=new DateTimeZone($timezone);$now=($now??new DateTimeImmutable('now'))->setTimezone($zone);
-        $start=DateTimeImmutable::createFromFormat('!Y-m-d H:i',$month.'-01 '.$clock,$zone);
-        if(!$start||$start->format('Y-m')!==$month||$month<$now->format('Y-m')||$month>$now->modify('+6 months')->format('Y-m'))throw new InvalidArgumentException('Choose this month or one of the next six months');
-        $days=[];for($d=$start;$d->format('Y-m')===$month;$d=$d->modify('+1 day')){if($smart){$hm=(string)($prefs[(int)$d->format('w')]??'19:00');if(!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/D',$hm))$hm='19:00';[$hh,$mm]=array_map('intval',explode(':',$hm));$d=$d->setTime($hh,$mm);}if($d->getTimestamp()>$now->getTimestamp()+900)$days[]=$d;}
-        if(count($days)<$count)throw new InvalidArgumentException('Not enough future days in this month; choose fewer posts or next month');
+        $start=DateTimeImmutable::createFromFormat('!Y-m-d H:i',$from.' '.$clock,$zone);$last=DateTimeImmutable::createFromFormat('!Y-m-d',$to,$zone);
+        if(!$start||!$last||$last<$start->setTime(0,0))throw new InvalidArgumentException('Invalid plan period');
+        $days=[];for($d=$start;$d->format('Y-m-d')<=$to;$d=$d->modify('+1 day')){if($smart){$hm=(string)($prefs[(int)$d->format('w')]??'19:00');if(!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/D',$hm))$hm='19:00';[$hh,$mm]=array_map('intval',explode(':',$hm));$d=$d->setTime($hh,$mm);}if($d->getTimestamp()>$now->getTimestamp()+900)$days[]=$d;}
+        if(count($days)<$count)throw new InvalidArgumentException('Not enough future days in this period; choose fewer posts or a later start');
         $out=[];for($i=0;$i<$count;$i++){$index=$count===1?0:(int)round($i*(count($days)-1)/($count-1));$out[]=$days[$index]->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');}return $out;
     }
     private function connections(int $uid,int $wid,array $ids): array {
@@ -113,23 +152,29 @@ class SocialMonthlyPlanService
         try {
             $existing=$this->q('SELECT id FROM social_monthly_plans WHERE user_id=? AND request_key=?',[$uid,$key])->fetchColumn();if($existing)return $this->detail($uid,(int)$existing);
             $wid=filter_var($input['website_id']??null,FILTER_VALIDATE_INT);if(!$wid||$wid<1)throw new InvalidArgumentException('Choose a website');
-            $count=filter_var($input['post_count']??12,FILTER_VALIDATE_INT);if(!in_array($count,[4,8,12,16,20],true))throw new InvalidArgumentException('Choose 4, 8, 12, 16 or 20 posts per page');
+            $count=filter_var($input['post_count']??12,FILTER_VALIDATE_INT);if(!in_array($count,self::COUNTS,true))throw new InvalidArgumentException('Choose between 2 and 20 posts per page');
             $brief=[];foreach(['business'=>1000,'audience'=>500,'goal'=>500,'offers'=>1500,'cta'=>300] as $field=>$max)$brief[$field]=self::shortText($input[$field]??'',$field,$max,in_array($field,['business','audience','goal','cta'],true)?3:0);
             $brief['shared_profile']=(new BusinessHubService($this->db))->profile($uid,(int)$wid);$brief['language']=$input['language']??'en';if(!in_array($brief['language'],['ar','en'],true))throw new InvalidArgumentException('Choose Arabic or English');
-            $brief['timezone']=self::shortText($input['timezone']??'','timezone',64,1);$brief['month']=self::shortText($input['month']??'','month',7,7);$brief['publish_time']=self::shortText($input['publish_time']??'18:00','publish time',5,5);$brief['post_count']=$count;
+            $brief['timezone']=self::shortText($input['timezone']??'','timezone',64,1);$brief['publish_time']=self::shortText($input['publish_time']??'18:00','publish time',5,5);$brief['post_count']=$count;
+            // الفترة: شهر أو نص شهر من يوم بداية يختاره العميل؛ الطلب القديم (month بس) = الشهر كله
+            if(is_string($input['start_date']??null)&&$input['start_date']!==''){$per=self::period((string)($input['period']??'month'),$input['start_date'],$brief['timezone']);$brief['period']=$per['type'];$brief['start_date']=$per['start'];$brief['end_date']=$per['end'];$brief['month']=$per['month'];}
+            else $brief['month']=self::shortText($input['month']??'','month',7,7);
+            $renew=!empty($input['renew'])&&$this->periodReady();$autoApprove=$renew&&!empty($input['auto_approve']);
             $brief['mix']=in_array($input['mix']??'mix',['mix','photo','design'],true)?($input['mix']??'mix'):'mix';
-            $slots=self::schedule($brief['month'],$brief['timezone'],$brief['publish_time'],$count,null,$brief['publish_time']==='smart'?SocialBestTimes::preferences($uid,$brief['timezone']):null);
+            $slots=self::slotsFor($brief,$count,$brief['publish_time']==='smart'?SocialBestTimes::preferences($uid,$brief['timezone']):null);
             $brief['connection_ids']=self::ids($input['connection_ids']??null,'publishing pages',4);$brief['media_ids']=self::ids($input['media_ids']??null,'campaign images/videos',60);
             $connections=$this->connections($uid,(int)$wid,$brief['connection_ids']);$assets=$this->assets($uid,$brief['media_ids']);
             foreach($connections as $c)if(!self::compatible($c['platform'],$assets))throw new InvalidArgumentException('Upload and select a video for TikTok or YouTube');
             $quote=PlanUsage::check($uid,'marketing_tool','marketing_tool','Insufficient credit.');
             $fingerprint=self::quoteHash($quote);
             if(empty($quote['ok'])||!is_string($input['quote_hash']??null)||!hash_equals($fingerprint,$input['quote_hash']))throw new InvalidArgumentException('Generation price changed. Refresh setup before confirming.');
-            $planId=$this->db->transaction(function()use($uid,$wid,$key,$brief,$fingerprint,&$token){
+            $parent=isset($input['parent_plan_id'])?(int)$input['parent_plan_id']:null;
+            $planId=$this->db->transaction(function()use($uid,$wid,$key,$brief,$fingerprint,&$token,$renew,$autoApprove,$parent){
                 $token=ServiceUsageReservation::reserve($uid,'marketing_tool','marketing_tool');
                 $held=$this->q('SELECT source,amount FROM service_usage_reservations WHERE token=?',[$token])->fetch(PDO::FETCH_ASSOC);
                 if(!$held||!hash_equals($fingerprint,self::quoteHash(['source'=>$held['source'],'price'=>$held['amount']])))throw new InvalidArgumentException('Generation price changed before reservation. Refresh setup.');
                 $this->q("INSERT INTO social_monthly_plans(user_id,website_id,request_key,month_key,timezone,language,brief_json,status,usage_token,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'queued',?,UTC_TIMESTAMP(),UTC_TIMESTAMP())",[$uid,$wid,$key,$brief['month'],$brief['timezone'],$brief['language'],json_encode($brief,JSON_THROW_ON_ERROR),$token]);$newId=(int)$this->pdo->lastInsertId();
+                if($this->periodReady())$this->q('UPDATE social_monthly_plans SET period_type=?,starts_on=?,ends_on=?,renew=?,auto_approve=?,parent_plan_id=? WHERE id=?',[$brief['period']??'month',$brief['start_date']??($brief['month'].'-01'),$brief['end_date']??date('Y-m-t',strtotime($brief['month'].'-01')),$renew?1:0,$autoApprove?1:0,$parent,$newId]);
                 $job=Container::getInstance()->make(QueueManager::class)->push(GenerateSocialMonthlyPlanJob::class,['plan_id'=>$newId],'social');
                 if(!$job)throw new RuntimeException('Monthly plan queue unavailable');
                 return $newId;
@@ -151,7 +196,7 @@ class SocialMonthlyPlanService
             // الذكاء الصناعي يشوف صور العميل اللي لسه ماشافهاش قبل ما يختار صورة لكل بوست
             $studio=new SocialBrandStudio($this->pdo);try{$studio->learnMissing($uid,$brief['media_ids'],12);}catch(Throwable $e){}
             $assets=$this->assets($uid,$brief['media_ids']);
-            $slots=self::schedule($brief['month'],$brief['timezone'],$brief['publish_time'],$count,null,$brief['publish_time']==='smart'?SocialBestTimes::preferences($uid,$brief['timezone']):null);
+            $slots=self::slotsFor($brief,$count,$brief['publish_time']==='smart'?SocialBestTimes::preferences($uid,$brief['timezone']):null);
             $this->q("UPDATE social_monthly_plans SET status='generating',updated_at=UTC_TIMESTAMP() WHERE id=? AND status='queued'",[$planId]);
             $platforms=array_values(array_unique(array_column($connections,'platform')));
             $past=$this->performanceContext($uid,(int)$wid);
@@ -169,7 +214,7 @@ class SocialMonthlyPlanService
                 $this->q("UPDATE social_monthly_plans SET strategy_json=?,status='draft',version=version+1,updated_at=UTC_TIMESTAMP() WHERE id=? AND user_id=?",[json_encode(['summary'=>$result['strategy']],JSON_THROW_ON_ERROR),$planId,$uid]);
                 if(!ServiceUsageReservation::settle($token,'completed'))throw new RuntimeException('Generation usage settlement failed');
             });
-            try{Notification::notify($uid,'social_monthly_plan_ready','Monthly plan ready','Review your monthly plan before enabling publishing.','/social');}catch(Throwable $ignored){}
+            $readyToNotify=true;
 
         } catch(Throwable $e) {
             $uncertain=($e instanceof ProviderRequestFailure&&$e->uncertain)||($providerStarted&&!$received&&!($e instanceof ProviderRequestFailure));
@@ -181,6 +226,17 @@ class SocialMonthlyPlanService
                 Logger::warning('Monthly plan generation did not complete',['plan_id'=>$planId,'uncertain'=>$uncertain]);
             }else throw $e;
         } finally {ExternalExecution::unlock('social-monthly-plan:'.$planId);}
+        if(!empty($readyToNotify))$this->afterGenerated($uid,$planId);
+    }
+    /** خطة اتجهزت: لو دورة تجديد والعميل مختار «اعتماد تلقائي» بنعتمدها، وإلا بنبلّغه يراجعها */
+    private function afterGenerated(int $uid,int $planId): void {
+        $p=$this->q('SELECT * FROM social_monthly_plans WHERE id=? AND user_id=?',[$planId,$uid])->fetch(PDO::FETCH_ASSOC);if(!$p)return;
+        $when=!empty($p['starts_on'])?' ('.$p['starts_on'].' → '.$p['ends_on'].')':'';
+        if(!empty($p['auto_approve'])&&$p['status']==='draft'){
+            try{$this->approve($uid,$planId,(int)$p['version']);try{Notification::notify($uid,'social_monthly_plan_ready','خطة الفترة الجاية اتعتمدت لوحدها','خطة السوشيال الجديدة'.$when.' اتجهزت واتجدولت تلقائيًا. تقدر تعدّل أو تتخطى أي بوست قبل ميعاده.','/social#plan');}catch(Throwable $ignored){}return;}
+            catch(Throwable $e){$this->q('UPDATE social_monthly_plans SET error_message=? WHERE id=?',[mb_substr('Automatic approval stopped: '.$e->getMessage(),0,500),$planId]);}
+        }
+        try{Notification::notify($uid,'social_monthly_plan_ready','خطة السوشيال جاهزة للمراجعة','خطتك'.$when.' جاهزة. راجعها واعتمدها عشان النشر يبدأ في ميعاده.','/social#plan');}catch(Throwable $ignored){}
     }
     /** Scheduled, read-only measurement for Meta channels. Never invents unavailable metrics. */
     public function refreshTargetMetrics(int $targetId): void {
@@ -221,7 +277,19 @@ class SocialMonthlyPlanService
         try{return $this->q("SELECT c.platform,COUNT(*) AS measured_posts,SUM(m.reach) AS reach,SUM(m.likes+m.comments+m.shares) AS interactions,MAX(m.fetched_at) AS measured_at FROM social_post_metrics m JOIN social_post_targets t ON t.id=m.target_id JOIN social_posts p ON p.id=t.social_post_id JOIN platform_connections c ON c.id=t.platform_connection_id WHERE p.user_id=? AND p.website_id=? AND m.state='ok' AND t.published_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 60 DAY) GROUP BY c.platform",[$uid,$wid])->fetchAll(PDO::FETCH_ASSOC);}catch(Throwable $e){return [];}
     }
     public function listPlans(int $uid): array {
-        $this->requireReady();return $this->q('SELECT id,website_id,month_key,timezone,language,status,version,error_message,created_at,approved_at FROM social_monthly_plans WHERE user_id=? ORDER BY id DESC LIMIT 30',[$uid])->fetchAll(PDO::FETCH_ASSOC);
+        $this->requireReady();$extra=$this->periodReady()?',p.period_type,p.starts_on,p.ends_on,p.renew,p.auto_approve,p.parent_plan_id,p.renewed_plan_id,p.renew_error':'';
+        // التقدّم لكل خطة: اتنشر كام من كام، فيه كام محتاج انتباه، وإمتى البوست الجاي
+        return $this->q("SELECT p.id,p.website_id,p.month_key,p.timezone,p.language,p.status,p.version,p.error_message,p.created_at,p.approved_at{$extra},
+                COUNT(i.id) AS total,SUM(t.status='published') AS published,SUM(t.status IN ('failed','uncertain') AND i.state<>'skipped') AS attention,
+                MIN(CASE WHEN t.status='scheduled' AND i.state<>'skipped' THEN t.scheduled_at END) AS next_at
+              FROM social_monthly_plans p LEFT JOIN social_monthly_plan_items i ON i.plan_id=p.id LEFT JOIN social_post_targets t ON t.id=i.target_id
+             WHERE p.user_id=? GROUP BY p.id ORDER BY p.id DESC LIMIT 30",[$uid])->fetchAll(PDO::FETCH_ASSOC);
+    }
+    /** الموعد جوه فترة الخطة (من أول يوم لآخر يوم، بتوقيت العميل) */
+    private static function inPeriod(array $p,DateTimeImmutable $at): bool {
+        $day=$at->format('Y-m-d');
+        if(!empty($p['starts_on'])&&!empty($p['ends_on']))return $day>=$p['starts_on']&&$day<=$p['ends_on'];
+        return $at->format('Y-m')===$p['month_key'];
     }
     private function ownedPlan(int $uid,int $id,bool $lock=false): array {
         $p=$this->q('SELECT * FROM social_monthly_plans WHERE id=? AND user_id=?'.($lock?' FOR UPDATE':''),[$id,$uid])->fetch(PDO::FETCH_ASSOC);if(!$p)throw new InvalidArgumentException('Plan unavailable');return $p;
@@ -238,6 +306,9 @@ class SocialMonthlyPlanService
             if($i['last_error'])$i['last_error']=CustomerError::message((string)$i['last_error'],502);
         }unset($i);
         $p['generation_needs_review']=in_array($p['status'],['queued','generating'],true)&&strtotime($p['created_at'].' UTC')<time()-600;
+        $next=null;foreach($items as $it)if($it['effective_status']==='scheduled'&&($next===null||$it['scheduled_local']<$next))$next=$it['scheduled_local'];$p['next_local']=$next;
+        // الخطة الدايمة: الدورة الجاية بتتجهز قبل نهاية الفترة بـ RENEW_LEAD_DAYS أيام
+        if(!empty($p['renew'])&&!empty($p['ends_on']))$p['renew_on']=(new DateTimeImmutable($p['ends_on']))->modify('-'.self::RENEW_LEAD_DAYS.' days')->format('Y-m-d');
         $p['brief']=json_decode($p['brief_json'],true);$p['strategy']=json_decode((string)$p['strategy_json'],true);unset($p['brief_json'],$p['strategy_json'],$p['usage_token'],$p['request_key']);
         if(in_array($p['status'],['active','paused'],true)&&!$counts['scheduled']&&!$counts['publishing']){$this->q("UPDATE social_monthly_plans SET status='completed',updated_at=UTC_TIMESTAMP() WHERE id=? AND status IN ('active','paused')",[$id]);$p['status']='completed';}
         return ['plan'=>$p,'items'=>$items,'counts'=>$counts,'worker'=>self::worker()];
@@ -256,7 +327,7 @@ class SocialMonthlyPlanService
                     $mid=(new SocialBrandStudio($this->pdo))->design($uid,(int)$p['website_id'],(string)($cm['format']??'design'),$head,$sub,isset($cm['base_media_id'])?(int)$cm['base_media_id']:null,(int)array_search($cm['template']??'overlay',SocialPostDesigner::TEMPLATES,true));
             }$assets=$this->assets($uid,[$mid]);if(!self::compatible($i['platform'],$assets))throw new InvalidArgumentException('This platform requires video');
             $clock=self::shortText($input['scheduled_local']??'','publish time',16,16);$zone=new DateTimeZone($p['timezone']);$at=DateTimeImmutable::createFromFormat('!Y-m-d\TH:i',$clock,$zone);
-            if(!$at||$at->format('Y-m-d\TH:i')!==$clock||$at->format('Y-m')!==$p['month_key']||$at->getTimestamp()<time()+900)throw new InvalidArgumentException('Choose a future time in the plan month');
+            if(!$at||$at->format('Y-m-d\TH:i')!==$clock||!self::inPeriod($p,$at)||$at->getTimestamp()<time()+900)throw new InvalidArgumentException('Choose a future time inside the plan period');
             $this->q('UPDATE social_monthly_plan_items SET content=?,media_item_id=?,scheduled_at=?,updated_at=UTC_TIMESTAMP() WHERE id=? AND plan_id=?',[$content,$mid,$at->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'),$itemId,$id]);
             $this->q('UPDATE social_monthly_plans SET version=version+1,updated_at=UTC_TIMESTAMP() WHERE id=?',[$id]);return $this->detail($uid,$id);
         });
@@ -313,8 +384,96 @@ class SocialMonthlyPlanService
                     $job=Container::getInstance()->make(QueueManager::class)->push(PublishSocialPostJob::class,['social_post_target_id'=>(int)$i['target_id']],'social',max(0,strtotime(($i['actual_scheduled_at']?:$i['scheduled_at']).' UTC')-time()));if(!$job)throw new RuntimeException('Queue unavailable');$this->q('UPDATE jobs SET available_at=? WHERE id=?',[$i['actual_scheduled_at']?:$i['scheduled_at'],$job]);$this->q('UPDATE social_monthly_plan_items SET job_id=? WHERE id=?',[$job,$i['id']]);
                 }
             }
-            $this->q('UPDATE social_monthly_plans SET status=?,version=version+1,updated_at=UTC_TIMESTAMP() WHERE id=?',[$next,$id]);return $this->detail($uid,$id);
+            $this->q('UPDATE social_monthly_plans SET status=?,version=version+1,updated_at=UTC_TIMESTAMP() WHERE id=?',[$next,$id]);
+            if($action==='cancel'&&$this->periodReady())$this->q('UPDATE social_monthly_plans SET renew=0 WHERE id=?',[$id]);
+            return $this->detail($uid,$id);
         });}finally{ExternalExecution::unlock('social-monthly-plan:'.$id);}
+    }
+    public const RENEW_LEAD_DAYS=5;
+    /**
+     * تعديل بوست في خطة شغالة (بعد الاعتماد) قبل ميعاده: النص/الصورة/الميعاد، أو تخطّيه.
+     * $input: {action:'edit'|'skip', content, media_item_id, scheduled_local}
+     */
+    public function liveEdit(int $uid,int $id,int $itemId,array $input): array {
+        $this->requireReady();if(!ExternalExecution::lock('social-monthly-plan:'.$id))throw new RuntimeException('A post is currently processing. Retry after it finishes.');
+        try{return $this->db->transaction(function()use($uid,$id,$itemId,$input){
+            $p=$this->ownedPlan($uid,$id,true);if(!in_array($p['status'],['active','paused'],true))throw new InvalidArgumentException('Only a running plan can be edited this way');
+            $i=$this->q('SELECT i.*,t.status AS delivery_status,t.scheduled_at AS actual_scheduled_at FROM social_monthly_plan_items i JOIN social_post_targets t ON t.id=i.target_id WHERE i.id=? AND i.plan_id=? FOR UPDATE',[$itemId,$id])->fetch(PDO::FETCH_ASSOC);
+            if(!$i||$i['state']==='skipped'||$i['delivery_status']!=='scheduled')throw new InvalidArgumentException('This post was already published, skipped or is publishing now; it can no longer be changed');
+            $target=(int)$i['target_id'];$payload=json_encode(['social_post_target_id'=>$target]);
+            if(($input['action']??'edit')==='skip'){
+                $this->q("UPDATE social_monthly_plan_items SET state='skipped',updated_at=UTC_TIMESTAMP() WHERE id=?",[$itemId]);
+                $this->q("UPDATE social_post_targets SET status='failed',last_error='Skipped by you.' WHERE id=? AND status='scheduled'",[$target]);
+                $this->q("DELETE FROM jobs WHERE job_class='PublishSocialPostJob' AND payload=? AND status='pending'",[$payload]);
+                SocialPostService::refreshPostStatus((int)$i['social_post_id']);
+            }else{
+                $content=self::shortText($input['content']??'','caption',($i['platform']==='tiktok'?1000:1800),15);
+                $mid=filter_var($input['media_item_id']??$i['media_item_id'],FILTER_VALIDATE_INT);if(!$mid)throw new InvalidArgumentException('Choose media');
+                if((int)$mid!==(int)$i['media_item_id']&&!self::compatible($i['platform'],$this->assets($uid,[(int)$mid])))throw new InvalidArgumentException('This platform requires video');
+                $clock=self::shortText($input['scheduled_local']??'','publish time',16,16);$zone=new DateTimeZone($p['timezone']);$at=DateTimeImmutable::createFromFormat('!Y-m-d\TH:i',$clock,$zone);
+                if(!$at||$at->format('Y-m-d\TH:i')!==$clock||!self::inPeriod($p,$at)||$at->getTimestamp()<time()+300)throw new InvalidArgumentException('Choose a time at least 5 minutes from now inside the plan period');
+                $utc=$at->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+                $this->q('UPDATE social_posts SET content=?,media_item_id=?,updated_at=UTC_TIMESTAMP() WHERE id=? AND user_id=?',[$content,$mid,$i['social_post_id'],$uid]);
+                $this->q("UPDATE social_post_targets SET scheduled_at=? WHERE id=? AND status='scheduled'",[$utc,$target]);
+                $this->q('UPDATE social_monthly_plan_items SET content=?,media_item_id=?,scheduled_at=?,updated_at=UTC_TIMESTAMP() WHERE id=?',[$content,$mid,$utc,$itemId]);
+                if($utc!==(string)($i['actual_scheduled_at']?:$i['scheduled_at'])){
+                    // مهمة النشر بتتحرك للميعاد الجديد (ومهام قياس التفاعل بعد يوم وبعد أسبوع معاها)
+                    $job=$this->q("SELECT id FROM jobs WHERE job_class='PublishSocialPostJob' AND payload=? AND status='pending' ORDER BY id LIMIT 1",[$payload])->fetchColumn();
+                    if(!$job){$job=Container::getInstance()->make(QueueManager::class)->push(PublishSocialPostJob::class,['social_post_target_id'=>$target],'social',max(0,$at->getTimestamp()-time()));if(!$job)throw new RuntimeException('Publishing queue unavailable');}
+                    $this->q('UPDATE jobs SET available_at=? WHERE id=?',[$utc,$job]);$this->q('UPDATE social_monthly_plan_items SET job_id=? WHERE id=?',[$job,$itemId]);
+                    foreach($this->q("SELECT id FROM jobs WHERE job_class='RefreshSocialPlanMetricsJob' AND payload=? AND status='pending' ORDER BY id",[json_encode(['target_id'=>$target])])->fetchAll(PDO::FETCH_COLUMN) as $n=>$mj)
+                        $this->q('UPDATE jobs SET available_at=? WHERE id=?',[gmdate('Y-m-d H:i:s',$at->getTimestamp()+($n===0?86400:604800)),$mj]);
+                }
+            }
+            $this->q('UPDATE social_monthly_plans SET version=version+1,updated_at=UTC_TIMESTAMP() WHERE id=?',[$id]);
+            return $this->detail($uid,$id);
+        });}finally{ExternalExecution::unlock('social-monthly-plan:'.$id);}
+    }
+    /** تشغيل/إيقاف «الخطة الدايمة» (تتجدد لوحدها) واعتماد الدورات الجاية تلقائيًا */
+    public function setRenew(int $uid,int $id,bool $renew,bool $autoApprove): array {
+        $this->requireReady();$this->ensurePeriodSchema();if(!$this->periodReady())throw new RuntimeException('Install the plan-period SQL migration first.');
+        $p=$this->ownedPlan($uid,$id);if(in_array($p['status'],['cancelled','failed'],true))throw new InvalidArgumentException('This plan was cancelled; create a new plan instead');
+        if($renew&&!empty($p['renewed_plan_id']))throw new InvalidArgumentException('The next period was already prepared; manage renewal from the newest plan');
+        $this->q('UPDATE social_monthly_plans SET renew=?,auto_approve=?,renew_error=NULL,renew_checked_at=NULL,version=version+1,updated_at=UTC_TIMESTAMP() WHERE id=? AND user_id=?',[$renew?1:0,$renew&&$autoApprove?1:0,$id,$uid]);
+        return $this->detail($uid,$id);
+    }
+    /**
+     * الخطط الدايمة: قبل نهاية الفترة بـ RENEW_LEAD_DAYS أيام بنجهّز خطة الفترة اللي بعدها بنفس الإعدادات
+     * (بتتحسب استخدام أدوات تسويق زي أي خطة). الفشل (رصيد/حد الباقة/صفحة مفصولة) بيتسجل ويتعاد كل 6 ساعات.
+     */
+    public function renewDue(int $max=20): int {
+        if(!$this->ready()||!$this->periodReady()||!self::worker()['ready'])return 0;
+        $rows=$this->q("SELECT * FROM social_monthly_plans WHERE renew=1 AND renewed_plan_id IS NULL AND approved_at IS NOT NULL AND status IN ('active','completed')
+            AND ends_on IS NOT NULL AND ends_on<=DATE_ADD(UTC_DATE(),INTERVAL ".self::RENEW_LEAD_DAYS." DAY) AND (renew_checked_at IS NULL OR renew_checked_at<UTC_TIMESTAMP()-INTERVAL 6 HOUR) ORDER BY ends_on LIMIT ".max(1,min(100,$max)))->fetchAll(PDO::FETCH_ASSOC);
+        $done=0;
+        foreach($rows as $p){
+            $uid=(int)$p['user_id'];$this->q('UPDATE social_monthly_plans SET renew_checked_at=UTC_TIMESTAMP() WHERE id=?',[$p['id']]);
+            try{$new=$this->renewOne($p);$this->q('UPDATE social_monthly_plans SET renewed_plan_id=?,renew_error=NULL WHERE id=?',[$new,$p['id']]);$done++;}
+            catch(Throwable $e){
+                $msg=mb_substr($e instanceof InvalidArgumentException||$e instanceof SocialPackageLimit?$e->getMessage():'Renewal could not start; we will retry automatically.',0,300);
+                if($msg!==(string)$p['renew_error']){try{Notification::notify($uid,'social_monthly_attention','تجديد خطة السوشيال محتاج تدخّل','الخطة الدايمة ما اتجددتش: '.$msg,'/social#plan');}catch(Throwable $ignored){}}
+                $this->q('UPDATE social_monthly_plans SET renew_error=? WHERE id=?',[$msg,$p['id']]);
+                Logger::warning('Social plan renewal failed',['plan_id'=>(int)$p['id'],'message'=>$e->getMessage()]);
+            }
+        }
+        return $done;
+    }
+    private function renewOne(array $p): int {
+        $uid=(int)$p['user_id'];$brief=json_decode((string)$p['brief_json'],true);if(!is_array($brief))throw new InvalidArgumentException('Plan settings unavailable');
+        $zone=new DateTimeZone($p['timezone']);$tomorrow=(new DateTimeImmutable('now',$zone))->modify('+1 day')->format('Y-m-d');
+        $start=max((new DateTimeImmutable((string)$p['ends_on']))->modify('+1 day')->format('Y-m-d'),$tomorrow);
+        $conn=array_map('intval',(array)($brief['connection_ids']??[]));
+        // الصور: نفس اختيار العميل لو لسه موجود، وإلا مكتبته كلها (أحدث 30)
+        $media=[];foreach((array)($brief['media_ids']??[]) as $m){try{$this->assets($uid,[(int)$m]);$media[]=(int)$m;}catch(Throwable $e){}}
+        if(count($media)<3)$media=array_map('intval',$this->q("SELECT id FROM media_items WHERE user_id=? AND status='completed' AND deleted_at IS NULL AND (generation_meta IS NULL OR generation_meta NOT LIKE '%brand_design%') ORDER BY id DESC LIMIT 30",[$uid])->fetchAll(PDO::FETCH_COLUMN));
+        if(class_exists('SocialPackages'))SocialPackages::assertMonthlyPlan($uid,$conn);
+        $quote=PlanUsage::check($uid,'marketing_tool','marketing_tool','Insufficient credit to prepare the next plan.');if(empty($quote['ok']))throw new InvalidArgumentException((string)($quote['error']??'Insufficient credit to prepare the next plan. Top up your wallet.'));
+        $input=['request_key'=>'renew_'.(int)$p['id'].'_'.substr(hash('sha256',$p['id'].'|'.$p['ends_on']),0,16),'website_id'=>(int)$p['website_id'],'post_count'=>(int)$brief['post_count'],'business'=>$brief['business']??'','audience'=>$brief['audience']??'','goal'=>$brief['goal']??'','offers'=>$brief['offers']??'','cta'=>$brief['cta']??'',
+            'language'=>$brief['language']??$p['language'],'timezone'=>$p['timezone'],'publish_time'=>$brief['publish_time']??'smart','mix'=>$brief['mix']??'mix','period'=>(string)($p['period_type']?:'month'),'start_date'=>$start,
+            'connection_ids'=>$conn,'media_ids'=>$media,'quote_hash'=>self::quoteHash($quote),'renew'=>true,'auto_approve'=>!empty($p['auto_approve']),'parent_plan_id'=>(int)$p['id']];
+        $out=$this->create($uid,$input);
+        if(class_exists('SocialPackages'))SocialPackages::record($uid,'monthly_plans');
+        return (int)$out['plan']['id'];
     }
     /** All publishing entry points, including retries, honour the monthly plan state. */
     public static function guardTarget(int $targetId,callable $publish): void {

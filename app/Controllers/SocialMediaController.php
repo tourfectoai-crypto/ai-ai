@@ -23,6 +23,7 @@ require_once __DIR__ . '/../Services/SocialMedia/LinkedInAPI.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialPackages.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialAccounts.php';
 require_once __DIR__ . '/../Jobs/SocialPackagesRenewJob.php';
+require_once __DIR__ . '/../Jobs/SocialPlanRenewJob.php';
 require_once __DIR__ . '/../Services/Payment/CurrencyService.php';
 require_once __DIR__ . '/../Services/Subscription/BillingPlanCatalog.php';
 require_once __DIR__ . '/../Jobs/ReconcileUncertainPostsJob.php';
@@ -90,6 +91,8 @@ class SocialMediaController extends Controller
             SocialPackages::ensureSchema();
             SocialAccounts::ensureSchema();
             SocialPackagesRenewJob::ensureScheduled();
+            (new SocialMonthlyPlanService())->ensurePeriodSchema();
+            SocialPlanRenewJob::ensureScheduled();
         } catch (Throwable $e) {
         }
         $ar = current_lang() === 'ar';
@@ -156,7 +159,7 @@ class SocialMediaController extends Controller
     private function monthlyRequest(string $action,array $params=[]): array
     {
         if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
-        $write=in_array($action,['create','edit','approve','pause','resume','cancel'],true);
+        $write=in_array($action,['create','edit','live','renew','approve','pause','resume','cancel'],true);
         if($write&&($denied=$this->guard('manage')))return $denied;
         if($write&&($error=$this->verifyCsrf()))return $error;
         if($write&&($error=$this->rateLimitGuard('user',$action==='create'?'social_monthly_ai':'social_monthly_write',$action==='create'?4:40,60)))return $error;
@@ -174,6 +177,8 @@ class SocialMediaController extends Controller
                 return $this->success($out,'Monthly generation queued',201);
             }
             if($action==='edit')return $this->success($service->edit($uid,$id,(int)($params['item_id']??0),$this->data));
+            if($action==='live')return $this->success($service->liveEdit($uid,$id,(int)($params['item_id']??0),$this->data));
+            if($action==='renew')return $this->success($service->setRenew($uid,$id,!empty($this->data['renew']),!empty($this->data['auto_approve'])));
             if($action==='approve'&&$this->get('reviewed')!==true)return $this->error('Confirm review before automatic publishing.',422);
             if($action==='approve')return $this->success($service->approve($uid,$id,(int)$this->get('version',0),is_array($this->get('tiktok'))?$this->get('tiktok'):null));
             return $this->success($service->changeState($uid,$id,$action));
@@ -187,6 +192,8 @@ class SocialMediaController extends Controller
     public function monthlyDetail(array $params=[]): array{return $this->monthlyRequest('detail',$params);}
     public function monthlyCreate(array $params=[]): array{return $this->monthlyRequest('create',$params);}
     public function monthlyEdit(array $params=[]): array{return $this->monthlyRequest('edit',$params);}
+    public function monthlyLiveEdit(array $params=[]): array{return $this->monthlyRequest('live',$params);}
+    public function monthlyRenew(array $params=[]): array{return $this->monthlyRequest('renew',$params);}
     public function monthlyApprove(array $params=[]): array{return $this->monthlyRequest('approve',$params);}
     public function monthlyPause(array $params=[]): array{return $this->monthlyRequest('pause',$params);}
     public function monthlyResume(array $params=[]): array{return $this->monthlyRequest('resume',$params);}

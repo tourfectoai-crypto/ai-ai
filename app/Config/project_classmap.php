@@ -736,6 +736,7 @@ return [
     'GenerateSeasonPostsJob' => dirname(__DIR__,2).'/app/Jobs/GenerateSeasonPostsJob.php',
     'SocialPackageLimit' => dirname(__DIR__,2).'/app/Services/SocialMedia/SocialPackages.php',
     'SocialPackagesRenewJob' => dirname(__DIR__,2).'/app/Jobs/SocialPackagesRenewJob.php',
+    'SocialPlanRenewJob' => dirname(__DIR__,2).'/app/Jobs/SocialPlanRenewJob.php',
     'SyncSocialCommentsJob' => dirname(__DIR__,2).'/app/Jobs/SyncSocialCommentsJob.php',
     'SocialMediaUpload' => dirname(__DIR__,2).'/app/Services/SocialMedia/SocialMediaUpload.php',
     'SocialPost' => dirname(__DIR__,2).'/app/Models/SocialPost.php',

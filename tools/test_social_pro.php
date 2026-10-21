@@ -145,5 +145,15 @@ require_once $root . '/app/Services/RevenueIntelligence/SeasonTripPosts.php';
 check('season: booking link appended only when missing', SeasonTripPosts::ensureLink('Trip', 'https://x.test/t', 'ar') === "Trip\n\n🔗 احجز من هنا: https://x.test/t" && SeasonTripPosts::ensureLink('Go https://x.test/t', 'https://x.test/t', 'ar') === 'Go https://x.test/t');
 check('season: hashtags cleaned, deduped, topped up without generic words', SeasonTripPosts::cleanTags(['#Egypt', 'egypt'], ['name' => 'Luxor Day Trip from Hurghada']) === ['Egypt', 'Luxor', 'Hurghada']);
 
+// ---- مدة الخطة: شهرية / نص شهرية
+$pn = new DateTimeImmutable('2026-10-21T10:00:00Z');
+check('plan: half-month = 15 days', SocialMonthlyPlanService::period('half', '2026-10-25', 'Africa/Cairo', $pn)['end'] === '2026-11-08');
+check('plan: month from mid-month ends the day before', SocialMonthlyPlanService::period('month', '2026-10-25', 'Africa/Cairo', $pn)['end'] === '2026-11-24');
+check('plan: month from the 1st = calendar month', SocialMonthlyPlanService::period('month', '2026-11-01', 'Africa/Cairo', $pn)['end'] === '2026-11-30');
+$rs = SocialMonthlyPlanService::scheduleRange('2026-10-25', '2026-11-08', 'Africa/Cairo', '18:00', 6, $pn);
+check('plan: range schedule covers first and last day', count($rs) === 6 && $rs[0] === '2026-10-25 15:00:00' && $rs[5] === '2026-11-08 16:00:00');
+$thrown = false; try { SocialMonthlyPlanService::period('half', '2026-10-01', 'Africa/Cairo', $pn); } catch (InvalidArgumentException $e) { $thrown = true; }
+check('plan: past start date rejected', $thrown);
+
 echo $fail ? "\n{$fail} check(s) failed.\n" : "\nAll social-pro checks passed.\n";
 exit($fail ? 1 : 0);

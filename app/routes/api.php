@@ -703,6 +703,8 @@ $router->get('/api/social/monthly-plans', 'SocialMediaController', 'monthlyList'
 $router->get('/api/social/monthly-plans/{id}', 'SocialMediaController', 'monthlyDetail', ['AuthMiddleware']);
 $router->post('/api/social/monthly-plans', 'SocialMediaController', 'monthlyCreate', ['AuthMiddleware']);
 $router->post('/api/social/monthly-plans/{id}/items/{item_id}', 'SocialMediaController', 'monthlyEdit', ['AuthMiddleware']);
+$router->post('/api/social/monthly-plans/{id}/items/{item_id}/live', 'SocialMediaController', 'monthlyLiveEdit', ['AuthMiddleware']);
+$router->post('/api/social/monthly-plans/{id}/renew', 'SocialMediaController', 'monthlyRenew', ['AuthMiddleware']);
 $router->post('/api/social/monthly-plans/{id}/approve', 'SocialMediaController', 'monthlyApprove', ['AuthMiddleware']);
 $router->post('/api/social/monthly-plans/{id}/pause', 'SocialMediaController', 'monthlyPause', ['AuthMiddleware']);
 $router->post('/api/social/monthly-plans/{id}/resume', 'SocialMediaController', 'monthlyResume', ['AuthMiddleware']);
