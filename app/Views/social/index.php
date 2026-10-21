@@ -291,7 +291,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
 
                 <aside class="sp-cmp-side" aria-label="<?= $t('معاينة', 'Preview') ?>">
                     <div class="sp-prevtabs" id="spPrevTabs"></div>
-                    <div class="sp-mock" id="spMock"></div>
+                    <div class="sp-mock" id="spMock" data-no-translate></div>
                     <ul class="sp-checklist" id="spChecklist"></ul>
                 </aside>
             </div>

@@ -420,6 +420,8 @@
         const res = await jsonPost('/api/social/posts', body);
         btn.disabled = false; btn.textContent = lbl;
         if (!res.success) { P.toast(res.error || T('فشل الحفظ', 'Save failed'), 'error'); return; }
+        // منشور جاي من «رحلات الموسم»: نعلّمه إنه اتستخدم
+        if (seasonDraftId) { jsonPost('/api/revenue-intelligence/season/posts/' + seasonDraftId + '/state', { state: 'used', social_post_id: res.data.post && res.data.post.id }); seasonDraftId = null; }
         closeComposer();
         if (res.data.pending_approval) {
             P.toast(T('اتبعت للمدير يعتمده ✔ هتوصلك إشعار لما يتنشر', 'Sent for approval ✔ you will be notified when it is published'), 'success');
@@ -509,6 +511,7 @@
         }
     }
     let qTimer = null;
+    let seasonDraftId = null;
     $('spMore').addEventListener('click', () => { shown += PAGE; renderCards(); });
     ['spFStatus', 'spFPlat'].forEach(id => $(id).addEventListener('change', load));
     $('spQ').addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(load, 350); });
@@ -1056,4 +1059,22 @@
     const qp = new URLSearchParams(location.search);
     if (qp.get('meta') === 'connected') { showTab('accounts'); P.toast(T('تم ربط الحسابات ✓', 'Accounts connected ✓'), 'success'); }
     if (qp.get('new') === 'story' || qp.get('new') === 'post') openNewPost(qp.get('new') === 'story' ? 'story' : 'feed');
+    // فتح منشور جاهز من «رحلات الموسم» (ذكاء الإيرادات): النص والهاشتاجات وأول تعليق والصورة والرابط
+    if (/^\d+$/.test(qp.get('season') || '')) {
+        fetchJSON('/api/revenue-intelligence/season/posts/' + qp.get('season')).then(r => {
+            if (!r.success) { P.toast(r.error || T('المنشور مش موجود', 'Post not found'), 'error'); return; }
+            const d = r.data.post;
+            openNewPost('feed');
+            seasonDraftId = d.id;
+            $('contentInput').value = d.content || '';
+            $('hashtagsInput').value = (d.hashtags || []).map(h => '#' + h).join(' ');
+            $('firstCommentInput').value = d.first_comment || '';
+            $('utmCampaign').value = 'season-' + new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
+            if ($('trackOn') && !$('trackOn').disabled) $('trackOn').checked = true;
+            if (d.media && d.media.url) setMedia({ id: d.media.id, file_path: d.media.url, is_video: false });
+            refreshComposer();
+            P.toast(T('المنشور جاهز - اختار الصفحات والميعاد وانشر', 'Post loaded — pick pages and time, then publish'), 'success');
+            history.replaceState(null, '', location.pathname + location.hash);
+        });
+    }
 })();

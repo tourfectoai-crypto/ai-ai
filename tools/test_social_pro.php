@@ -140,5 +140,10 @@ check('packages: higher tiers keep lower-tier features & platforms', !array_diff
 check('packages: yearly cheaper than 12 months', $d['basic']['price_yearly'] < 12 * $d['basic']['price_monthly'] && $d['agency']['price_yearly'] < 12 * $d['agency']['price_monthly']);
 check('packages: platform plans map to tiers', SocialPackages::PLAN_MAP === ['starter' => 'basic', 'professional' => 'pro', 'enterprise' => 'agency']);
 
+// ---------- رحلات الموسم (ذكاء الإيرادات) ----------
+require_once $root . '/app/Services/RevenueIntelligence/SeasonTripPosts.php';
+check('season: booking link appended only when missing', SeasonTripPosts::ensureLink('Trip', 'https://x.test/t', 'ar') === "Trip\n\n🔗 احجز من هنا: https://x.test/t" && SeasonTripPosts::ensureLink('Go https://x.test/t', 'https://x.test/t', 'ar') === 'Go https://x.test/t');
+check('season: hashtags cleaned, deduped, topped up without generic words', SeasonTripPosts::cleanTags(['#Egypt', 'egypt'], ['name' => 'Luxor Day Trip from Hurghada']) === ['Egypt', 'Luxor', 'Hurghada']);
+
 echo $fail ? "\n{$fail} check(s) failed.\n" : "\nAll social-pro checks passed.\n";
 exit($fail ? 1 : 0);

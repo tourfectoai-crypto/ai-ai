@@ -50,6 +50,7 @@ class RevenueIntelligenceController extends Controller
     {
         $tabs = [
             'executive' => $this->tr('revai.tab.executive'),
+            'season' => current_lang() === 'ar' ? '🔥 رحلات الموسم' : '🔥 Season trips',
             'overview' => $this->tr('revai.tab.overview'),
             'forecast' => $this->tr('revai.tab.forecast'),
             'opportunities' => $this->tr('revai.tab.opportunities'),
@@ -92,6 +93,10 @@ HTML;
         <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">{$periodSelect}</div>
         <div id="revaiPanel"><div class="p-empty">{$this->tr('common.loading')}</div></div>
 HTML;
+        $sjs = htmlspecialchars(asset_v('/assets/js/season-posts.js'), ENT_QUOTES, 'UTF-8');
+        $scss = htmlspecialchars(asset_v('/assets/css/season-posts.css'), ENT_QUOTES, 'UTF-8');
+        $icons = htmlspecialchars(asset_v('/assets/js/sp-icons.js'), ENT_QUOTES, 'UTF-8');
+        $body .= '<link rel="stylesheet" href="' . $scss . '"><script defer src="' . $icons . '"></script><script defer src="' . $sjs . '"></script>';
 
         $script = $this->pageScript();
 
@@ -868,6 +873,122 @@ HTML;
     }
 
     /** JS الخاص بالصفحة - Tabs + Fetch لكل قسم. */
+    // ============================================================
+    // رحلات الموسم ← منشورات سوشيال
+    // ============================================================
+
+    private function seasonService(): SeasonTripPosts
+    {
+        require_once __DIR__ . '/../Services/RevenueIntelligence/SeasonTripPosts.php';
+        require_once __DIR__ . '/../Services/SocialMedia/SocialMonthlyPlanService.php';
+        require_once __DIR__ . '/../Jobs/GenerateSeasonPostsJob.php';
+        SeasonTripPosts::ensureSchema();
+        return new SeasonTripPosts();
+    }
+
+    /** GET /api/revenue-intelligence/season - الرحلات مرتبة حسب الطلب في الموسم + آخر المنشورات */
+    public function apiSeason(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        try {
+            $svc = $this->seasonService();
+            $uid = (int) $this->user['id'];
+            $d = $svc->demand($uid);
+            $q = class_exists('PlanUsage') ? PlanUsage::describe($uid, 'media_image') : null;
+            return $this->success($d + ['posts' => $svc->list($uid), 'image_cost' => $q ? $q['text'] : null, 'max_trips' => SeasonTripPosts::MAX_TRIPS, 'installed' => SeasonTripPosts::ready(), 'csrf_token' => Csrf::token()]);
+        } catch (Throwable $e) {
+            return $this->serverError('season', $e);
+        }
+    }
+
+    /** POST /api/revenue-intelligence/season/posts  body: {product_ids[], language, request_key} */
+    public function apiSeasonGenerate(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($e = $this->verifyCsrf()) || ($e = $this->rateLimitGuard('user', 'season_posts', 6, 600))) {
+            return $e;
+        }
+        $uid = (int) $this->user['id'];
+        try {
+            $svc = $this->seasonService();
+            $check = PlanUsage::check($uid, 'marketing_tool', 'marketing_tool', 'رصيد المحفظة مش كفاية لتجهيز المنشورات. اشحن المحفظة أو رقّي باقتك.');
+            if (empty($check['ok'])) {
+                return $this->error((string) ($check['error'] ?? 'خلصت حصتك'), 402, ['upgrade_url' => '/subscription']);
+            }
+            $ids = $this->get('product_ids', []);
+            $r = $svc->start($uid, is_array($ids) ? $ids : [], (string) $this->get('language', 'ar'), (string) $this->get('request_key', ''));
+            if (empty($r['already'])) {
+                // استخدام واحد من أدوات التسويق للدفعة كلها (الصور المولّدة بتتحسب لوحدها زي استوديو المحتوى)
+                PlanUsage::charge($uid, 'marketing_tool', 'marketing_tool', 'منشورات رحلات الموسم');
+                $job = Container::getInstance()->make(QueueManager::class)->push(GenerateSeasonPostsJob::class, ['user_id' => $uid, 'batch' => $r['batch']], 'social');
+                if (!$job) {
+                    $svc->process($uid, $r['batch'], 1);
+                }
+            }
+            return $this->success($r + ['posts' => $svc->list($uid, $r['batch'])], 'بنجهّز المنشورات…', 201);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            return $this->serverError('season_generate', $e);
+        }
+    }
+
+    /** GET /api/revenue-intelligence/season/posts?batch= - متابعة التجهيز */
+    public function apiSeasonPosts(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        try {
+            $svc = $this->seasonService();
+            $uid = (int) $this->user['id'];
+            $batch = (string) $this->get('batch', '');
+            $batch = preg_match('/^sp_\d+_[a-f0-9]{16}$/', $batch) ? $batch : null;
+            // لو مهام الخلفية مش شغالة على الاستضافة: نجهّز منشور واحد مع كل متابعة عشان ما يفضلش مستني
+            if ($batch && !(class_exists('SocialMonthlyPlanService') ? SocialMonthlyPlanService::worker()['ready'] : false)) {
+                $svc->process($uid, $batch, 1);
+            }
+            return $this->success(['posts' => $svc->list($uid, $batch)]);
+        } catch (Throwable $e) {
+            return $this->serverError('season_posts', $e);
+        }
+    }
+
+    /** GET /api/revenue-intelligence/season/posts/{id} - للمحرر في السوشيال */
+    public function apiSeasonPost(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        $d = $this->seasonService()->get((int) $this->user['id'], (int) ($params['id'] ?? 0));
+        return $d ? $this->success(['post' => $d]) : $this->error('المنشور مش موجود', 404);
+    }
+
+    /** POST /api/revenue-intelligence/season/posts/{id}/state  body: {state: used|dismissed, social_post_id?} */
+    public function apiSeasonPostState(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($e = $this->verifyCsrf()) {
+            return $e;
+        }
+        $svc = $this->seasonService();
+        $uid = (int) $this->user['id'];
+        $id = (int) ($params['id'] ?? 0);
+        if ($this->get('state') === 'dismissed') {
+            $svc->dismiss($uid, $id);
+        } else {
+            $pid = (int) $this->get('social_post_id', 0);
+            $svc->markUsed($uid, $id, $pid > 0 ? $pid : null);
+        }
+        return $this->success(['ok' => true]);
+    }
+
     private function pageScript(): string
     {
         return <<<'JS'
@@ -1553,6 +1674,12 @@ HTML;
         quotas: renderQuotas,
         churn: renderChurn,
         reports: renderReports,
+        season: function seasonTab(tries) {
+            // سكريبت رحلات الموسم بيتحمّل defer: نستناه شوية لو التبويب اتفتح على طول
+            if (window.TFSeasonPosts) return window.TFSeasonPosts.render(panel);
+            panel.innerHTML = '<div class="p-empty">…</div>';
+            if ((tries || 0) < 50) setTimeout(() => { if (activeTab === 'season') seasonTab((tries || 0) + 1); }, 100);
+        },
     };
 
     function activate(tab) {
@@ -1566,7 +1693,7 @@ HTML;
     });
     periodSelect.addEventListener('change', () => activate(activeTab));
 
-    activate('executive');
+    activate(location.hash === '#season' ? 'season' : 'executive');
 })();
 JS;
     }

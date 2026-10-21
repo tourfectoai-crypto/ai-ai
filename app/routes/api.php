@@ -180,6 +180,12 @@ $router->get('/api/revenue/kpis', 'RevenueController', 'getKpis', ['AuthMiddlewa
 // ============================================
 // TOURFECTO AI REVENUE INTELLIGENCE (module, additive only)
 // ============================================
+// رحلات الموسم ← منشورات سوشيال (ذكاء الإيرادات)
+$router->get('/api/revenue-intelligence/season', 'RevenueIntelligenceController', 'apiSeason', ['AuthMiddleware']);
+$router->post('/api/revenue-intelligence/season/posts', 'RevenueIntelligenceController', 'apiSeasonGenerate', ['AuthMiddleware']);
+$router->get('/api/revenue-intelligence/season/posts', 'RevenueIntelligenceController', 'apiSeasonPosts', ['AuthMiddleware']);
+$router->get('/api/revenue-intelligence/season/posts/{id}', 'RevenueIntelligenceController', 'apiSeasonPost', ['AuthMiddleware']);
+$router->post('/api/revenue-intelligence/season/posts/{id}/state', 'RevenueIntelligenceController', 'apiSeasonPostState', ['AuthMiddleware']);
 $router->get('/api/revenue-intelligence/overview', 'RevenueIntelligenceController', 'apiOverview', ['AuthMiddleware']);
 $router->get('/api/revenue-intelligence/sources', 'RevenueIntelligenceController', 'apiSources', ['AuthMiddleware']);
 $router->get('/api/revenue-intelligence/products', 'RevenueIntelligenceController', 'apiProducts', ['AuthMiddleware']);
