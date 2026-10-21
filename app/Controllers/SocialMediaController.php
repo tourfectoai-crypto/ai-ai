@@ -24,6 +24,7 @@ require_once __DIR__ . '/../Services/SocialMedia/SocialPackages.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialAccounts.php';
 require_once __DIR__ . '/../Jobs/SocialPackagesRenewJob.php';
 require_once __DIR__ . '/../Services/Payment/CurrencyService.php';
+require_once __DIR__ . '/../Services/Subscription/BillingPlanCatalog.php';
 require_once __DIR__ . '/../Jobs/ReconcileUncertainPostsJob.php';
 require_once __DIR__ . '/../Jobs/CheckSocialConnectionsHealthJob.php';
 
@@ -66,7 +67,7 @@ class SocialMediaController extends Controller
         }
         // فريق العمل في السوشيال ميزة في الباقة: العضو مايشتغلش على حساب باقته مش بتشملها
         if (!empty($this->team()['member']) && !SocialPackages::has($this->uid(), 'team')) {
-            return $this->error('فريق العمل في السوشيال مش ضمن باقة الحساب - صاحب الحساب يقدر يرقّي من تبويب «الباقة»', 403, ['upgrade' => true, 'feature' => 'team']);
+            return $this->error('فريق العمل في السوشيال مش ضمن باقة الحساب - صاحب الحساب يقدر يرقّي من صفحة الاشتراكات', 403, ['upgrade' => true, 'feature' => 'team']);
         }
         return null;
     }
@@ -74,7 +75,7 @@ class SocialMediaController extends Controller
     /** رد موحّد لحدود الباقة: 402 + رابط تبويب الباقة */
     private function limitError(SocialPackageLimit $e): array
     {
-        return $this->error($e->getMessage(), 402, ['upgrade' => true, 'feature' => $e->feature, 'action' => '/social#package']);
+        return $this->error($e->getMessage(), 402, ['upgrade' => true, 'feature' => $e->feature, 'action' => '/subscription#social']);
     }
 
     /** GET /social */
@@ -1032,7 +1033,7 @@ class SocialMediaController extends Controller
 
     /** فحص وجود عمود (بيتكاش) - عشان الكود ما يقعش لو الـ migration لسه ما اتشغّلتش */
     // ------------------------------------------------------------------
-    // باقات السوشيال (تبويب «الباقة») + إعدادات الأدمن
+    // باقات السوشيال (صفحة الاشتراكات) + إعدادات الأدمن
     // ------------------------------------------------------------------
 
     private function priceLabels(float $usd, string $cur, bool $ar): array
@@ -1065,9 +1066,18 @@ class SocialMediaController extends Controller
                 $addons[] = ['key' => $k, 'kind' => $a['kind'], 'qty' => $a['qty'], 'icon' => $a['icon'], 'price' => $this->priceLabels((float) $a['price'], $cur, $ar)];
             }
         }
+        // أسماء باقات المنصة للعرض بدل المفاتيح (starter/professional...)، والباقات المتاحة بس
         $planNames = [];
-        foreach ($cfg['plan_map'] as $plan => $tier) {
-            $planNames[$plan] = $tier;
+        $planMap = [];
+        try {
+            foreach (BillingPlanCatalog::read() as $k => $pl) {
+                $planNames[$k] = (string) $pl['name'];
+                if (isset($cfg['plan_map'][$k])) {
+                    $planMap[$k] = $cfg['plan_map'][$k];
+                }
+            }
+        } catch (Throwable $e) {
+            $planMap = $cfg['plan_map'];
         }
         $balance = null;
         try {
@@ -1083,7 +1093,7 @@ class SocialMediaController extends Controller
             'features' => array_map(fn ($v) => $this->priceLabels((float) $v, $cur, $ar), $b['features']), 'yearly_months' => $b['yearly_months']] : null;
         return $this->success(SocialPackages::summary($this->uid()) + [
             'builder' => $builder, 'platforms_enabled' => $cfg['platforms_enabled'],
-            'catalog' => $tiers, 'addons' => $addons, 'plan_map' => $planNames, 'labels' => SocialPackages::LABELS, 'platform_names' => SocialPackages::PLATFORM_NAMES,
+            'catalog' => $tiers, 'addons' => $addons, 'plan_map' => $planMap, 'plan_names' => $planNames, 'labels' => SocialPackages::LABELS, 'platform_names' => SocialPackages::PLATFORM_NAMES,
             'balance' => $balance, 'can_buy' => SocialTeam::can($this->team(), 'manage'), 'csrf_token' => Csrf::token(),
         ]);
     }
@@ -1357,7 +1367,7 @@ class SocialMediaController extends Controller
                 $usage = SocialPackages::usage($uid)['accounts'];
                 $conn = $this->db->query('SELECT platform FROM platform_connections WHERE id = ? LIMIT 1', [$id])[0] ?? null;
                 if ($ent['enforced'] && $max >= 0 && $usage >= $max && $conn && in_array($conn['platform'], $ent['platforms'], true)) {
-                    return $this->limitError(new SocialPackageLimit('باقتك فيها ' . $max . ' حسابات وكلهم شغالين - وقّف حساب تاني الأول أو زوّد الحسابات من تبويب «الباقة».', 'accounts'));
+                    return $this->limitError(new SocialPackageLimit('باقتك فيها ' . $max . ' حسابات وكلهم شغالين - وقّف حساب تاني الأول أو زوّد الحسابات من صفحة الاشتراكات.', 'accounts'));
                 }
             }
             SocialAccounts::setActive($uid, $id, $on);
@@ -1890,7 +1900,7 @@ class SocialMediaController extends Controller
             : (SocialPostService::growthSchema() ? ['created_by' => (int) ($this->user['id'] ?? 0)] : []);
 
         if ($this->get('track_links', false) && $format !== 'story' && !SocialPackages::has($uid, 'attribution')) {
-            return $this->limitError(new SocialPackageLimit('«' . SocialPackages::LABELS['attribution'][0] . '» مش ضمن باقتك - شيل علامة "روابط قصيرة لتتبع الحجوزات" أو رقّي من تبويب «الباقة».', 'attribution'));
+            return $this->limitError(new SocialPackageLimit('«' . SocialPackages::LABELS['attribution'][0] . '» مش ضمن باقتك - شيل علامة "روابط قصيرة لتتبع الحجوزات" أو رقّي من صفحة الاشتراكات.', 'attribution'));
         }
         try {
             $cids = array_column($targets, 'platform_connection_id');

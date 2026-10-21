@@ -709,10 +709,10 @@ final class SocialPackages
         foreach (['basic', 'pro', 'agency'] as $k) {
             $t = self::config()['tiers'][$k];
             if (($platform !== null && in_array($platform, $t['platforms'], true)) || ($platform === null && !empty($t[$feature]))) {
-                return ' - متاحة من باقة «' . $t['name'] . '» أو ضيفها لوحدها في «فصّل باقتك» من تبويب «الباقة».';
+                return ' - متاحة من باقة «' . $t['name'] . '» أو ضيفها لوحدها في «فصّل باقتك» من صفحة الاشتراكات.';
             }
         }
-        return ' - رقّي باقتك من تبويب «الباقة».';
+        return ' - رقّي باقتك من صفحة الاشتراكات.';
     }
 
     public static function has(int $account, string $feature): bool
@@ -750,7 +750,7 @@ final class SocialPackages
             if ($locked[$cid] === 'platform') {
                 throw new SocialPackageLimit('النشر على ' . $name . ' مش ضمن باقة «' . $ent['tier_name'] . '»' . self::upgradeHint('platform', $p), 'platform');
             }
-            throw new SocialPackageLimit('حساب ' . $name . ' ده فوق عدد الحسابات في باقتك (' . $ent['limits']['accounts'] . ') - رقّي باقتك أو اشتري إضافة حسابات من تبويب «الباقة».', 'accounts');
+            throw new SocialPackageLimit('حساب ' . $name . ' ده فوق عدد الحسابات في باقتك (' . $ent['limits']['accounts'] . ') - رقّي باقتك أو اشتري إضافة حسابات من صفحة الاشتراكات.', 'accounts');
         }
     }
 
@@ -766,7 +766,7 @@ final class SocialPackages
         if ($limit >= 0) {
             $used = self::usage($account)['posts'];
             if ($used + $count > $limit) {
-                throw new SocialPackageLimit('وصلت لحد المنشورات الشهري في باقتك (' . $used . ' من ' . $limit . '، والمطلوب ' . $count . '). كل منصة بتتحسب منشور. رقّي باقتك أو اشتري إضافة منشورات من تبويب «الباقة».', 'posts');
+                throw new SocialPackageLimit('وصلت لحد المنشورات الشهري في باقتك (' . $used . ' من ' . $limit . '، والمطلوب ' . $count . '). كل منصة بتتحسب منشور. رقّي باقتك أو اشتري إضافة منشورات من صفحة الاشتراكات.', 'posts');
             }
         }
     }
@@ -792,7 +792,7 @@ final class SocialPackages
         $samePlatform = array_filter($mine, static fn($c) => $c['platform'] === $platform);
         // إعادة ربط حساب موجود (تجديد التوكن) مسموحة حتى لو وصل للحد
         if (count($mine) >= $max && !$samePlatform) {
-            throw new SocialPackageLimit('وصلت لحد الحسابات في باقتك (' . $max . '). رقّي باقتك أو اشتري إضافة حسابات من تبويب «الباقة».', 'accounts');
+            throw new SocialPackageLimit('وصلت لحد الحسابات في باقتك (' . $max . '). رقّي باقتك أو اشتري إضافة حسابات من صفحة الاشتراكات.', 'accounts');
         }
     }
 
@@ -802,8 +802,8 @@ final class SocialPackages
         $max = $ent['limits']['competitors'];
         if ($max >= 0 && self::usage($account)['competitors'] >= $max) {
             throw new SocialPackageLimit($max === 0
-                ? 'متابعة المنافسين مش ضمن باقة «' . $ent['tier_name'] . '» - متاحة من باقة «' . self::config()['tiers']['pro']['name'] . '». رقّي من تبويب «الباقة».'
-                : 'وصلت لحد المنافسين في باقتك (' . $max . '). شيل منافس أو اشتري إضافة من تبويب «الباقة».', 'competitors');
+                ? 'متابعة المنافسين مش ضمن باقة «' . $ent['tier_name'] . '» - متاحة من باقة «' . self::config()['tiers']['pro']['name'] . '». رقّي من صفحة الاشتراكات.'
+                : 'وصلت لحد المنافسين في باقتك (' . $max . '). شيل منافس أو اشتري إضافة من صفحة الاشتراكات.', 'competitors');
         }
     }
 
@@ -816,8 +816,8 @@ final class SocialPackages
         $max = $ent['limits']['monthly_plans'];
         if ($max >= 0 && self::usage($account)['monthly_plans'] >= $max) {
             throw new SocialPackageLimit($max === 0
-                ? 'الخطة الشهرية بالذكاء الصناعي مش ضمن باقة «' . $ent['tier_name'] . '» - رقّي من تبويب «الباقة».'
-                : 'استخدمت كل الخطط الشهرية في باقتك الشهر ده (' . $max . '). رقّي باقتك من تبويب «الباقة».', 'monthly_plans');
+                ? 'الخطة الشهرية بالذكاء الصناعي مش ضمن باقة «' . $ent['tier_name'] . '» - رقّي من صفحة الاشتراكات.'
+                : 'استخدمت كل الخطط الشهرية في باقتك الشهر ده (' . $max . '). رقّي باقتك من صفحة الاشتراكات.', 'monthly_plans');
         }
         self::assertConnections($account, $connectionIds);
     }
@@ -1064,7 +1064,7 @@ final class SocialPackages
                     $name = $next['name'] ?? ($r['tier'] === 'custom' ? 'باقة مفصّلة' : ($cfg['tiers'][$r['tier']]['name'] ?? $r['tier']));
                     if (empty($r['auto_renew']) || !$next) {
                         $db->query("UPDATE social_subscriptions SET status = 'expired' WHERE id = ?", [(int) $r['id']]);
-                        Notification::notify($uid, 'social_package', 'باقة السوشيال خلصت', 'باقة «' . $name . '» انتهت. تقدر تجددها في أي وقت من تبويب «الباقة» في السوشيال.', '/social#package');
+                        Notification::notify($uid, 'social_package', 'باقة السوشيال خلصت', 'باقة «' . $name . '» انتهت. تقدر تجددها في أي وقت من صفحة الاشتراكات.', '/subscription#social');
                         return;
                     }
                     $tier = $next['tier'];
@@ -1074,7 +1074,7 @@ final class SocialPackages
                     $ref = 'social_renew:' . (int) $r['id'] . ':' . substr(hash('sha256', $r['period_start'] . '|' . $r['period_end']), 0, 24);
                     if ($price > 0 && !(new WalletService())->chargeAmount($uid, $price, 'social_package_' . $tier, 'تجديد باقة السوشيال «' . $name . '»', $ref)) {
                         $db->query("UPDATE social_subscriptions SET status = 'expired' WHERE id = ?", [(int) $r['id']]);
-                        Notification::notify($uid, 'social_package', 'مقدرناش نجدد باقة السوشيال', 'رصيد المحفظة مش كفاية لتجديد «' . $name . '» (' . $price . '$). اشحن المحفظة واشترك تاني من تبويب «الباقة».', '/subscription#wallet');
+                        Notification::notify($uid, 'social_package', 'مقدرناش نجدد باقة السوشيال', 'رصيد المحفظة مش كفاية لتجديد «' . $name . '» (' . $price . '$). اشحن المحفظة واشترك تاني من صفحة الاشتراكات.', '/subscription#wallet');
                         return;
                     }
                     $from = max(strtotime($r['period_end'] . ' UTC'), time() - 86400);
@@ -1092,7 +1092,7 @@ final class SocialPackages
 
     // ------------------------------------------------------------------ للعرض
 
-    /** كل اللي تبويب «الباقة» محتاجه */
+    /** كل اللي صفحة الاشتراكات محتاجه */
     public static function summary(int $account): array
     {
         $ent = self::entitlements($account);
