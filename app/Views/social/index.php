@@ -195,7 +195,9 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                 <a class="sp-conn yt" href="/social/connect/youtube"><b>YouTube Shorts</b><span><?= $t('رفع الفيديوهات القصيرة على قناتك', 'Upload short videos to your channel') ?></span></a>
                 <a class="sp-conn gb" href="/reputation/platforms"><b>Google Business</b><span><?= $t('منشورات على ملفك في خرائط وبحث جوجل (صورة + زرار احجز/اعرف أكتر)', 'Posts on your Google Maps & Search profile (photo + book/learn-more button)') ?></span></a>
                 <a class="sp-conn th" href="/social/connect/threads"><b>Threads</b><span><?= $t('نص وصور وفيديو على Threads (حتى 500 حرف)', 'Text, photos and video on Threads (up to 500 characters)') ?></span></a>
+<?php if (in_array('linkedin', SocialPackages::config()['platforms_enabled'], true)): ?>
                 <a class="sp-conn li" href="/social/connect/linkedin"><b>LinkedIn</b><span><?= $t('بروفايلك وصفحات شركتك: مناسب لعملاء الشركات والرحلات الجماعية', 'Your profile and company pages — great for corporate & group travel') ?></span></a>
+<?php endif; ?>
             </div>
             <details class="sp-help">
                 <summary><?= $t('ليه صندوق التعليقات أو أول تعليق مش شغالين؟', 'Why don\'t the comments inbox or first comment work?') ?></summary>

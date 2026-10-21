@@ -29,6 +29,23 @@ ${D.feature_keys.map(k => row(esc(lim(k)), t => `<td><input type="checkbox" data
 ${row('المنصات', t => `<td>${Object.entries(D.platform_names).map(([p, n]) => `<label style="display:block;white-space:nowrap"><input type="checkbox" data-t="${t}" data-plat="${p}" ${c.tiers[t].platforms.includes(p) ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</td>`)}
 </tbody></table></div>
 
+<h4>🌐 المنصات المتاحة على المنصة كلها</h4>
+<p class="p-cell-muted">المنصة المقفولة بتختفي من الربط والنشر والباقات لكل العملاء (LinkedIn مقفولة افتراضيًا).</p>
+<div>${Object.entries(D.platform_names).map(([p, n]) => `<label style="margin-inline-end:14px;white-space:nowrap"><input type="checkbox" data-en="${p}" ${c.platforms_enabled.includes(p) ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</div>
+
+<h4>🧩 فصّل باقتك - أسعار الوحدة شهريًا $</h4>
+<label><input type="checkbox" id="spaB_enabled" ${c.builder.enabled ? 'checked' : ''}> متاحة للعملاء</label>
+<table><tbody>
+<tr><td>سعر الحساب الواحد</td><td><input class="p-select" type="number" min="0" step="0.5" data-b="channel" value="${c.builder.channel}"></td><td class="p-cell-muted">السوق: Buffer ‏$6، Publer ‏$4-5</td></tr>
+<tr><td>منشورات مع كل حساب</td><td><input class="p-select" type="number" min="0" data-b="posts_per_channel" value="${c.builder.posts_per_channel}"></td><td></td></tr>
+<tr><td>كابشن AI مع كل حساب</td><td><input class="p-select" type="number" min="0" data-b="ai_per_channel" value="${c.builder.ai_per_channel}"></td><td></td></tr>
+<tr><td>أقصى عدد حسابات</td><td><input class="p-select" type="number" min="1" data-b="max_channels" value="${c.builder.max_channels}"></td><td></td></tr>
+<tr><td>خطة شهرية (للخطة)</td><td><input class="p-select" type="number" min="0" step="0.5" data-b="monthly_plan" value="${c.builder.monthly_plan}"></td><td></td></tr>
+${['posts_block', 'ai_block', 'competitors_block'].map(k => `<tr><td>${{ posts_block: 'بلوك منشورات', ai_block: 'بلوك كابشن', competitors_block: 'بلوك منافسين' }[k]}</td><td>الكمية <input class="p-select" type="number" min="1" data-bb="${k}" data-g="qty" value="${c.builder[k].qty}"></td><td>السعر <input class="p-select" type="number" min="0" step="0.5" data-bb="${k}" data-g="price" value="${c.builder[k].price}"></td></tr>`).join('')}
+${D.feature_keys.map(k => `<tr><td>${esc(lim(k))}</td><td><input class="p-select" type="number" min="0" step="0.5" data-bfp="${k}" value="${c.builder.features[k]}"></td><td></td></tr>`).join('')}
+<tr><td>السنوي = كام شهر</td><td><input class="p-select" type="number" min="1" max="12" data-b="yearly_months" value="${c.builder.yearly_months}"></td><td class="p-cell-muted">10 = شهرين ببلاش</td></tr>
+</tbody></table>
+
 <h4>➕ الإضافات (مرة واحدة - 30 يوم)</h4>
 <table><thead><tr><th>الإضافة</th><th>الكمية</th><th>السعر $</th><th>متاحة</th></tr></thead><tbody>${Object.entries(c.addons).map(([k, a]) => `<tr><td>${a.icon} ${esc(lim(a.kind))}</td><td><input class="p-select" type="number" min="1" data-aq="${k}" value="${a.qty}"></td><td><input class="p-select" type="number" min="0.5" step="0.5" data-ap="${k}" value="${a.price}"></td><td><input type="checkbox" data-ae="${k}" ${a.enabled ? 'checked' : ''}></td></tr>`).join('')}</tbody></table>
 
@@ -56,7 +73,12 @@ ${row('المنصات', t => `<td>${Object.entries(D.platform_names).map(([p, n]
             });
             const plan_map = {};
             root.querySelectorAll('[data-map]').forEach(el => { plan_map[el.dataset.map] = el.value; });
-            const r = await api('/api/admin/social-packages', { config: { enforce: root.querySelector('#spaEnforce').checked, plan_default: root.querySelector('#spaDefault').value, tiers, addons, plan_map } });
+            const builder = { enabled: root.querySelector('#spaB_enabled').checked, features: {} };
+            root.querySelectorAll('[data-b]').forEach(el => { builder[el.dataset.b] = Number(el.value); });
+            root.querySelectorAll('[data-bb]').forEach(el => { (builder[el.dataset.bb] = builder[el.dataset.bb] || {})[el.dataset.g] = Number(el.value); });
+            root.querySelectorAll('[data-bfp]').forEach(el => { builder.features[el.dataset.bfp] = Number(el.value); });
+            const platforms_enabled = [...root.querySelectorAll('[data-en]:checked')].map(el => el.dataset.en);
+            const r = await api('/api/admin/social-packages', { config: { enforce: root.querySelector('#spaEnforce').checked, plan_default: root.querySelector('#spaDefault').value, tiers, addons, plan_map, builder, platforms_enabled } });
             D.config = r.data.config;
             render();
             msg('اتحفظت باقات السوشيال ✓');

@@ -7,7 +7,10 @@
  *   1) باقة المنصة (الانطلاقة → أساسي، النمو → احترافي، الريادة → وكالة) - الأدمن يغيّر الربط،
  *      أو يحط "social_tier" في features_json لباقة أو كاستثناء لعميل (FeatureResolver).
  *   2) اشتراك سوشيال منفصل بيتدفع من المحفظة (شهري/سنوي، تجديد تلقائي، ترقية بفرق السعر).
+ *   3) أو «فصّل باقتك»: العميل يختار عدد الحسابات والمنصات والميزات اللي محتاجها بس، والسعر بيتحسب بالوحدة.
+ * المستوى الفعلي = مجموع (أحسن قيمة من كل مصدر) بين باقة المنصة واشتراك السوشيال.
  * فوق المستوى: إضافات من المحفظة صالحة 30 يوم (حسابات/منشورات/منافسين/كابشن AI).
+ * منصات ممكن تتقفل للكل من الأدمن (LinkedIn مقفولة افتراضيًا).
  *
  * الحدود: عدد الحسابات المربوطة، المنشورات في الشهر (كل منصة = منشور)، الخطط الشهرية، المنافسين،
  * كابشن AI (بعد حصة باقة المنصة)، المنصات المتاحة، والميزات (رد خاص، رد خاص تلقائي، تتبع الحجوزات،
@@ -42,7 +45,7 @@ final class SocialPackages
             'private_reply' => false, 'auto_private' => false, 'attribution' => false, 'client_review' => false, 'team' => false, 'growth' => false],
         'basic' => ['name' => 'أساسي', 'name_en' => 'Basic', 'price_monthly' => 19, 'price_yearly' => 190, 'for_sale' => true,
             'accounts' => 3, 'posts' => 60, 'monthly_plans' => 1, 'competitors' => 0, 'ai_captions' => 100,
-            'platforms' => ['facebook', 'instagram', 'google_business'],
+            'platforms' => self::PLATFORMS,
             'private_reply' => true, 'auto_private' => false, 'attribution' => false, 'client_review' => false, 'team' => false, 'growth' => false],
         'pro' => ['name' => 'احترافي', 'name_en' => 'Pro', 'price_monthly' => 49, 'price_yearly' => 490, 'for_sale' => true,
             'accounts' => 8, 'posts' => 250, 'monthly_plans' => 3, 'competitors' => 3, 'ai_captions' => 400,
@@ -61,6 +64,22 @@ final class SocialPackages
         'competitors_3' => ['kind' => 'competitors', 'qty' => 3, 'price' => 5, 'icon' => '🔍'],
         'ai_200' => ['kind' => 'ai_captions', 'qty' => 200, 'price' => 5, 'icon' => '✨'],
     ];
+
+    /**
+     * «فصّل باقتك» - أسعار الوحدة شهريًا بالدولار (قريبة من السوق: Buffer ‏$6 للحساب، Publer ‏$4-5، Metricool ‏$20-25 لـ 5 براندات).
+     * كل حساب بيجي معاه منشورات وكابشن AI، والباقي بلوكات. السنوي = 10 شهور (شهرين ببلاش).
+     * الباقات الجاهزة أوفر من نفس المكونات مفصّلة (خصم الحزمة)، والمفصّلة للي محتاج حاجات معينة بس.
+     */
+    public const BUILDER = [
+        'enabled' => true, 'channel' => 5.0, 'posts_per_channel' => 20, 'ai_per_channel' => 20, 'max_channels' => 50,
+        'posts_block' => ['qty' => 100, 'price' => 3.0], 'ai_block' => ['qty' => 100, 'price' => 3.0],
+        'competitors_block' => ['qty' => 3, 'price' => 4.0], 'monthly_plan' => 3.0,
+        'features' => ['private_reply' => 3.0, 'auto_private' => 6.0, 'attribution' => 7.0, 'client_review' => 4.0, 'team' => 6.0, 'growth' => 3.0],
+        'yearly_months' => 10,
+    ];
+
+    /** منصات مقفولة للكل افتراضيًا (الأدمن يفتحها) */
+    public const DISABLED_PLATFORMS = ['linkedin'];
 
     /** باقة المنصة → مستوى السوشيال */
     public const PLAN_MAP = ['starter' => 'basic', 'professional' => 'pro', 'enterprise' => 'agency'];
@@ -106,7 +125,18 @@ final class SocialPackages
     public static function ensureSchema(): void
     {
         $pdo = Database::getInstance()->getConnection();
-        if (self::ready() || $pdo->inTransaction()) {
+        if ($pdo->inTransaction()) {
+            return;
+        }
+        if (self::ready()) {
+            // نسخة الجدول الأولى من غير أعمدة الباقة المفصّلة
+            try {
+                if (!(int) $pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_subscriptions' AND COLUMN_NAME = 'custom_json'")->fetchColumn()) {
+                    $pdo->exec('ALTER TABLE social_subscriptions ADD COLUMN custom_json TEXT DEFAULT NULL, ADD COLUMN pending_custom_json TEXT DEFAULT NULL');
+                }
+            } catch (Throwable $e) {
+                Logger::warning('Social packages schema upgrade failed', ['message' => $e->getMessage()]);
+            }
             return;
         }
         try {
@@ -114,7 +144,7 @@ final class SocialPackages
                 id INT(11) NOT NULL AUTO_INCREMENT, user_id INT(11) NOT NULL, tier VARCHAR(16) NOT NULL, cycle VARCHAR(10) NOT NULL DEFAULT 'monthly',
                 price_paid DECIMAL(10,2) NOT NULL DEFAULT 0, status VARCHAR(16) NOT NULL DEFAULT 'active', auto_renew TINYINT(1) NOT NULL DEFAULT 1,
                 pending_tier VARCHAR(16) DEFAULT NULL, pending_cycle VARCHAR(10) DEFAULT NULL, period_start DATETIME NOT NULL, period_end DATETIME NOT NULL,
-                last_ref VARCHAR(80) DEFAULT NULL, reminded_at DATETIME DEFAULT NULL,
+                last_ref VARCHAR(80) DEFAULT NULL, reminded_at DATETIME DEFAULT NULL, custom_json TEXT DEFAULT NULL, pending_custom_json TEXT DEFAULT NULL,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (id), UNIQUE KEY uniq_user (user_id), KEY idx_due (status, period_end)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
             $pdo->exec("CREATE TABLE IF NOT EXISTS social_addons (
@@ -194,7 +224,43 @@ final class SocialPackages
                 $map[$plan] = $tier;
             }
         }
+        $b = self::BUILDER;
+        $o = is_array($raw['builder'] ?? null) ? $raw['builder'] : [];
+        if (array_key_exists('enabled', $o)) {
+            $b['enabled'] = !empty($o['enabled']);
+        }
+        foreach (['channel', 'monthly_plan'] as $f) {
+            if (isset($o[$f]) && is_numeric($o[$f]) && $o[$f] >= 0 && $o[$f] <= 10000) {
+                $b[$f] = round((float) $o[$f], 2);
+            }
+        }
+        foreach (['posts_per_channel', 'ai_per_channel', 'max_channels'] as $f) {
+            if (isset($o[$f]) && is_numeric($o[$f]) && (int) $o[$f] >= ($f === 'max_channels' ? 1 : 0) && (int) $o[$f] <= 100000) {
+                $b[$f] = (int) $o[$f];
+            }
+        }
+        foreach (['posts_block', 'ai_block', 'competitors_block'] as $f) {
+            if (isset($o[$f]['qty']) && is_numeric($o[$f]['qty']) && (int) $o[$f]['qty'] > 0 && (int) $o[$f]['qty'] <= 100000) {
+                $b[$f]['qty'] = (int) $o[$f]['qty'];
+            }
+            if (isset($o[$f]['price']) && is_numeric($o[$f]['price']) && $o[$f]['price'] >= 0 && $o[$f]['price'] <= 10000) {
+                $b[$f]['price'] = round((float) $o[$f]['price'], 2);
+            }
+        }
+        foreach (self::FEATURE_KEYS as $f) {
+            if (isset($o['features'][$f]) && is_numeric($o['features'][$f]) && $o['features'][$f] >= 0 && $o['features'][$f] <= 10000) {
+                $b['features'][$f] = round((float) $o['features'][$f], 2);
+            }
+        }
+        if (isset($o['yearly_months']) && is_numeric($o['yearly_months']) && $o['yearly_months'] >= 1 && $o['yearly_months'] <= 12) {
+            $b['yearly_months'] = (float) $o['yearly_months'];
+        }
+        $enabled = isset($raw['platforms_enabled']) && is_array($raw['platforms_enabled'])
+            ? array_values(array_intersect(self::PLATFORMS, $raw['platforms_enabled']))
+            : array_values(array_diff(self::PLATFORMS, self::DISABLED_PLATFORMS));
         return self::$cfgCache = [
+            'builder' => $b,
+            'platforms_enabled' => $enabled,
             // إيقاف التطبيق = كل حساب شغال من غير حدود (زي ما كان قبل الباقات)
             'enforce' => ($raw['enforce'] ?? true) !== false,
             'plan_default' => isset(self::RANK[$raw['plan_default'] ?? '']) ? $raw['plan_default'] : 'basic',
@@ -256,6 +322,34 @@ final class SocialPackages
             if (is_string($plan) && preg_match('/^[a-z0-9-]+$/', $plan) && isset(self::RANK[$tier])) {
                 $raw['plan_map'][$plan] = $tier;
             }
+        }
+        if (isset($in['platforms_enabled']) && is_array($in['platforms_enabled'])) {
+            $raw['platforms_enabled'] = array_values(array_intersect(self::PLATFORMS, $in['platforms_enabled']));
+        }
+        if (isset($in['builder']) && is_array($in['builder'])) {
+            $bi = $in['builder'];
+            $clean = [];
+            if (array_key_exists('enabled', $bi)) {
+                $clean['enabled'] = !empty($bi['enabled']);
+            }
+            foreach (['channel', 'monthly_plan', 'posts_per_channel', 'ai_per_channel', 'max_channels', 'yearly_months'] as $f) {
+                if (isset($bi[$f]) && is_numeric($bi[$f])) {
+                    $clean[$f] = max(0, min(100000, (float) $bi[$f]));
+                }
+            }
+            foreach (['posts_block', 'ai_block', 'competitors_block'] as $f) {
+                foreach (['qty', 'price'] as $g) {
+                    if (isset($bi[$f][$g]) && is_numeric($bi[$f][$g])) {
+                        $clean[$f][$g] = max(0, min(100000, (float) $bi[$f][$g]));
+                    }
+                }
+            }
+            foreach (self::FEATURE_KEYS as $f) {
+                if (isset($bi['features'][$f]) && is_numeric($bi['features'][$f])) {
+                    $clean['features'][$f] = max(0, min(10000, round((float) $bi['features'][$f], 2)));
+                }
+            }
+            $raw['builder'] = array_replace_recursive(is_array($raw['builder'] ?? null) ? $raw['builder'] : [], $clean);
         }
         (new SystemSettingsService())->set(self::SETTING, json_encode($raw, JSON_UNESCAPED_UNICODE));
         self::$cfgCache = null;
@@ -324,6 +418,105 @@ final class SocialPackages
         return $end > time() || (!empty($row['auto_renew']) && $end > time() - 86400);
     }
 
+    /** حدود/ميزات/منصات مستوى جاهز */
+    private static function tierSpec(string $tier): array
+    {
+        $t = self::config()['tiers'][$tier] ?? self::config()['tiers']['free'];
+        $limits = [];
+        foreach (self::LIMIT_KEYS as $k) {
+            $limits[$k] = (int) $t[$k];
+        }
+        $features = [];
+        foreach (self::FEATURE_KEYS as $k) {
+            $features[$k] = !empty($t[$k]);
+        }
+        return ['limits' => $limits, 'features' => $features, 'platforms' => $t['platforms']];
+    }
+
+    /**
+     * «فصّل باقتك»: بيتأكد من الاختيارات ويحسب السعر والحدود.
+     * $in = {channels, platforms[], features{key:bool}, posts_blocks, ai_blocks, competitor_blocks, monthly_plans}
+     * @return array{spec:array, monthly:float, yearly:float, lines:array, limits:array, features:array, platforms:array}
+     */
+    public static function quoteCustom(array $in): array
+    {
+        $cfg = self::config();
+        $b = $cfg['builder'];
+        if (empty($b['enabled'])) {
+            throw new InvalidArgumentException('«فصّل باقتك» مش متاحة دلوقتي');
+        }
+        $int = static fn ($v, int $min, int $max): int => max($min, min($max, (int) (is_numeric($v) ? $v : 0)));
+        $platforms = array_values(array_intersect($cfg['platforms_enabled'], array_map('strval', (array) ($in['platforms'] ?? []))));
+        if (!$platforms) {
+            throw new InvalidArgumentException('اختار منصة واحدة على الأقل');
+        }
+        $channels = $int($in['channels'] ?? 1, 1, (int) $b['max_channels']);
+        if ($channels < count($platforms)) {
+            $channels = count($platforms);
+        }
+        $features = [];
+        foreach (self::FEATURE_KEYS as $k) {
+            $features[$k] = !empty($in['features'][$k]);
+        }
+        if ($features['auto_private']) {
+            $features['private_reply'] = true; // التلقائي مبني على الرد الخاص
+        }
+        $spec = [
+            'channels' => $channels, 'platforms' => $platforms, 'features' => $features,
+            'posts_blocks' => $int($in['posts_blocks'] ?? 0, 0, 100), 'ai_blocks' => $int($in['ai_blocks'] ?? 0, 0, 100),
+            'competitor_blocks' => $int($in['competitor_blocks'] ?? 0, 0, 10), 'monthly_plans' => $int($in['monthly_plans'] ?? 0, 0, 30),
+        ];
+        $lines = [];
+        $lines[] = ['channels', $channels, round($channels * $b['channel'], 2)];
+        if ($spec['posts_blocks']) {
+            $lines[] = ['posts', $spec['posts_blocks'] * $b['posts_block']['qty'], round($spec['posts_blocks'] * $b['posts_block']['price'], 2)];
+        }
+        if ($spec['ai_blocks']) {
+            $lines[] = ['ai_captions', $spec['ai_blocks'] * $b['ai_block']['qty'], round($spec['ai_blocks'] * $b['ai_block']['price'], 2)];
+        }
+        if ($spec['competitor_blocks']) {
+            $lines[] = ['competitors', $spec['competitor_blocks'] * $b['competitors_block']['qty'], round($spec['competitor_blocks'] * $b['competitors_block']['price'], 2)];
+        }
+        if ($spec['monthly_plans']) {
+            $lines[] = ['monthly_plans', $spec['monthly_plans'], round($spec['monthly_plans'] * $b['monthly_plan'], 2)];
+        }
+        foreach ($features as $k => $on) {
+            if ($on) {
+                $lines[] = [$k, 1, round((float) $b['features'][$k], 2)];
+            }
+        }
+        $monthly = round(array_sum(array_column($lines, 2)), 2);
+        $limits = [
+            'accounts' => $channels,
+            'posts' => $channels * (int) $b['posts_per_channel'] + $spec['posts_blocks'] * (int) $b['posts_block']['qty'],
+            'ai_captions' => $channels * (int) $b['ai_per_channel'] + $spec['ai_blocks'] * (int) $b['ai_block']['qty'],
+            'competitors' => $spec['competitor_blocks'] * (int) $b['competitors_block']['qty'],
+            'monthly_plans' => $spec['monthly_plans'],
+        ];
+        return ['spec' => $spec, 'monthly' => $monthly, 'yearly' => round($monthly * (float) $b['yearly_months'], 2), 'lines' => $lines,
+            'limits' => $limits, 'features' => $features, 'platforms' => $platforms];
+    }
+
+    /** مواصفات الاشتراك المنفصل (جاهز أو مفصّل) */
+    private static function subscriptionSpec(array $row): ?array
+    {
+        if ($row['tier'] === 'custom') {
+            try {
+                $q = self::quoteCustom(json_decode((string) $row['custom_json'], true) ?: []);
+            } catch (Throwable $e) {
+                // الأدمن قفل «فصّل باقتك» بعد ما العميل اشترك: اللي دفعه بيفضل شغال لآخر المدة
+                $spec = json_decode((string) $row['custom_json'], true) ?: [];
+                if (!$spec) {
+                    return null;
+                }
+                return ['limits' => ['accounts' => (int) ($spec['channels'] ?? 1), 'posts' => (int) ($spec['channels'] ?? 1) * 20, 'ai_captions' => (int) ($spec['channels'] ?? 1) * 20, 'competitors' => 0, 'monthly_plans' => 0],
+                    'features' => array_map('boolval', (array) ($spec['features'] ?? [])) + array_fill_keys(self::FEATURE_KEYS, false), 'platforms' => (array) ($spec['platforms'] ?? [])];
+            }
+            return ['limits' => $q['limits'], 'features' => $q['features'], 'platforms' => $q['platforms']];
+        }
+        return isset(self::DEFAULTS[$row['tier']]) ? self::tierSpec($row['tier']) : null;
+    }
+
     public static function entitlements(int $account): array
     {
         $owner = self::owner($account);
@@ -333,37 +526,64 @@ final class SocialPackages
         $cfg = self::config();
         $planTier = self::tierFromPlan($owner);
         $row = self::standalone($owner);
-        $socialTier = self::standaloneActive($row) ? $row['tier'] : null;
-        $tier = 'free';
-        $source = 'free';
-        if ($planTier && self::RANK[$planTier] >= self::RANK[$tier]) {
-            $tier = $planTier;
-            $source = 'plan';
+        $active = self::standaloneActive($row);
+        $socialTier = $active ? $row['tier'] : null;
+        // كل مصدر شغال بيضيف: أحسن حد، أي ميزة، وكل المنصات (باقة المنصة + اشتراك السوشيال)
+        $specs = [];
+        $names = [];
+        if ($planTier) {
+            $specs[] = self::tierSpec($planTier);
+            $names[] = [$cfg['tiers'][$planTier]['name'], $cfg['tiers'][$planTier]['name_en']];
         }
-        if ($socialTier && isset(self::RANK[$socialTier]) && self::RANK[$socialTier] > self::RANK[$tier]) {
-            $tier = $socialTier;
-            $source = 'social';
+        if ($active && ($sp = self::subscriptionSpec($row))) {
+            $specs[] = $sp;
+            $names[] = $socialTier === 'custom' ? ['باقة مفصّلة', 'Custom plan'] : [$cfg['tiers'][$socialTier]['name'], $cfg['tiers'][$socialTier]['name_en']];
         }
-        $t = $cfg['tiers'][$tier];
-        $limits = [];
+        if (!$specs) {
+            $specs[] = self::tierSpec('free');
+            $names[] = [$cfg['tiers']['free']['name'], $cfg['tiers']['free']['name_en']];
+        }
+        $limits = array_fill_keys(self::LIMIT_KEYS, 0);
+        $features = array_fill_keys(self::FEATURE_KEYS, false);
+        $platforms = [];
+        foreach ($specs as $sp) {
+            foreach (self::LIMIT_KEYS as $k) {
+                $v = (int) ($sp['limits'][$k] ?? 0);
+                $limits[$k] = ($limits[$k] < 0 || $v < 0) ? -1 : max($limits[$k], $v);
+            }
+            foreach (self::FEATURE_KEYS as $k) {
+                $features[$k] = $features[$k] || !empty($sp['features'][$k]);
+            }
+            $platforms = array_merge($platforms, (array) $sp['platforms']);
+        }
         $extra = self::addonTotals($owner);
         foreach (self::LIMIT_KEYS as $k) {
-            $limits[$k] = $t[$k] < 0 ? -1 : $t[$k] + ($extra[$k] ?? 0);
+            if ($limits[$k] >= 0) {
+                $limits[$k] += $extra[$k] ?? 0;
+            }
         }
-        $features = [];
-        foreach (self::FEATURE_KEYS as $k) {
-            $features[$k] = !empty($t[$k]);
+        $platforms = array_values(array_intersect($cfg['platforms_enabled'], array_unique($platforms)));
+        // المستوى المعروض: الأعلى بين الجاهزين، أو «مفصّلة» لو هي اللي العميل دافعها
+        $tier = 'free';
+        foreach ([$planTier, $socialTier] as $t) {
+            if ($t && isset(self::RANK[$t]) && self::RANK[$t] > self::RANK[$tier]) {
+                $tier = $t;
+            }
         }
-        $platforms = $t['platforms'];
+        if ($socialTier === 'custom' && $tier === 'free') {
+            $tier = 'custom';
+        }
+        $source = $socialTier ? 'social' : ($planTier ? 'plan' : 'free');
         if (!$cfg['enforce']) {
             $limits = array_fill_keys(self::LIMIT_KEYS, -1);
             $features = array_fill_keys(self::FEATURE_KEYS, true);
-            $platforms = self::PLATFORMS;
+            $platforms = $cfg['platforms_enabled'];
         }
         return self::$entCache[$owner] = [
-            'owner' => $owner, 'tier' => $tier, 'tier_name' => $t['name'], 'tier_name_en' => $t['name_en'], 'source' => $source,
+            'owner' => $owner, 'tier' => $tier, 'tier_name' => implode(' + ', array_column($names, 0)), 'tier_name_en' => implode(' + ', array_column($names, 1)), 'source' => $source,
             'plan_tier' => $planTier, 'social_tier' => $socialTier, 'enforced' => $cfg['enforce'],
             'limits' => $limits, 'features' => $features, 'platforms' => $platforms, 'subscription' => $row,
+            'custom' => $socialTier === 'custom' ? (json_decode((string) $row['custom_json'], true) ?: null) : null,
         ];
     }
 
@@ -478,7 +698,7 @@ final class SocialPackages
         foreach (['basic', 'pro', 'agency'] as $k) {
             $t = self::config()['tiers'][$k];
             if (($platform !== null && in_array($platform, $t['platforms'], true)) || ($platform === null && !empty($t[$feature]))) {
-                return ' - متاحة من باقة «' . $t['name'] . '». رقّي من تبويب «الباقة».';
+                return ' - متاحة من باقة «' . $t['name'] . '» أو ضيفها لوحدها في «فصّل باقتك» من تبويب «الباقة».';
             }
         }
         return ' - رقّي باقتك من تبويب «الباقة».';
@@ -510,6 +730,9 @@ final class SocialPackages
             }
             $p = (string) (Database::getInstance()->query('SELECT platform FROM platform_connections WHERE id = ? LIMIT 1', [$cid])[0]['platform'] ?? '');
             $name = self::PLATFORM_NAMES[$p] ?? $p;
+            if ($locked[$cid] === 'platform' && !in_array($p, self::config()['platforms_enabled'], true)) {
+                throw new SocialPackageLimit('النشر على ' . $name . ' مش متاح على المنصة دلوقتي', 'platform');
+            }
             if ($locked[$cid] === 'platform') {
                 throw new SocialPackageLimit('النشر على ' . $name . ' مش ضمن باقة «' . $ent['tier_name'] . '»' . self::upgradeHint('platform', $p), 'platform');
             }
@@ -540,6 +763,9 @@ final class SocialPackages
         $ent = self::entitlements($account);
         if (!$ent['enforced']) {
             return;
+        }
+        if (!in_array($platform, self::config()['platforms_enabled'], true)) {
+            throw new SocialPackageLimit((self::PLATFORM_NAMES[$platform] ?? $platform) . ' مش متاحة على المنصة دلوقتي', 'platform');
         }
         if (!in_array($platform, $ent['platforms'], true)) {
             throw new SocialPackageLimit('ربط ' . (self::PLATFORM_NAMES[$platform] ?? $platform) . ' مش ضمن باقة «' . $ent['tier_name'] . '»' . self::upgradeHint('platform', $platform), 'platform');
@@ -612,33 +838,55 @@ final class SocialPackages
         return (int) strtotime(gmdate('Y-m-d H:i:s', $from) . ' UTC +' . ($cycle === 'yearly' ? '1 year' : '1 month'));
     }
 
+    /** سعر الدورة ومواصفات الباقة المطلوبة (جاهزة أو مفصّلة) */
+    private static function offer(string $tier, string $cycle, ?array $custom): array
+    {
+        $cfg = self::config();
+        if (!in_array($cycle, ['monthly', 'yearly'], true)) {
+            throw new InvalidArgumentException('اختار شهري أو سنوي');
+        }
+        if ($tier === 'custom') {
+            $q = self::quoteCustom($custom ?? []);
+            if ($q['monthly'] <= 0) {
+                throw new InvalidArgumentException('الباقة فاضية');
+            }
+            return ['price' => $q[$cycle], 'name' => 'باقة مفصّلة', 'custom_json' => json_encode($q['spec'], JSON_UNESCAPED_UNICODE)];
+        }
+        $t = $cfg['tiers'][$tier] ?? null;
+        if (!$t || $tier === 'free' || empty($t['for_sale'])) {
+            throw new InvalidArgumentException('الباقة دي مش متاحة');
+        }
+        return ['price' => (float) $t['price_' . $cycle], 'name' => $t['name'], 'custom_json' => null];
+    }
+
+    /** سعر شهري مكافئ (للمقارنة بين ترقية وتخفيض) */
+    private static function perMonth(float $price, string $cycle): float
+    {
+        return $cycle === 'yearly' ? $price / 12 : $price;
+    }
+
     /**
-     * اشتراك/ترقية/تغيير. الترقية فورية بفرق السعر (الباقي من المدة بيتحسب رصيد)،
-     * التخفيض أو تغيير الدورة بيتطبق عند التجديد.
+     * اشتراك/ترقية/تغيير (جاهزة أو مفصّلة). الأغلى فوري بفرق السعر (الباقي من المدة بيتحسب رصيد)،
+     * والأرخص أو تغيير الدورة بيتطبق عند التجديد.
      * @return array{action:string, tier:string, cycle:string, charged:float, period_end:string}
      */
-    public static function subscribe(int $owner, string $tier, string $cycle, ?string $requestKey = null): array
+    public static function subscribe(int $owner, string $tier, string $cycle, ?string $requestKey = null, ?array $custom = null): array
     {
         self::ensureSchema();
         if (!self::ready()) {
             throw new InvalidArgumentException('شغّل migration باقات السوشيال (2026_10_22_000001_social_packages.sql) الأول');
         }
         $cfg = self::config();
-        $t = $cfg['tiers'][$tier] ?? null;
-        if (!$t || $tier === 'free' || empty($t['for_sale'])) {
-            throw new InvalidArgumentException('الباقة دي مش متاحة');
-        }
-        if (!in_array($cycle, ['monthly', 'yearly'], true)) {
-            throw new InvalidArgumentException('اختار شهري أو سنوي');
-        }
+        $offer = self::offer($tier, $cycle, $custom);
         $planTier = self::tierFromPlan($owner);
-        if ($planTier && self::RANK[$planTier] >= self::RANK[$tier]) {
+        if ($tier !== 'custom' && $planTier && self::RANK[$planTier] >= self::RANK[$tier]) {
             throw new InvalidArgumentException('باقة المنصة بتاعتك بتشمل سوشيال «' . $cfg['tiers'][$planTier]['name'] . '» بالفعل');
         }
-        $price = (float) $t['price_' . $cycle];
+        $price = (float) $offer['price'];
+        $customJson = $offer['custom_json'];
         $ref = 'social_pkg:' . $owner . ':' . substr(hash('sha256', $requestKey ?: bin2hex(random_bytes(8))), 0, 32);
         $db = Database::getInstance();
-        $result = $db->transaction(function () use ($db, $owner, $tier, $cycle, $price, $ref, $t) {
+        $result = $db->transaction(function () use ($db, $owner, $tier, $cycle, $price, $ref, $offer, $customJson) {
             $db->query('SELECT id FROM users WHERE id = ? FOR UPDATE', [$owner]);
             $row = self::standalone($owner, true);
             if ($row && $row['last_ref'] === $ref) {
@@ -647,16 +895,16 @@ final class SocialPackages
             $now = time();
             $active = $row && $row['status'] === 'active' && strtotime($row['period_end'] . ' UTC') > $now;
             if ($active) {
-                $cur = (string) $row['tier'];
-                if ($cur === $tier && $row['cycle'] === $cycle) {
+                $same = (string) $row['tier'] === $tier && $row['cycle'] === $cycle && ($tier !== 'custom' || self::sameSpec((string) $row['custom_json'], (string) $customJson));
+                if ($same) {
                     if (!empty($row['auto_renew']) && !$row['pending_tier']) {
                         throw new InvalidArgumentException('انت مشترك في الباقة دي بالفعل');
                     }
-                    $db->query('UPDATE social_subscriptions SET auto_renew = 1, pending_tier = NULL, pending_cycle = NULL, last_ref = ? WHERE id = ?', [$ref, (int) $row['id']]);
+                    $db->query('UPDATE social_subscriptions SET auto_renew = 1, pending_tier = NULL, pending_cycle = NULL, pending_custom_json = NULL, last_ref = ? WHERE id = ?', [$ref, (int) $row['id']]);
                     return ['action' => 'resumed', 'tier' => $tier, 'cycle' => $cycle, 'charged' => 0.0, 'period_end' => $row['period_end']];
                 }
-                if ((self::RANK[$tier] ?? 0) <= (self::RANK[$cur] ?? 0)) {
-                    $db->query('UPDATE social_subscriptions SET pending_tier = ?, pending_cycle = ?, auto_renew = 1, last_ref = ? WHERE id = ?', [$tier, $cycle, $ref, (int) $row['id']]);
+                if (self::perMonth($price, $cycle) <= self::perMonth((float) $row['price_paid'], (string) $row['cycle'])) {
+                    $db->query('UPDATE social_subscriptions SET pending_tier = ?, pending_cycle = ?, pending_custom_json = ?, auto_renew = 1, last_ref = ? WHERE id = ?', [$tier, $cycle, $customJson, $ref, (int) $row['id']]);
                     return ['action' => 'scheduled', 'tier' => $tier, 'cycle' => $cycle, 'charged' => 0.0, 'period_end' => $row['period_end']];
                 }
                 $start = strtotime($row['period_start'] . ' UTC');
@@ -666,16 +914,16 @@ final class SocialPackages
             } else {
                 $charge = $price;
             }
-            if ($charge > 0 && !(new WalletService())->chargeAmount($owner, $charge, 'social_package_' . $tier, 'باقة السوشيال «' . $t['name'] . '» (' . ($cycle === 'yearly' ? 'سنوي' : 'شهري') . ')', $ref)) {
+            if ($charge > 0 && !(new WalletService())->chargeAmount($owner, $charge, 'social_package_' . $tier, 'باقة السوشيال «' . $offer['name'] . '» (' . ($cycle === 'yearly' ? 'سنوي' : 'شهري') . ')', $ref)) {
                 $bal = (new WalletService())->getBalance($owner);
                 throw new DomainException(json_encode(['balance' => $bal, 'required' => $charge, 'shortfall' => round(max(0, $charge - $bal), 2)]));
             }
             $from = gmdate('Y-m-d H:i:s', $now);
             $to = gmdate('Y-m-d H:i:s', self::periodEnd($now, $cycle));
             if ($row) {
-                $db->query("UPDATE social_subscriptions SET tier = ?, cycle = ?, price_paid = ?, status = 'active', auto_renew = 1, pending_tier = NULL, pending_cycle = NULL, period_start = ?, period_end = ?, last_ref = ?, reminded_at = NULL WHERE id = ?", [$tier, $cycle, $price, $from, $to, $ref, (int) $row['id']]);
+                $db->query("UPDATE social_subscriptions SET tier = ?, cycle = ?, price_paid = ?, custom_json = ?, status = 'active', auto_renew = 1, pending_tier = NULL, pending_cycle = NULL, pending_custom_json = NULL, period_start = ?, period_end = ?, last_ref = ?, reminded_at = NULL WHERE id = ?", [$tier, $cycle, $price, $customJson, $from, $to, $ref, (int) $row['id']]);
             } else {
-                $db->query("INSERT INTO social_subscriptions (user_id, tier, cycle, price_paid, status, auto_renew, period_start, period_end, last_ref) VALUES (?, ?, ?, ?, 'active', 1, ?, ?, ?)", [$owner, $tier, $cycle, $price, $from, $to, $ref]);
+                $db->query("INSERT INTO social_subscriptions (user_id, tier, cycle, price_paid, custom_json, status, auto_renew, period_start, period_end, last_ref) VALUES (?, ?, ?, ?, ?, 'active', 1, ?, ?, ?)", [$owner, $tier, $cycle, $price, $customJson, $from, $to, $ref]);
             }
             return ['action' => $active ? 'upgraded' : 'subscribed', 'tier' => $tier, 'cycle' => $cycle, 'charged' => $charge, 'period_end' => $to];
         });
@@ -689,6 +937,11 @@ final class SocialPackages
         return $result;
     }
 
+    private static function sameSpec(string $a, string $b): bool
+    {
+        return (json_decode($a, true) ?: []) == (json_decode($b, true) ?: []);
+    }
+
     /** إلغاء التجديد التلقائي (الباقة بتفضل شغالة لآخر المدة) أو رجوعه */
     public static function setAutoRenew(int $owner, bool $on): array
     {
@@ -696,7 +949,7 @@ final class SocialPackages
         if (!self::standaloneActive($row)) {
             throw new InvalidArgumentException('مفيش اشتراك سوشيال شغال');
         }
-        Database::getInstance()->query('UPDATE social_subscriptions SET auto_renew = ?' . ($on ? '' : ', pending_tier = NULL, pending_cycle = NULL') . ' WHERE id = ?', [$on ? 1 : 0, (int) $row['id']]);
+        Database::getInstance()->query('UPDATE social_subscriptions SET auto_renew = ?' . ($on ? '' : ', pending_tier = NULL, pending_cycle = NULL, pending_custom_json = NULL') . ' WHERE id = ?', [$on ? 1 : 0, (int) $row['id']]);
         self::flush();
         return ['auto_renew' => $on, 'period_end' => $row['period_end']];
     }
@@ -715,8 +968,8 @@ final class SocialPackages
         if (($ent['limits'][$a['kind']] ?? 0) < 0) {
             throw new InvalidArgumentException('باقتك فيها «' . self::LABELS[$a['kind']][0] . '» غير محدود بالفعل');
         }
-        if ($a['kind'] === 'competitors' && empty(self::config()['tiers'][$ent['tier']]['competitors'])) {
-            throw new InvalidArgumentException('متابعة المنافسين محتاجة باقة «' . self::config()['tiers']['pro']['name'] . '» أو أعلى');
+        if ($a['kind'] === 'competitors' && ($ent['limits']['competitors'] ?? 0) === 0) {
+            throw new InvalidArgumentException('متابعة المنافسين مش ضمن باقتك - اختار باقة «' . self::config()['tiers']['pro']['name'] . '» أو ضيف منافسين في «فصّل باقتك»');
         }
         $ref = 'social_addon:' . $owner . ':' . substr(hash('sha256', $requestKey ?: bin2hex(random_bytes(8))), 0, 32);
         $db = Database::getInstance();
@@ -750,6 +1003,20 @@ final class SocialPackages
 
     // ------------------------------------------------------------------ التجديد
 
+    /** الدورة الجاية هتبقى إيه وبكام (بالأسعار الحالية). null = مش متاحة للبيع تاني */
+    private static function nextTerm(array $r): ?array
+    {
+        $tier = $r['pending_tier'] ?: $r['tier'];
+        $cycle = $r['pending_cycle'] ?: $r['cycle'];
+        $custom = $tier === 'custom' ? (json_decode((string) ($r['pending_tier'] ? $r['pending_custom_json'] : $r['custom_json']), true) ?: []) : null;
+        try {
+            $o = self::offer($tier, $cycle, $custom);
+        } catch (Throwable $e) {
+            return null;
+        }
+        return ['tier' => $tier, 'cycle' => $cycle, 'price' => (float) $o['price'], 'name' => $o['name'], 'custom_json' => $o['custom_json']];
+    }
+
     /** بتتنادى من SocialPackagesRenewJob كل ساعة. بترجّع عدد الاشتراكات اللي اتعالجت */
     public static function renewDue(int $limit = 200): int
     {
@@ -761,11 +1028,11 @@ final class SocialPackages
         $done = 0;
         // تذكير قبل التجديد بـ 3 أيام لو الرصيد مش كفاية
         foreach ($db->query("SELECT * FROM social_subscriptions WHERE status = 'active' AND auto_renew = 1 AND reminded_at IS NULL AND period_end BETWEEN UTC_TIMESTAMP() AND DATE_ADD(UTC_TIMESTAMP(), INTERVAL 3 DAY) LIMIT " . (int) $limit) ?: [] as $r) {
-            $tier = $r['pending_tier'] ?: $r['tier'];
-            $price = (float) ($cfg['tiers'][$tier]['price_' . ($r['pending_cycle'] ?: $r['cycle'])] ?? 0);
+            $next = self::nextTerm($r);
+            $price = $next['price'] ?? 0;
             try {
                 if ($price > 0 && (new WalletService())->getBalance((int) $r['user_id']) < $price) {
-                    Notification::notify((int) $r['user_id'], 'social_package', 'باقة السوشيال هتتجدد قريب', 'رصيد المحفظة مش كفاية لتجديد باقة «' . ($cfg['tiers'][$tier]['name'] ?? $tier) . '» (' . $price . '$). اشحن المحفظة قبل ' . substr((string) $r['period_end'], 0, 10) . '.', '/subscription#wallet');
+                    Notification::notify((int) $r['user_id'], 'social_package', 'باقة السوشيال هتتجدد قريب', 'رصيد المحفظة مش كفاية لتجديد «' . $next['name'] . '» (' . $price . '$). اشحن المحفظة قبل ' . substr((string) $r['period_end'], 0, 10) . '.', '/subscription#wallet');
                 }
             } catch (Throwable $e) {
             }
@@ -779,16 +1046,16 @@ final class SocialPackages
                         return;
                     }
                     $uid = (int) $r['user_id'];
-                    $tier = $r['pending_tier'] ?: $r['tier'];
-                    $cycle = $r['pending_cycle'] ?: $r['cycle'];
-                    $t = $cfg['tiers'][$tier] ?? null;
-                    $name = $t['name'] ?? $tier;
-                    if (empty($r['auto_renew']) || !$t || empty($t['for_sale'])) {
+                    $next = self::nextTerm($r);
+                    $name = $next['name'] ?? ($r['tier'] === 'custom' ? 'باقة مفصّلة' : ($cfg['tiers'][$r['tier']]['name'] ?? $r['tier']));
+                    if (empty($r['auto_renew']) || !$next) {
                         $db->query("UPDATE social_subscriptions SET status = 'expired' WHERE id = ?", [(int) $r['id']]);
                         Notification::notify($uid, 'social_package', 'باقة السوشيال خلصت', 'باقة «' . $name . '» انتهت. تقدر تجددها في أي وقت من تبويب «الباقة» في السوشيال.', '/social#package');
                         return;
                     }
-                    $price = (float) $t['price_' . $cycle];
+                    $tier = $next['tier'];
+                    $cycle = $next['cycle'];
+                    $price = $next['price'];
                     // مفتاح الدورة نفسها (بداية+نهاية): نفس الدورة ماتتخصمش مرتين حتى لو المهمة اشتغلت مرتين
                     $ref = 'social_renew:' . (int) $r['id'] . ':' . substr(hash('sha256', $r['period_start'] . '|' . $r['period_end']), 0, 24);
                     if ($price > 0 && !(new WalletService())->chargeAmount($uid, $price, 'social_package_' . $tier, 'تجديد باقة السوشيال «' . $name . '»', $ref)) {
@@ -797,8 +1064,8 @@ final class SocialPackages
                         return;
                     }
                     $from = max(strtotime($r['period_end'] . ' UTC'), time() - 86400);
-                    $db->query("UPDATE social_subscriptions SET tier = ?, cycle = ?, price_paid = ?, pending_tier = NULL, pending_cycle = NULL, period_start = ?, period_end = ?, last_ref = ?, reminded_at = NULL WHERE id = ?",
-                        [$tier, $cycle, $price, gmdate('Y-m-d H:i:s', $from), gmdate('Y-m-d H:i:s', self::periodEnd($from, $cycle)), $ref, (int) $r['id']]);
+                    $db->query("UPDATE social_subscriptions SET tier = ?, cycle = ?, price_paid = ?, custom_json = ?, pending_tier = NULL, pending_cycle = NULL, pending_custom_json = NULL, period_start = ?, period_end = ?, last_ref = ?, reminded_at = NULL WHERE id = ?",
+                        [$tier, $cycle, $price, $next['custom_json'], gmdate('Y-m-d H:i:s', $from), gmdate('Y-m-d H:i:s', self::periodEnd($from, $cycle)), $ref, (int) $r['id']]);
                 });
                 $done++;
             } catch (Throwable $e) {
@@ -823,7 +1090,8 @@ final class SocialPackages
             'limits' => $ent['limits'], 'usage' => self::usage($account), 'features' => $ent['features'], 'platforms' => $ent['platforms'],
             'locked' => $locked,
             'subscription' => $sub ? ['tier' => $sub['tier'], 'cycle' => $sub['cycle'], 'status' => self::standaloneActive($sub) ? 'active' : 'expired', 'auto_renew' => (bool) $sub['auto_renew'],
-                'pending_tier' => $sub['pending_tier'], 'pending_cycle' => $sub['pending_cycle'], 'period_end' => $sub['period_end']] : null,
+                'pending_tier' => $sub['pending_tier'], 'pending_cycle' => $sub['pending_cycle'], 'period_end' => $sub['period_end'], 'price_paid' => (float) $sub['price_paid'],
+                'custom' => json_decode((string) ($sub['custom_json'] ?? ''), true) ?: null] : null,
             'addons_active' => self::activeAddons($ent['owner']),
             'ready' => self::ready(),
         ];

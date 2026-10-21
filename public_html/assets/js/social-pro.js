@@ -201,7 +201,7 @@
                 + (connections.some(c => c.locked) ? '<div class="sp-small p-cell-muted">🔒 ' + T('حسابات مقفولة بسبب حدود الباقة - ', 'Accounts locked by your plan limits — ') + '<a href="#package" data-gopkg>' + T('رقّي الباقة', 'Upgrade') + '</a></div>' : '') + offHtml;
             box.querySelectorAll('[data-gopkg]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); closeComposer(); showTab('package'); }));
         } else {
-            box.innerHTML = '<div class="alert alert-warning">' + T('مفيش صفحات قابلة للنشر لسه. اربط حساباتك وانت بتختار الصفحات وبتوافق على كل الصلاحيات.', 'No publishable pages yet. Connect your accounts, select the pages and accept all permissions.') + '</div><div class="sp-row"><a class="p-btn primary sm" href="/ads/connect/meta?for=social">Facebook + Instagram</a><a class="p-btn outline sm" href="/social/connect/tiktok">TikTok</a><a class="p-btn outline sm" href="/social/connect/youtube">YouTube</a><a class="p-btn outline sm" href="/social/connect/threads">Threads</a><a class="p-btn outline sm" href="/social/connect/linkedin">LinkedIn</a></div>' + offHtml;
+            box.innerHTML = '<div class="alert alert-warning">' + T('مفيش صفحات قابلة للنشر لسه. اربط حساباتك وانت بتختار الصفحات وبتوافق على كل الصلاحيات.', 'No publishable pages yet. Connect your accounts, select the pages and accept all permissions.') + '</div><div class="sp-row"><a class="p-btn primary sm" href="/ads/connect/meta?for=social">Facebook + Instagram</a><a class="p-btn outline sm" href="/social/connect/tiktok">TikTok</a><a class="p-btn outline sm" href="/social/connect/youtube">YouTube</a><a class="p-btn outline sm" href="/social/connect/threads">Threads</a></div>' + offHtml;
         }
         applyFormat();
     }
@@ -1028,11 +1028,83 @@
             + '<div class="p-card"><div class="p-card-head"><h3>📦 ' + T('باقات السوشيال', 'Social plans') + '</h3><div class="sp-seg pk-cycle"><label><input type="radio" name="pkCycle" value="monthly"' + (pkCycle === 'monthly' ? ' checked' : '') + '> ' + T('شهري', 'Monthly') + '</label><label><input type="radio" name="pkCycle" value="yearly"' + (pkCycle === 'yearly' ? ' checked' : '') + '> ' + T('سنوي (شهرين ببلاش)', 'Yearly (2 months free)') + '</label></div></div>'
             + '<div class="pk-grid">' + cards + '</div>' + mapTxt
             + '<p class="p-cell-muted sp-small">' + T('الدفع من رصيد المحفظة. الترقية فورية وبتدفع الفرق بس (الباقي من مدتك بيتحسب رصيد)، والتخفيض بيتطبق عند التجديد. كل منصة في المنشور بتتحسب منشور. كابشن AI بيتحسب من باقة المنصة الأول لو عندك.', 'Paid from your wallet balance. Upgrades are instant and you only pay the difference (remaining time is credited); downgrades apply at renewal. Each platform in a post counts as one post. AI captions use your platform plan quota first if you have one.') + '</p></div>'
+            + (PKG.builder ? '<div class="p-card pk-builder" id="pkBuilder"></div>' : '')
             + addons;
+        if (PKG.builder) renderBuilder();
         root.querySelectorAll('input[name=pkCycle]').forEach(r => r.addEventListener('change', () => { pkCycle = r.value; renderPackage(); }));
         root.querySelectorAll('[data-buy]').forEach(b => b.addEventListener('click', () => buyTier(b.dataset.buy, b)));
         root.querySelectorAll('[data-addon]').forEach(b => b.addEventListener('click', () => buyAddon(b.dataset.addon, b)));
         const rn = $('pkRenew'); if (rn) rn.addEventListener('click', toggleRenew);
+    }
+    // ---- فصّل باقتك
+    let bld = null;
+    const usd = n => '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 });
+    function bldInit() {
+        const c = PKG.custom || (PKG.subscription && PKG.subscription.custom) || null;
+        const en = PKG.platforms_enabled || [];
+        bld = c ? JSON.parse(JSON.stringify(c)) : { channels: 2, platforms: en.filter(p => p === 'facebook' || p === 'instagram'), features: {}, posts_blocks: 0, ai_blocks: 0, competitor_blocks: 0, monthly_plans: 0 };
+        bld.platforms = (bld.platforms || []).filter(p => en.includes(p));
+        bld.features = bld.features || {};
+    }
+    function bldCalc() {
+        const B = PKG.builder;
+        if (bld.features.auto_private) bld.features.private_reply = true;
+        bld.channels = Math.max(bld.channels, bld.platforms.length || 1, 1);
+        bld.channels = Math.min(bld.channels, B.max_channels);
+        let m = bld.channels * B.channel.usd + bld.posts_blocks * B.posts_block.price.usd + bld.ai_blocks * B.ai_block.price.usd + bld.competitor_blocks * B.competitors_block.price.usd + bld.monthly_plans * B.monthly_plan.usd;
+        Object.keys(B.features).forEach(k => { if (bld.features[k]) m += B.features[k].usd; });
+        return {
+            monthly: m, yearly: m * B.yearly_months,
+            posts: bld.channels * B.posts_per_channel + bld.posts_blocks * B.posts_block.qty,
+            ai: bld.channels * B.ai_per_channel + bld.ai_blocks * B.ai_block.qty,
+            competitors: bld.competitor_blocks * B.competitors_block.qty
+        };
+    }
+    function renderBuilder() {
+        const box = $('pkBuilder'); if (!box) return;
+        if (!bld) bldInit();
+        const B = PKG.builder, q = bldCalc();
+        const step = (key, val, unit, price) => '<div class="pk-step"><div><b>' + esc(unit) + '</b><div class="p-cell-muted sp-small">' + esc(price) + '</div></div><div class="pk-stepper"><button type="button" class="p-btn ghost xs" data-st="' + key + '" data-d="-1" aria-label="-">−</button><span>' + nf(val) + '</span><button type="button" class="p-btn ghost xs" data-st="' + key + '" data-d="1" aria-label="+">+</button></div></div>';
+        const sub = PKG.subscription && PKG.subscription.status === 'active' && PKG.subscription.tier === 'custom';
+        box.innerHTML = '<div class="p-card-head"><h3>🧩 ' + T('فصّل باقتك', 'Build your own plan') + '</h3><span class="p-card-sub">' + T('اختار المنصات والمميزات اللي محتاجها بس، وادفع على قدها', 'Pick only the platforms and features you need, and pay for just that') + '</span></div>'
+            + '<div class="pk-b-grid"><div>'
+            + '<h5>1) ' + T('المنصات اللي بتستخدمها', 'Platforms you use') + '</h5><div class="sp-chips">' + (PKG.platforms_enabled || []).map(p => '<label class="sp-tchip"><input type="checkbox" data-bp="' + p + '"' + (bld.platforms.includes(p) ? ' checked' : '') + '> ' + (PF[p] || '') + ' ' + esc(PN[p] || p) + '</label>').join('') + '</div>'
+            + '<h5>2) ' + T('عدد الحسابات', 'Number of accounts') + '</h5>'
+            + step('channels', bld.channels, T('حساب', 'accounts'), B.channel.label + T(' للحساب · معاه ', ' per account · includes ') + B.posts_per_channel + T(' منشور و', ' posts & ') + B.ai_per_channel + T(' كابشن AI', ' AI captions'))
+            + '<h5>3) ' + T('المميزات', 'Features') + '</h5><div class="pk-feats">' + Object.keys(B.features).map(k => '<label class="sp-check"><input type="checkbox" data-bf="' + k + '"' + (bld.features[k] ? ' checked' : '') + '> ' + esc(lab(k)) + ' <span class="p-cell-muted">+' + esc(B.features[k].label) + '</span></label>').join('') + '</div>'
+            + '<h5>4) ' + T('زيادات (اختياري)', 'Extras (optional)') + '</h5>'
+            + step('posts_blocks', bld.posts_blocks * B.posts_block.qty, T('منشور زيادة', 'extra posts'), '+' + B.posts_block.qty + ' = ' + B.posts_block.price.label)
+            + step('ai_blocks', bld.ai_blocks * B.ai_block.qty, T('كابشن AI زيادة', 'extra AI captions'), '+' + B.ai_block.qty + ' = ' + B.ai_block.price.label)
+            + step('competitor_blocks', bld.competitor_blocks * B.competitors_block.qty, T('منافسين على إنستجرام', 'Instagram competitors'), '+' + B.competitors_block.qty + ' = ' + B.competitors_block.price.label)
+            + step('monthly_plans', bld.monthly_plans, T('خطة شهرية بالذكاء الصناعي', 'AI monthly plans'), B.monthly_plan.label + T(' للخطة', ' per plan'))
+            + '</div><aside class="pk-b-sum"><h5>' + T('باقتك', 'Your plan') + '</h5><ul class="pk-list">'
+            + '<li>🔗 <b>' + nf(bld.channels) + '</b> ' + esc(lab('accounts')) + ' — ' + bld.platforms.map(p => PF[p] || '').join(' ') + '</li>'
+            + '<li>🗓 <b>' + nf(q.posts) + '</b> ' + esc(lab('posts')) + '</li><li>✨ <b>' + nf(q.ai) + '</b> ' + esc(lab('ai_captions')) + '</li>'
+            + (bld.monthly_plans ? '<li>🧠 <b>' + nf(bld.monthly_plans) + '</b> ' + esc(lab('monthly_plans')) + '</li>' : '')
+            + (q.competitors ? '<li>🔭 <b>' + nf(q.competitors) + '</b> ' + esc(lab('competitors')) + '</li>' : '')
+            + Object.keys(B.features).filter(k => bld.features[k]).map(k => '<li>✓ ' + esc(lab(k)) + '</li>').join('') + '</ul>'
+            + '<div class="pk-price">' + usd(pkCycle === 'yearly' ? q.yearly : q.monthly) + '<small>/' + (pkCycle === 'yearly' ? T('سنة', 'year') : T('شهر', 'month')) + '</small></div>'
+            + (pkCycle === 'yearly' ? '<div class="pk-save">' + T('بدل ', 'instead of ') + usd(q.monthly * 12) + '</div>' : '<div class="pk-save">' + T('السنوي: ', 'Yearly: ') + usd(q.yearly) + '</div>')
+            + (PKG.can_buy ? '<button type="button" class="p-btn primary" id="pkBuildBuy"' + (bld.platforms.length ? '' : ' disabled') + '>' + (sub ? T('حدّث باقتي', 'Update my plan') : T('اشترك في الباقة دي', 'Subscribe to this plan')) + '</button>' : '<span class="p-cell-muted sp-small">' + T('الاشتراك من صلاحيات مدير الحساب', 'Only the account manager can subscribe') + '</span>')
+            + '<p class="p-cell-muted sp-small">' + T('الباقات الجاهزة فوق أوفر لو محتاج مميزات كتير.', 'The ready-made plans above are cheaper if you need many features.') + '</p></aside></div>';
+        box.querySelectorAll('[data-bp]').forEach(cb => cb.addEventListener('change', () => { bld.platforms = [...box.querySelectorAll('[data-bp]:checked')].map(x => x.dataset.bp); renderBuilder(); }));
+        box.querySelectorAll('[data-bf]').forEach(cb => cb.addEventListener('change', () => { bld.features[cb.dataset.bf] = cb.checked; if (cb.dataset.bf === 'private_reply' && !cb.checked) bld.features.auto_private = false; renderBuilder(); }));
+        box.querySelectorAll('[data-st]').forEach(b => b.addEventListener('click', () => { const k = b.dataset.st; bld[k] = Math.max(k === 'channels' ? 1 : 0, (bld[k] || 0) + Number(b.dataset.d)); renderBuilder(); }));
+        const buy = $('pkBuildBuy'); if (buy) buy.addEventListener('click', () => buyCustom(buy));
+    }
+    async function buyCustom(btn) {
+        btn.disabled = true;
+        const q = await jsonPost('/api/social/package/quote', { custom: bld });
+        if (!q.success) { btn.disabled = false; P.toast(q.error || T('تعذر', 'Failed'), 'error'); return; }
+        const pr = pkCycle === 'yearly' ? q.data.yearly_label : q.data.monthly_label;
+        if (!confirm(T('تأكيد الباقة المفصّلة ', 'Confirm custom plan ') + (pkCycle === 'yearly' ? T('(سنوي)', '(yearly)') : T('(شهري)', '(monthly)')) + ' — ' + pr.label + T('\nالمبلغ (أو فرق السعر لو بتكبّر باقتك) هيتخصم من المحفظة. التصغير بيتطبق عند التجديد.', '\nThe amount (or the prorated difference when upgrading) is charged to your wallet. Downsizing applies at renewal.'))) { btn.disabled = false; return; }
+        const r = await jsonPost('/api/social/package/subscribe', { tier: 'custom', cycle: pkCycle, custom: q.data.spec, request_key: reqKey() });
+        btn.disabled = false;
+        if (!r.success) { payFail(r); return; }
+        P.toast(r.message || T('تم ✅', 'Done ✅'), 'success');
+        bld = null;
+        await loadPackage();
+        loadTargetsSoft();
     }
     async function loadPackage() {
         const r = await fetchPackage();

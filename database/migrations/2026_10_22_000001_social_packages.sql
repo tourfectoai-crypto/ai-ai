@@ -5,7 +5,7 @@
 CREATE TABLE IF NOT EXISTS `social_subscriptions` (
     `id` INT(11) NOT NULL AUTO_INCREMENT,
     `user_id` INT(11) NOT NULL COMMENT 'صاحب الحساب',
-    `tier` VARCHAR(16) NOT NULL COMMENT 'basic|pro|agency',
+    `tier` VARCHAR(16) NOT NULL COMMENT 'basic|pro|agency|custom',
     `cycle` VARCHAR(10) NOT NULL DEFAULT 'monthly' COMMENT 'monthly|yearly',
     `price_paid` DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT 'سعر الدورة الحالية بالدولار (لحساب فرق الترقية)',
     `status` VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'active|expired',
@@ -16,12 +16,19 @@ CREATE TABLE IF NOT EXISTS `social_subscriptions` (
     `period_end` DATETIME NOT NULL COMMENT 'UTC',
     `last_ref` VARCHAR(80) DEFAULT NULL COMMENT 'مفتاح آخر عملية (منع التكرار)',
     `reminded_at` DATETIME DEFAULT NULL,
+    `custom_json` TEXT DEFAULT NULL COMMENT 'مواصفات «فصّل باقتك» (tier = custom)',
+    `pending_custom_json` TEXT DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uniq_user` (`user_id`),
     KEY `idx_due` (`status`, `period_end`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- لو الجدول اتعمل من نسخة أقدم من غير أعمدة الباقة المفصّلة
+SET @has := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'social_subscriptions' AND COLUMN_NAME = 'custom_json');
+SET @q := IF(@has = 0, 'ALTER TABLE `social_subscriptions` ADD COLUMN `custom_json` TEXT DEFAULT NULL, ADD COLUMN `pending_custom_json` TEXT DEFAULT NULL', 'SELECT 1');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 
 CREATE TABLE IF NOT EXISTS `social_addons` (
     `id` INT(11) NOT NULL AUTO_INCREMENT,

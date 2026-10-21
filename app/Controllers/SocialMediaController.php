@@ -1026,7 +1026,7 @@ class SocialMediaController extends Controller
         foreach ($cfg['tiers'] as $k => $t) {
             $tiers[] = ['key' => $k, 'name' => $ar ? $t['name'] : $t['name_en'], 'for_sale' => (bool) $t['for_sale'], 'rank' => SocialPackages::RANK[$k],
                 'monthly' => $this->priceLabels((float) $t['price_monthly'], $cur, $ar), 'yearly' => $this->priceLabels((float) $t['price_yearly'], $cur, $ar),
-                'limits' => array_intersect_key($t, array_flip(SocialPackages::LIMIT_KEYS)), 'platforms' => $t['platforms'],
+                'limits' => array_intersect_key($t, array_flip(SocialPackages::LIMIT_KEYS)), 'platforms' => array_values(array_intersect($cfg['platforms_enabled'], $t['platforms'])),
                 'features' => array_map('boolval', array_intersect_key($t, array_flip(SocialPackages::FEATURE_KEYS)))];
         }
         $addons = [];
@@ -1044,7 +1044,15 @@ class SocialMediaController extends Controller
             $balance = $this->priceLabels((new WalletService())->getBalance(SocialPackages::owner($this->uid())), $cur, $ar);
         } catch (Throwable $e) {
         }
+        $b = $cfg['builder'];
+        $builder = $b['enabled'] ? ['channel' => $this->priceLabels((float) $b['channel'], $cur, $ar), 'posts_per_channel' => $b['posts_per_channel'], 'ai_per_channel' => $b['ai_per_channel'], 'max_channels' => $b['max_channels'],
+            'posts_block' => ['qty' => $b['posts_block']['qty'], 'price' => $this->priceLabels((float) $b['posts_block']['price'], $cur, $ar)],
+            'ai_block' => ['qty' => $b['ai_block']['qty'], 'price' => $this->priceLabels((float) $b['ai_block']['price'], $cur, $ar)],
+            'competitors_block' => ['qty' => $b['competitors_block']['qty'], 'price' => $this->priceLabels((float) $b['competitors_block']['price'], $cur, $ar)],
+            'monthly_plan' => $this->priceLabels((float) $b['monthly_plan'], $cur, $ar),
+            'features' => array_map(fn ($v) => $this->priceLabels((float) $v, $cur, $ar), $b['features']), 'yearly_months' => $b['yearly_months']] : null;
         return $this->success(SocialPackages::summary($this->uid()) + [
+            'builder' => $builder, 'platforms_enabled' => $cfg['platforms_enabled'],
             'catalog' => $tiers, 'addons' => $addons, 'plan_map' => $planNames, 'labels' => SocialPackages::LABELS, 'platform_names' => SocialPackages::PLATFORM_NAMES,
             'balance' => $balance, 'can_buy' => SocialTeam::can($this->team(), 'manage'), 'csrf_token' => Csrf::token(),
         ]);
@@ -1079,11 +1087,33 @@ class SocialMediaController extends Controller
         }
         try {
             $key = $this->get('request_key');
-            $r = SocialPackages::subscribe(SocialPackages::owner($this->uid()), (string) $this->get('tier', ''), (string) $this->get('cycle', 'monthly'), is_string($key) && strlen($key) >= 8 ? $key : null);
+            $custom = $this->get('custom');
+            $r = SocialPackages::subscribe(SocialPackages::owner($this->uid()), (string) $this->get('tier', ''), (string) $this->get('cycle', 'monthly'), is_string($key) && strlen($key) >= 8 ? $key : null, is_array($custom) ? $custom : null);
             $msg = ['subscribed' => 'اشتركت في الباقة ✅', 'upgraded' => 'اترقّت باقتك ✅', 'scheduled' => 'التغيير هيتطبق عند التجديد', 'resumed' => 'رجع التجديد التلقائي ✅', 'already' => 'اتنفذ قبل كده'][$r['action']] ?? 'تم';
             return $this->success($r + ['package' => SocialPackages::summary($this->uid())], $msg);
         } catch (Throwable $e) {
             return $this->packageFail($e);
+        }
+    }
+
+    /** POST /api/social/package/quote  body: {custom} - سعر «فصّل باقتك» من السيرفر (هو المرجع، مش حساب المتصفح) */
+    public function packageQuote(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($e = $this->rateLimitGuard('user', 'social_package_quote', 120, 60)) {
+            return $e;
+        }
+        try {
+            $q = SocialPackages::quoteCustom(is_array($this->get('custom')) ? $this->get('custom') : []);
+            $ar = current_lang() === 'ar';
+            $cur = CurrencyService::forViewer($this->user);
+            $q['monthly_label'] = $this->priceLabels($q['monthly'], $cur, $ar);
+            $q['yearly_label'] = $this->priceLabels($q['yearly'], $cur, $ar);
+            return $this->success($q);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
         }
     }
 
