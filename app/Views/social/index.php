@@ -10,6 +10,9 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
 <link rel="stylesheet" href="<?= $cssUrl ?>">
 <link rel="stylesheet" href="<?= $monthlyCss ?>">
 <div id="spRoot" class="sp-root" data-lang="<?= $ar ? 'ar' : 'en' ?>" data-can="<?= htmlspecialchars(implode(',', $team['can'] ?? ['view', 'draft', 'publish', 'inbox', 'manage']), ENT_QUOTES, 'UTF-8') ?>" data-role="<?= htmlspecialchars((string) ($team['role'] ?? 'admin'), ENT_QUOTES, 'UTF-8') ?>">
+<?php if (!empty($deployWarning)): ?>
+    <div class="alert alert-danger sp-small"><b><?= $t('تنبيه للأدمن: الرفع على السيرفر ناقص.', 'Admin notice: the server upload is incomplete.') ?></b> <?= $t('الملفات دي قديمة أو مش موجودة، فأجزاء من الصفحة هتطلع "تعذر التحميل" لحد ما ترفعها من ملف التحديث: ', 'These files are outdated or missing, so parts of this page will fail to load until you upload them from the update package: ') ?><code><?= htmlspecialchars(implode('، ', $deployWarning), ENT_QUOTES, 'UTF-8') ?></code></div>
+<?php endif; ?>
 <?php if (!empty($team['member'])): ?>
     <div class="alert alert-info sp-small"><?= $t('انت داخل كعضو في فريق الحساب بدور: ', 'You are working as a team member with the role: ') ?><b><?= htmlspecialchars((string) $team['role'], ENT_QUOTES, 'UTF-8') ?></b><?= in_array('publish', $team['can'] ?? [], true) ? '' : $t(' — المنشورات اللي بتعملها بتروح للمدير يعتمدها قبل النشر.', ' — posts you create go to a manager for approval before publishing.') ?></div>
 <?php endif; ?>

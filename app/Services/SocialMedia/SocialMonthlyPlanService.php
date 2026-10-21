@@ -30,6 +30,14 @@ class SocialMonthlyPlanService
         // تيك توك ويوتيوب بيتربطوا على مستوى الحساب (من غير موقع): بنعرضهم مع كل موقع عشان يتختاروا في أي خطة
         $accountLevel=$this->q("SELECT c.id,c.platform,c.external_location_name AS name,c.status,c.token_expires_at FROM platform_connections c WHERE c.user_id=? AND c.website_id IS NULL AND c.platform IN ('tiktok','youtube') ORDER BY c.id",[$uid])->fetchAll(PDO::FETCH_ASSOC);
         foreach($sites as $site)foreach($accountLevel as $c)$connections[]=['website_id'=>$site['id']]+$c;
+        // الصفحات اللي العميل وقّفها أو برا باقته ما بتظهرش هنا، والباقي بصورته واسم المستخدم
+        if(class_exists('SocialPackages')){
+            $locked=SocialPackages::locked($uid);
+            $connections=array_values(array_filter($connections,static fn($c)=>!in_array($locked[(int)$c['id']]??'',['inactive','platform'],true)));
+            $prof=class_exists('SocialAccounts')?SocialAccounts::profiles(array_column($connections,'id')):[];
+            foreach($connections as &$c){$pf=$prof[(int)$c['id']]??[];$c['avatar']=$pf['avatar_url']??null;$c['username']=$pf['username']??null;$c['locked']=$locked[(int)$c['id']]??null;}
+            unset($c);
+        }
         $studio=new SocialBrandStudio($this->pdo);
         foreach($sites as &$site){try{$site['brand']=$studio->kit($uid,(int)$site['id']);}catch(Throwable $e){$site['brand']=null;}}unset($site);
         $media=$this->q("SELECT id,type,prompt,width,height,file_path,generation_meta FROM media_items WHERE user_id=? AND status='completed' AND deleted_at IS NULL ORDER BY id DESC LIMIT 120",[$uid])->fetchAll(PDO::FETCH_ASSOC);

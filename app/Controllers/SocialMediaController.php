@@ -106,6 +106,7 @@ class SocialMediaController extends Controller
             'cssUrl' => $asset('/assets/css/social-pro.css'),
             'jsUrl' => $asset('/assets/js/social-pro.js'),
             'iconsJs' => $asset('/assets/js/sp-icons.js'),
+            'deployWarning' => $this->deployWarning(),
             'monthlyCss' => $asset('/assets/css/social-monthly-plans.css'),
             'monthlyJs' => $asset('/assets/js/social-monthly-plans.js'),
             'pickerJs' => $asset('/assets/js/site-photo-picker.js'),
@@ -120,6 +121,32 @@ class SocialMediaController extends Controller
             ''
         );
         exit;
+    }
+
+    /**
+     * فحص رفع ناقص (للأدمن بس): لو ملفات الواجهة اترفعت وملف المسارات لأ، كل التبويبات الجديدة بتطلع "تعذر التحميل".
+     * @return string[] الملفات القديمة على السيرفر
+     */
+    private function deployWarning(): array
+    {
+        if (!in_array($this->user['role'] ?? '', ['admin', 'super_admin'], true)) {
+            return [];
+        }
+        $root = dirname(__DIR__, 2);
+        $need = [
+            '/app/routes/api.php' => '/api/social/connections/{id}/active',
+            '/app/routes/web.php' => '/review/{token}',
+            '/app/Services/SocialMedia/SocialPackages.php' => 'quoteCustom',
+            '/app/Services/SocialMedia/SocialAccounts.php' => 'refreshStale',
+        ];
+        $stale = [];
+        foreach ($need as $file => $marker) {
+            $src = @file_get_contents($root . $file);
+            if ($src === false || strpos($src, $marker) === false) {
+                $stale[] = ltrim($file, '/');
+            }
+        }
+        return $stale;
     }
 
     /** Monthly-plan endpoints share the same owner scope and delivery service. */

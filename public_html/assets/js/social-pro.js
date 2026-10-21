@@ -774,9 +774,10 @@
     async function loadShare() {
         const res = await fetchJSON('/api/social/monthly-plans');
         const sel = $('shPlan');
-        const plans = (res.success && res.data.plans) || [];
+        // الخطط اللي ينفع تتبعت للعميل: مسودة جاهزة للمراجعة أو شغالة (الملغية/الفاشلة ملهاش لازمة هنا)
+        const plans = ((res.success && res.data.plans) || []).filter(p => ['draft', 'active', 'paused', 'completed'].includes(p.status));
         const keep = sel.value;
-        sel.innerHTML = plans.length ? plans.map(p => '<option value="' + p.id + '">' + esc(p.month_key) + ' · ' + esc(PLAN_ST[p.status] || p.status) + '</option>').join('') : '<option value="">' + T('مفيش خطط لسه', 'No plans yet') + '</option>';
+        sel.innerHTML = plans.length ? plans.map(p => '<option value="' + p.id + '">' + esc(p.month_key) + ' · ' + esc(PLAN_ST[p.status] || p.status) + '</option>').join('') : '<option value="">' + T('مفيش خطة جاهزة للمراجعة - جهّز خطة الأول', 'No plan ready for review — prepare a plan first') + '</option>';
         if (keep && plans.some(p => String(p.id) === keep)) sel.value = keep;
         $('shCreate').disabled = !plans.length;
         loadShareLinks();
@@ -815,7 +816,8 @@
         const box = $('spAccounts');
         const res = await fetchJSON('/api/social/connections?_=' + Date.now(), { cache: 'no-store' });
         if (!res.success) { box.textContent = res.error || T('تعذر التحميل', 'Could not load'); return; }
-        const on = res.data.connections || [], off = res.data.disconnected || [];
+        const rank = c => (c.active === false ? 2 : c.locked ? 1 : 0);
+        const on = (res.data.connections || []).slice().sort((a, b) => rank(a) - rank(b)), off = res.data.disconnected || [];
         const st = c => c.active === false ? ['off', T('موقوفة', 'Paused')] : c.locked === 'platform' ? ['lock', T('مش ضمن باقتك', 'Not in your plan')] : c.locked === 'accounts' ? ['lock', T('فوق حد الباقة', 'Over plan limit')] : ['ok', T('شغالة', 'Active')];
         const card = c => {
             const s2 = st(c);
@@ -825,7 +827,7 @@
                 + (can('manage') ? '<label class="sp-switch" title="' + esc(T('مستخدمة في النشر', 'Used for publishing')) + '"><input type="checkbox" data-acc="' + c.id + '"' + (c.active !== false ? ' checked' : '') + '><span></span></label>' : '') + '</div>';
         };
         box.innerHTML = (on.length ? on.map(card).join('') : '<div class="p-empty">' + IC('plug', 22) + '<div>' + T('مفيش حسابات متصلة لسه. اربط حساباتك من تحت.', 'No connected accounts yet. Connect below.') + '</div></div>')
-            + off.map(c => '<div class="sp-acc bad" title="' + esc(c.last_error || '') + '">' + av(c, 52) + '<div class="sp-acc-tx"><b>' + esc(c.name || c.platform) + '</b><small>' + esc(PN[c.platform] || c.platform) + '</small><div class="sp-acc-meta"><span class="sp-acc-st bad">' + T('محتاج إعادة ربط', 'Needs reconnecting') + '</span></div></div><a class="p-btn outline xs" href="' + (c.platform === 'facebook' || c.platform === 'instagram' ? '/ads/connect/meta?for=social' : '/social/connect/' + esc(c.platform)) + '">' + IC('refresh', 13) + ' ' + T('اربط تاني', 'Reconnect') + '</a></div>').join('');
+            + off.map(c => '<div class="sp-acc bad" title="' + esc(c.last_error || '') + '">' + av(c, 52) + '<div class="sp-acc-tx"><b>' + esc(c.name || c.platform) + '</b><small>' + esc(PN[c.platform] || c.platform) + '</small><div class="sp-acc-meta"><span class="sp-acc-st bad">' + T('محتاج إعادة ربط', 'Needs reconnecting') + '</span></div></div><a class="p-btn outline xs" href="' + ({ facebook: '/ads/connect/meta?for=social', instagram: '/ads/connect/meta?for=social', google_business: '/reputation/platforms' }[c.platform] || '/social/connect/' + esc(c.platform)) + '">' + IC('refresh', 13) + ' ' + T('اربط تاني', 'Reconnect') + '</a></div>').join('');
         const activeN = on.filter(c => c.active !== false && c.locked !== 'platform').length;
         const lim = PKG && PKG.limits ? PKG.limits.accounts : null;
         $('spSlots').innerHTML = lim === null || lim === undefined ? '' : (T('مستخدم ', 'Using ') + '<b>' + nf(Math.min(activeN, lim < 0 ? activeN : lim)) + '</b>' + T(' من ', ' of ') + '<b>' + (lim < 0 ? '∞' : nf(lim)) + '</b>' + T(' حساب في باقتك', ' accounts in your plan'));
