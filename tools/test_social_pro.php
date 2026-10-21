@@ -128,5 +128,17 @@ check('linkedin escapes reserved chars & links hashtags', LinkedInAPI::littleTex
 require_once $root . '/app/Services/SocialMedia/SocialTeam.php';
 check('team matrix: support drafts+inbox but cannot publish/manage', SocialTeam::can(['can' => SocialTeam::MATRIX['support']], 'inbox') && !SocialTeam::can(['can' => SocialTeam::MATRIX['support']], 'publish') && !SocialTeam::can(['can' => SocialTeam::MATRIX['viewer']], 'draft') && SocialTeam::can(['can' => SocialTeam::MATRIX['manager']], 'manage'));
 
+// ---------- باقات السوشيال (الكتالوج الافتراضي متسق) ----------
+require_once $root . '/app/Services/SocialMedia/SocialPackages.php';
+$d = SocialPackages::DEFAULTS; $ordered = true;
+foreach (SocialPackages::LIMIT_KEYS as $k) {
+    $prev = null;
+    foreach (['free', 'basic', 'pro', 'agency'] as $t) { $v = $d[$t][$k] < 0 ? PHP_INT_MAX : $d[$t][$k]; if ($prev !== null && $v < $prev) $ordered = false; $prev = $v; }
+}
+check('packages: every limit grows with the tier', $ordered);
+check('packages: higher tiers keep lower-tier features & platforms', !array_diff($d['basic']['platforms'], $d['pro']['platforms']) && !array_filter(SocialPackages::FEATURE_KEYS, fn ($f) => $d['basic'][$f] && !$d['pro'][$f]));
+check('packages: yearly cheaper than 12 months', $d['basic']['price_yearly'] < 12 * $d['basic']['price_monthly'] && $d['agency']['price_yearly'] < 12 * $d['agency']['price_monthly']);
+check('packages: platform plans map to tiers', SocialPackages::PLAN_MAP === ['starter' => 'basic', 'professional' => 'pro', 'enterprise' => 'agency']);
+
 echo $fail ? "\n{$fail} check(s) failed.\n" : "\nAll social-pro checks passed.\n";
 exit($fail ? 1 : 0);

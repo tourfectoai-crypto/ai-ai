@@ -111,6 +111,10 @@ final class SocialCommentInbox
         $enc = new Encryption();
         $hotSamples = [];
         $settings = $this->privateReady() ? $this->settings($userId) : null;
+        // الرد الخاص التلقائي ميزة في الباقة: لو الباقة نزلت بيقف لوحده (الإعداد بيفضل محفوظ)
+        if ($settings && $settings['auto_private'] && class_exists('SocialPackages') && !SocialPackages::has($userId, 'auto_private')) {
+            $settings['auto_private'] = false;
+        }
         $autoSent = 0;
         foreach ($rows as $r) {
             $platform = (string) $r['platform'];

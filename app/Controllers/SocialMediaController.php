@@ -20,6 +20,9 @@ require_once __DIR__ . '/../Services/SocialMedia/SocialPlanShare.php';
 require_once __DIR__ . '/../Services/SocialMedia/SocialTeam.php';
 require_once __DIR__ . '/../Services/SocialMedia/ThreadsAPI.php';
 require_once __DIR__ . '/../Services/SocialMedia/LinkedInAPI.php';
+require_once __DIR__ . '/../Services/SocialMedia/SocialPackages.php';
+require_once __DIR__ . '/../Jobs/SocialPackagesRenewJob.php';
+require_once __DIR__ . '/../Services/Payment/CurrencyService.php';
 require_once __DIR__ . '/../Jobs/ReconcileUncertainPostsJob.php';
 require_once __DIR__ . '/../Jobs/CheckSocialConnectionsHealthJob.php';
 
@@ -57,7 +60,20 @@ class SocialMediaController extends Controller
     /** null = مسموح، أو خطأ 403 لو دور العضو في الفريق ما يسمحش */
     private function guard(string $permission): ?array
     {
-        return SocialTeam::can($this->team(), $permission) ? null : $this->error('دورك في فريق الحساب ما بيسمحش بالخطوة دي - اطلبها من مدير الحساب', 403);
+        if (!SocialTeam::can($this->team(), $permission)) {
+            return $this->error('دورك في فريق الحساب ما بيسمحش بالخطوة دي - اطلبها من مدير الحساب', 403);
+        }
+        // فريق العمل في السوشيال ميزة في الباقة: العضو مايشتغلش على حساب باقته مش بتشملها
+        if (!empty($this->team()['member']) && !SocialPackages::has($this->uid(), 'team')) {
+            return $this->error('فريق العمل في السوشيال مش ضمن باقة الحساب - صاحب الحساب يقدر يرقّي من تبويب «الباقة»', 403, ['upgrade' => true, 'feature' => 'team']);
+        }
+        return null;
+    }
+
+    /** رد موحّد لحدود الباقة: 402 + رابط تبويب الباقة */
+    private function limitError(SocialPackageLimit $e): array
+    {
+        return $this->error($e->getMessage(), 402, ['upgrade' => true, 'feature' => $e->feature, 'action' => '/social#package']);
     }
 
     /** GET /social */
@@ -69,6 +85,8 @@ class SocialMediaController extends Controller
             CheckSocialConnectionsHealthJob::ensureScheduled();
             SyncSocialCommentsJob::ensureScheduled();
             SocialDailyInsightsJob::ensureScheduled();
+            SocialPackages::ensureSchema();
+            SocialPackagesRenewJob::ensureScheduled();
         } catch (Throwable $e) {
         }
         $ar = current_lang() === 'ar';
@@ -114,12 +132,20 @@ class SocialMediaController extends Controller
             if($action==='setup'){$result=$service->setup($uid);$result['csrf_token']=Csrf::token();return $this->success($result);}
             if($action==='list')return $this->success(['plans'=>$service->listPlans($uid)]);
             if($action==='detail')return $this->success($service->detail($uid,$id));
-            if($action==='create')return $this->success($service->create($uid,$this->data),'Monthly generation queued',201);
+            if($action==='create'){
+                SocialPackages::assertMonthlyPlan($uid,array_map('intval',(array)($this->data['connection_ids']??[])));
+                $key=is_string($this->data['request_key']??null)?$this->data['request_key']:'';
+                $isNew=!$this->db->query('SELECT id FROM social_monthly_plans WHERE user_id=? AND request_key=? LIMIT 1',[$uid,$key]);
+                $out=$service->create($uid,$this->data);
+                if($isNew)SocialPackages::record($uid,'monthly_plans');
+                return $this->success($out,'Monthly generation queued',201);
+            }
             if($action==='edit')return $this->success($service->edit($uid,$id,(int)($params['item_id']??0),$this->data));
             if($action==='approve'&&$this->get('reviewed')!==true)return $this->error('Confirm review before automatic publishing.',422);
             if($action==='approve')return $this->success($service->approve($uid,$id,(int)$this->get('version',0),is_array($this->get('tiktok'))?$this->get('tiktok'):null));
             return $this->success($service->changeState($uid,$id,$action));
-        }catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
+        }catch(SocialPackageLimit $e){return $this->limitError($e);}
+        catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
         catch(ProviderRequestFailure $e){return $this->error('تعذر إعداد الخطة. حدّث قائمة الخطط قبل المحاولة مجددًا / Could not prepare the plan. Refresh the list before retrying.',502);}
         catch(Throwable $e){Logger::error('Monthly social plan action failed',['action'=>$action,'plan_id'=>$id,'user_id'=>$uid,'error'=>$e->getMessage()]);return $this->error('تعذر تنفيذ الطلب. تحقق من تركيب SQL وتشغيل مهام النشر ثم حدّث قائمة الخطط / Could not complete the request. Check migration and publishing worker, then refresh the plan list.',503);}
     }
@@ -724,8 +750,11 @@ class SocialMediaController extends Controller
             return $error;
         }
         try {
+            SocialPackages::assertFeature($this->uid(), 'private_reply');
             $text = $this->get('text');
             return $this->success((new SocialCommentInbox())->privateReply($this->uid(), (int) ($params['id'] ?? 0), is_string($text) ? $text : null, (bool) $this->get('ack', false)), 'اتبعت الرد الخاص');
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 422);
         } catch (Throwable $e) {
@@ -760,7 +789,12 @@ class SocialMediaController extends Controller
             return $this->error('شغّل migration السوشيال (2026_10_21_000001_social_growth.sql) الأول', 422);
         }
         try {
+            if (!empty($this->data['auto_private'])) {
+                SocialPackages::assertFeature($this->uid(), 'auto_private');
+            }
             return $this->success($inbox->saveSettings($this->uid(), $this->data), 'اتحفظت إعدادات الرد');
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 422);
         }
@@ -799,7 +833,10 @@ class SocialMediaController extends Controller
             return $error;
         }
         try {
+            SocialPackages::assertFeature($this->uid(), 'client_review');
             return $this->success((new SocialPlanShare())->create($this->uid(), (int) ($params['id'] ?? 0), (bool) $this->get('can_approve', true), (string) $this->get('client_name', ''), (int) $this->get('days', 14)), 'اتعمل الرابط', 201);
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 422);
         }
@@ -831,7 +868,9 @@ class SocialMediaController extends Controller
             return $this->error('Unauthorized', 401);
         }
         $t = $this->team();
-        return $this->success(['role' => $t['role'], 'member' => $t['member'], 'can' => $t['can']]);
+        $ent = SocialPackages::entitlements($this->uid());
+        return $this->success(['role' => $t['role'], 'member' => $t['member'], 'can' => $t['can'], 'team_locked' => $t['member'] && empty($ent['features']['team']),
+            'package' => ['tier' => $ent['tier'], 'name' => $ent['tier_name'], 'features' => $ent['features'], 'platforms' => $ent['platforms']]]);
     }
 
     /** GET /api/social/growth?days=30 - نمو المتابعين لكل حساب (لقطة يومية) */
@@ -843,6 +882,9 @@ class SocialMediaController extends Controller
         $uid = $this->uid();
         if (!SocialGrowth::ready()) {
             return $this->success(['installed' => false, 'accounts' => []]);
+        }
+        if (!SocialPackages::has($uid, 'growth')) {
+            return $this->success(['installed' => true, 'locked' => true, 'accounts' => []]);
         }
         // أول مرة النهارده: ناخد لقطة لحسابات العميل فورًا بدل ما يستنى المهمة اليومية (حساباته بس - خفيفة)
         try {
@@ -874,7 +916,10 @@ class SocialMediaController extends Controller
             return $error;
         }
         try {
+            SocialPackages::assertCompetitorSlot($this->uid());
             return $this->success((new SocialCompetitors())->add($this->uid(), (string) $this->get('username', '')), 'اتضاف المنافس');
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
         } catch (InvalidArgumentException $e) {
             return $this->error($e->getMessage(), 422);
         } catch (Throwable $e) {
@@ -956,6 +1001,179 @@ class SocialMediaController extends Controller
     private static array $colCache = [];
 
     /** فحص وجود عمود (بيتكاش) - عشان الكود ما يقعش لو الـ migration لسه ما اتشغّلتش */
+    // ------------------------------------------------------------------
+    // باقات السوشيال (تبويب «الباقة») + إعدادات الأدمن
+    // ------------------------------------------------------------------
+
+    private function priceLabels(float $usd, string $cur, bool $ar): array
+    {
+        // المبلغ اللي بيتخصم بالدولار بالظبط (format بيقرّب الأرقام الكبيرة لأقرب 5 - ينفع للعرض المحلي بس)
+        $exact = '$' . (floor($usd) == $usd ? number_format($usd, 0) : number_format($usd, 2));
+        return ['usd' => round($usd, 2), 'label' => $cur === 'USD' ? $exact : '≈ ' . CurrencyService::format($usd, $cur, $ar) . ' (' . $exact . ')', 'usd_label' => $exact];
+    }
+
+    /** GET /api/social/package - الباقة الحالية + الاستخدام + الكتالوج بأسعار عملة العميل */
+    public function package(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        SocialPackages::ensureSchema();
+        $ar = current_lang() === 'ar';
+        $cur = CurrencyService::forViewer($this->user);
+        $cfg = SocialPackages::config();
+        $tiers = [];
+        foreach ($cfg['tiers'] as $k => $t) {
+            $tiers[] = ['key' => $k, 'name' => $ar ? $t['name'] : $t['name_en'], 'for_sale' => (bool) $t['for_sale'], 'rank' => SocialPackages::RANK[$k],
+                'monthly' => $this->priceLabels((float) $t['price_monthly'], $cur, $ar), 'yearly' => $this->priceLabels((float) $t['price_yearly'], $cur, $ar),
+                'limits' => array_intersect_key($t, array_flip(SocialPackages::LIMIT_KEYS)), 'platforms' => $t['platforms'],
+                'features' => array_map('boolval', array_intersect_key($t, array_flip(SocialPackages::FEATURE_KEYS)))];
+        }
+        $addons = [];
+        foreach ($cfg['addons'] as $k => $a) {
+            if ($a['enabled']) {
+                $addons[] = ['key' => $k, 'kind' => $a['kind'], 'qty' => $a['qty'], 'icon' => $a['icon'], 'price' => $this->priceLabels((float) $a['price'], $cur, $ar)];
+            }
+        }
+        $planNames = [];
+        foreach ($cfg['plan_map'] as $plan => $tier) {
+            $planNames[$plan] = $tier;
+        }
+        $balance = null;
+        try {
+            $balance = $this->priceLabels((new WalletService())->getBalance(SocialPackages::owner($this->uid())), $cur, $ar);
+        } catch (Throwable $e) {
+        }
+        return $this->success(SocialPackages::summary($this->uid()) + [
+            'catalog' => $tiers, 'addons' => $addons, 'plan_map' => $planNames, 'labels' => SocialPackages::LABELS, 'platform_names' => SocialPackages::PLATFORM_NAMES,
+            'balance' => $balance, 'can_buy' => SocialTeam::can($this->team(), 'manage'), 'csrf_token' => Csrf::token(),
+        ]);
+    }
+
+    private function packageFail(Throwable $e): array
+    {
+        if ($e instanceof DomainException) {
+            $d = json_decode($e->getMessage(), true) ?: [];
+            $cur = CurrencyService::forViewer($this->user);
+            $msg = 'رصيد محفظتك مش كفاية.';
+            if (isset($d['shortfall']) && $d['shortfall'] > 0) {
+                $msg .= ' ناقص ' . CurrencyService::format((float) $d['shortfall'], $cur, current_lang() === 'ar') . ' - اشحن المحفظة وكمّل.';
+            }
+            return $this->error($msg, 402, ['action' => '/subscription#wallet', 'shortfall' => $d['shortfall'] ?? null]);
+        }
+        if ($e instanceof InvalidArgumentException) {
+            return $this->error($e->getMessage(), 422);
+        }
+        Logger::error('Social package action failed', ['error' => $e->getMessage()]);
+        return $this->error('حصلت مشكلة، جرّب تاني أو كلّم الدعم.', 500);
+    }
+
+    /** POST /api/social/package/subscribe  body: {tier, cycle, request_key} - الدفع من المحفظة */
+    public function packageSubscribe(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($denied = $this->guardOwner()) || ($denied = $this->verifyCsrf()) || ($denied = $this->rateLimitGuard('user', 'social_package_buy', 10, 300))) {
+            return $denied;
+        }
+        try {
+            $key = $this->get('request_key');
+            $r = SocialPackages::subscribe(SocialPackages::owner($this->uid()), (string) $this->get('tier', ''), (string) $this->get('cycle', 'monthly'), is_string($key) && strlen($key) >= 8 ? $key : null);
+            $msg = ['subscribed' => 'اشتركت في الباقة ✅', 'upgraded' => 'اترقّت باقتك ✅', 'scheduled' => 'التغيير هيتطبق عند التجديد', 'resumed' => 'رجع التجديد التلقائي ✅', 'already' => 'اتنفذ قبل كده'][$r['action']] ?? 'تم';
+            return $this->success($r + ['package' => SocialPackages::summary($this->uid())], $msg);
+        } catch (Throwable $e) {
+            return $this->packageFail($e);
+        }
+    }
+
+    /** POST /api/social/package/auto-renew  body: {on} */
+    public function packageAutoRenew(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($denied = $this->guardOwner()) || ($denied = $this->verifyCsrf())) {
+            return $denied;
+        }
+        try {
+            $on = (bool) $this->get('on', false);
+            return $this->success(SocialPackages::setAutoRenew(SocialPackages::owner($this->uid()), $on), $on ? 'التجديد التلقائي اشتغل' : 'اتلغى التجديد - الباقة شغالة لآخر المدة');
+        } catch (Throwable $e) {
+            return $this->packageFail($e);
+        }
+    }
+
+    /** POST /api/social/package/addon  body: {addon, request_key} */
+    public function packageAddon(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if (($denied = $this->guardOwner()) || ($denied = $this->verifyCsrf()) || ($denied = $this->rateLimitGuard('user', 'social_package_addon', 20, 300))) {
+            return $denied;
+        }
+        try {
+            $key = $this->get('request_key');
+            return $this->success(SocialPackages::buyAddon(SocialPackages::owner($this->uid()), (string) $this->get('addon', ''), is_string($key) && strlen($key) >= 8 ? $key : null), 'الإضافة اتضافت ✅');
+        } catch (Throwable $e) {
+            return $this->packageFail($e);
+        }
+    }
+
+    /** الدفع من محفظة صاحب الحساب: صاحب الحساب أو مدير في فريقه بس */
+    private function guardOwner(): ?array
+    {
+        return SocialTeam::can($this->team(), 'manage') ? null : $this->error('الاشتراك والإضافات من صلاحيات مدير الحساب', 403);
+    }
+
+    private function isAdmin(): bool
+    {
+        return in_array($this->user['role'] ?? '', ['admin', 'super_admin'], true);
+    }
+
+    /** GET /api/admin/social-packages */
+    public function adminPackages(array $params = []): array
+    {
+        if (!$this->isAuthenticated() || !$this->isAdmin()) {
+            return $this->error('غير مصرح', 403);
+        }
+        header('Cache-Control: private, no-store');
+        SocialPackages::ensureSchema();
+        $stats = ['active' => 0, 'mrr' => 0.0, 'by_tier' => []];
+        try {
+            foreach ($this->db->query("SELECT tier, cycle, COUNT(*) AS n, SUM(price_paid) AS s FROM social_subscriptions WHERE status = 'active' AND period_end > UTC_TIMESTAMP() GROUP BY tier, cycle") ?: [] as $r) {
+                $stats['active'] += (int) $r['n'];
+                $stats['by_tier'][$r['tier']] = ($stats['by_tier'][$r['tier']] ?? 0) + (int) $r['n'];
+                $stats['mrr'] += $r['cycle'] === 'yearly' ? (float) $r['s'] / 12 : (float) $r['s'];
+            }
+        } catch (Throwable $e) {
+        }
+        $stats['mrr'] = round($stats['mrr'], 2);
+        $plans = [];
+        try {
+            foreach ($this->db->query("SELECT DISTINCT SUBSTRING_INDEX(plan_code, '_', 1) AS k, name FROM subscription_plans WHERE is_active = 1") ?: [] as $r) {
+                $plans[$r['k']] = $r['name'];
+            }
+        } catch (Throwable $e) {
+        }
+        return $this->success(['config' => SocialPackages::config(), 'defaults' => SocialPackages::DEFAULTS, 'labels' => SocialPackages::LABELS, 'platform_names' => SocialPackages::PLATFORM_NAMES,
+            'limit_keys' => SocialPackages::LIMIT_KEYS, 'feature_keys' => SocialPackages::FEATURE_KEYS, 'platform_plans' => $plans, 'stats' => $stats, 'ready' => SocialPackages::ready(), 'csrf_token' => Csrf::token()]);
+    }
+
+    /** POST /api/admin/social-packages  body: {config} */
+    public function adminPackagesSave(array $params = []): array
+    {
+        if (!$this->isAuthenticated() || !$this->isAdmin()) {
+            return $this->error('غير مصرح', 403);
+        }
+        if (($e = $this->verifyCsrf()) || ($e = $this->rateLimitGuard('user', 'social_packages_admin', 30, 60))) {
+            return $e;
+        }
+        $in = $this->get('config', []);
+        return $this->success(['config' => SocialPackages::saveConfig(is_array($in) ? $in : [])], 'اتحفظت باقات السوشيال');
+    }
+
     private function hasColumn(string $table, string $col): bool
     {
         $k = $table . '.' . $col;
@@ -1026,8 +1244,10 @@ class SocialMediaController extends Controller
                     $broken[] = ['platform' => $r['platform'], 'name' => $r['name'], 'status' => $r['status'], 'last_error' => $r['last_error'] ? mb_substr((string) $r['last_error'], 0, 300) : null];
                 }
             }
+            $locked = SocialPackages::locked($this->uid());
             foreach ($rows as &$r0) {
                 unset($r0['external_location_id'], $r0['status'], $r0['last_error']);
+                $r0['locked'] = $locked[(int) $r0['id']] ?? null;
             }
             unset($r0);
             // Schema-safe: platform_connections in the supplied SQL has no meta_json column.
@@ -1565,6 +1785,17 @@ class SocialMediaController extends Controller
             ? ['approval_state' => 'pending', 'requested_targets_json' => json_encode(['targets' => $targets, 'tiktok' => $tiktokOpts]), 'created_by' => (int) ($this->user['id'] ?? 0)]
             : (SocialPostService::growthSchema() ? ['created_by' => (int) ($this->user['id'] ?? 0)] : []);
 
+        if ($this->get('track_links', false) && $format !== 'story' && !SocialPackages::has($uid, 'attribution')) {
+            return $this->limitError(new SocialPackageLimit('«' . SocialPackages::LABELS['attribution'][0] . '» مش ضمن باقتك - شيل علامة "روابط قصيرة لتتبع الحجوزات" أو رقّي من تبويب «الباقة».', 'attribution'));
+        }
+        try {
+            $cids = array_column($targets, 'platform_connection_id');
+            // عضو الفريق: نتأكد بس إن الحسابات مش مقفولة (المنشورات بتتحسب لما المدير يعتمد)
+            $needsApproval ? SocialPackages::assertConnections($uid, $cids) : SocialPackages::assertPublish($uid, $cids, count($targets));
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
+        }
+
         try {
             $post = $this->service->createPost(
                 $uid,
@@ -1592,6 +1823,7 @@ class SocialMediaController extends Controller
                     TikTokAPI::saveOptions($pdo, (int) $row['id'], $tiktokOpts);
                 }
             }
+            SocialPackages::record($uid, 'posts', count($targets));
             // النشر الفوري بيتنفذ في نفس الطلب (مش مستني الكرون)
             SocialPostService::runNow($this->service->immediateJobIds);
             $postId = (int) $post->getAttribute('id');
@@ -1663,7 +1895,13 @@ class SocialMediaController extends Controller
             return $this->error('المنشور مالوش صفحات نشر', 422);
         }
         try {
+            SocialPackages::assertPublish($uid, array_column($targets, 'platform_connection_id'), count($targets));
+        } catch (SocialPackageLimit $e) {
+            return $this->limitError($e);
+        }
+        try {
             $this->service->addTargets($postId, $targets);
+            SocialPackages::record($uid, 'posts', count($targets));
             if (!empty($req['tiktok'])) {
                 foreach ($this->db->query("SELECT t.id FROM social_post_targets t JOIN platform_connections c ON c.id = t.platform_connection_id WHERE t.social_post_id = ? AND c.platform = 'tiktok'", [$postId]) ?: [] as $tt) {
                     TikTokAPI::saveOptions($this->db->getConnection(), (int) $tt['id'], $req['tiktok']);
@@ -1813,6 +2051,12 @@ class SocialMediaController extends Controller
             $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
             exit;
         }
+        try {
+            SocialPackages::assertConnect($this->uid(), 'tiktok');
+        } catch (SocialPackageLimit $e) {
+            $this->renderOAuthError($e->getMessage());
+            exit;
+        }
 
         $clientKey = env('TIKTOK_CLIENT_KEY');
         $clientSecret = env('TIKTOK_CLIENT_SECRET');
@@ -1950,6 +2194,12 @@ class SocialMediaController extends Controller
             $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
             exit;
         }
+        try {
+            SocialPackages::assertConnect($this->uid(), 'threads');
+        } catch (SocialPackageLimit $e) {
+            $this->renderOAuthError($e->getMessage());
+            exit;
+        }
         if (!ThreadsAPI::configured()) {
             $this->renderOAuthError('ربط Threads لسه مش مفعّل على المنصة (THREADS_APP_ID / THREADS_APP_SECRET ناقصين).');
             exit;
@@ -1997,6 +2247,12 @@ class SocialMediaController extends Controller
         }
         if (!SocialTeam::can($this->team(), 'manage')) {
             $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
+            exit;
+        }
+        try {
+            SocialPackages::assertConnect($this->uid(), 'linkedin');
+        } catch (SocialPackageLimit $e) {
+            $this->renderOAuthError($e->getMessage());
             exit;
         }
         if (!LinkedInAPI::configured()) {
@@ -2051,6 +2307,12 @@ class SocialMediaController extends Controller
         }
         if (!SocialTeam::can($this->team(), 'manage')) {
             $this->renderOAuthError('ربط الحسابات متاح لمدير الحساب بس.');
+            exit;
+        }
+        try {
+            SocialPackages::assertConnect($this->uid(), 'youtube');
+        } catch (SocialPackageLimit $e) {
+            $this->renderOAuthError($e->getMessage());
             exit;
         }
 

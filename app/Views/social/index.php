@@ -23,6 +23,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
             <button class="p-btn primary" type="button" onclick="openNewPost()">＋ <?= $t('منشور جديد', 'New post') ?></button>
             <button class="p-btn outline" type="button" onclick="openNewPost('story')">◎ <?= $t('ستوري جديدة', 'New story') ?></button>
             <a class="p-btn outline" id="spReportBtn" href="/social/report" target="_blank" rel="noopener">📄 <?= $t('تقرير الشهر', 'Monthly report') ?></a>
+            <button class="sp-pkg-chip" id="spPkgChip" type="button" hidden></button>
         </div>
     </div>
 
@@ -33,7 +34,9 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
         <button class="p-tab" role="tab" data-tab="competitors" type="button">🔭 <?= $t('المنافسين', 'Competitors') ?></button>
         <button class="p-tab" role="tab" data-tab="plan" type="button">🗓 <?= $t('الخطة الشهرية', 'Monthly plan') ?></button>
         <button class="p-tab" role="tab" data-tab="accounts" type="button">🔗 <?= $t('الحسابات', 'Accounts') ?></button>
+        <button class="p-tab" role="tab" data-tab="package" type="button">💎 <?= $t('الباقة', 'Plan') ?></button>
     </nav>
+    <div id="spUpgradeBar" class="sp-upbar" hidden></div>
 
     <!-- ============ نظرة عامة ============ -->
     <section class="sp-panel" data-panel="overview">
@@ -199,6 +202,11 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                 <p><?= $t('قراءة التعليقات والرد عليها محتاجين صلاحيات إضافية من Meta: pages_read_user_content و pages_manage_engagement (فيسبوك) و instagram_manage_comments (إنستجرام). مدير المنصة يضيفهم في إعداد META_SOCIAL_EXTRA_SCOPES ويطلب موافقة Meta عليهم (App Review)، وبعدها اربط فيسبوك وإنستجرام تاني ووافق على كل الصلاحيات.', 'Reading and replying to comments needs extra Meta permissions: pages_read_user_content and pages_manage_engagement (Facebook) and instagram_manage_comments (Instagram). The platform admin adds them to META_SOCIAL_EXTRA_SCOPES and requests Meta App Review; then reconnect Facebook & Instagram and accept all permissions.') ?></p>
             </details>
         </div>
+    </section>
+
+    <!-- ============ الباقة ============ -->
+    <section class="sp-panel" data-panel="package" hidden>
+        <div id="pkRoot"><div class="p-card p-cell-muted"><?= $t('جارِ التحميل…', 'Loading…') ?></div></div>
     </section>
 
     <!-- ============ محرر المنشور ============ -->

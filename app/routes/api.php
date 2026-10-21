@@ -705,6 +705,13 @@ $router->get('/api/social/monthly-plans/{id}/share', 'SocialMediaController', 'p
 $router->post('/api/social/monthly-plans/{id}/share', 'SocialMediaController', 'planShareCreate', ['AuthMiddleware']);
 $router->post('/api/social/monthly-plans/{id}/share/{link_id}/revoke', 'SocialMediaController', 'planShareRevoke', ['AuthMiddleware']);
 $router->get('/api/social/connections', 'SocialMediaController', 'listConnections', ['AuthMiddleware']);
+// باقات السوشيال: الباقة الحالية + الاشتراك/الترقية/الإضافات من المحفظة
+$router->get('/api/social/package', 'SocialMediaController', 'package', ['AuthMiddleware']);
+$router->post('/api/social/package/subscribe', 'SocialMediaController', 'packageSubscribe', ['AuthMiddleware']);
+$router->post('/api/social/package/auto-renew', 'SocialMediaController', 'packageAutoRenew', ['AuthMiddleware']);
+$router->post('/api/social/package/addon', 'SocialMediaController', 'packageAddon', ['AuthMiddleware']);
+$router->get('/api/admin/social-packages', 'SocialMediaController', 'adminPackages', ['AuthMiddleware', 'AdminMiddleware']);
+$router->post('/api/admin/social-packages', 'SocialMediaController', 'adminPackagesSave', ['AuthMiddleware', 'AdminMiddleware']);
 $router->get('/api/social/tiktok/creator-info', 'SocialMediaController', 'tikTokCreatorInfo', ['AuthMiddleware']);
 $router->get('/api/social/posts', 'SocialMediaController', 'listPosts', ['AuthMiddleware']);
 $router->post('/api/social/posts', 'SocialMediaController', 'createPost', ['AuthMiddleware']);

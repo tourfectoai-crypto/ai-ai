@@ -8,8 +8,23 @@
     'use strict';
     const P = window.Panel;
     if (!P || !document.getElementById('spRoot')) return;
-    const esc = P.esc, fetchJSON = P.fetchJSON;
+    const esc = P.esc;
+    // أي رد "خارج الباقة" (402 + upgrade) بيظهر شريط بزرار يفتح تبويب الباقة
+    const fetchJSON = async (url, opts) => {
+        const r = await P.fetchJSON(url, opts);
+        if (r && r.success === false && r.details && r.details.upgrade) upgradeBar(r.error);
+        return r;
+    };
+    function upgradeBar(msg) {
+        const bar = document.getElementById('spUpgradeBar');
+        if (!bar) return;
+        bar.innerHTML = '<span>💎 ' + esc(msg || '') + '</span><button type="button" class="p-btn primary sm" id="spUpBtn">' + (AR_ ? 'شوف الباقات' : 'See plans') + '</button><button type="button" class="p-btn ghost xs" id="spUpX" aria-label="x">×</button>';
+        bar.hidden = false;
+        document.getElementById('spUpBtn').onclick = () => { bar.hidden = true; showTab('package'); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+        document.getElementById('spUpX').onclick = () => { bar.hidden = true; };
+    }
     const AR = (document.documentElement.lang || 'ar').slice(0, 2) === 'ar';
+    const AR_ = AR;
     const T = (a, e) => (AR ? a : e);
     const $ = id => document.getElementById(id);
     // صلاحيات الدور في فريق الحساب
@@ -50,6 +65,7 @@
             if (name === 'accounts') loadAccounts();
             if (name === 'competitors') loadCompetitors();
             if (name === 'plan' && $('shPlan')) loadShare();
+            if (name === 'package') loadPackage();
         }
         if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
     }
@@ -180,7 +196,10 @@
         const off = res.data.disconnected || [];
         const offHtml = off.length ? '<div class="alert alert-warning sp-small">⚠️ ' + T('صفحات محتاجة إعادة ربط: ', 'Pages that need reconnecting: ') + off.map(c => (PF[c.platform] || '') + ' <b>' + esc(c.name || c.platform) + '</b>').join(', ') + ' — <a href="/ads/connect/meta?for=social">' + T('اربط تاني', 'Reconnect') + '</a></div>' : '';
         if (connections.length) {
-            box.innerHTML = '<div class="sp-chips">' + connections.map(c => '<label class="sp-tchip"><input type="checkbox" class="targetCheckbox" value="' + c.id + '" data-platform="' + esc(c.platform) + '" data-name="' + esc(c.name || '') + '"> ' + (PF[c.platform] || '•') + ' <span>' + esc(c.name || PN[c.platform] || c.platform) + '</span> <small>' + esc(PN[c.platform] || c.platform) + '</small></label>').join('') + '</div>' + offHtml;
+            const lockedTxt = c => c.locked === 'platform' ? T('المنصة دي مش ضمن باقتك', 'This platform is not in your plan') : T('فوق عدد الحسابات في باقتك', 'Over your plan\'s account limit');
+            box.innerHTML = '<div class="sp-chips">' + connections.map(c => '<label class="sp-tchip' + (c.locked ? ' locked' : '') + '"' + (c.locked ? ' title="' + esc(lockedTxt(c)) + '"' : '') + '><input type="checkbox" class="targetCheckbox" value="' + c.id + '" data-platform="' + esc(c.platform) + '" data-name="' + esc(c.name || '') + '"' + (c.locked ? ' disabled' : '') + '> ' + (c.locked ? '🔒' : (PF[c.platform] || '•')) + ' <span>' + esc(c.name || PN[c.platform] || c.platform) + '</span> <small>' + esc(PN[c.platform] || c.platform) + '</small></label>').join('') + '</div>'
+                + (connections.some(c => c.locked) ? '<div class="sp-small p-cell-muted">🔒 ' + T('حسابات مقفولة بسبب حدود الباقة - ', 'Accounts locked by your plan limits — ') + '<a href="#package" data-gopkg>' + T('رقّي الباقة', 'Upgrade') + '</a></div>' : '') + offHtml;
+            box.querySelectorAll('[data-gopkg]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); closeComposer(); showTab('package'); }));
         } else {
             box.innerHTML = '<div class="alert alert-warning">' + T('مفيش صفحات قابلة للنشر لسه. اربط حساباتك وانت بتختار الصفحات وبتوافق على كل الصلاحيات.', 'No publishable pages yet. Connect your accounts, select the pages and accept all permissions.') + '</div><div class="sp-row"><a class="p-btn primary sm" href="/ads/connect/meta?for=social">Facebook + Instagram</a><a class="p-btn outline sm" href="/social/connect/tiktok">TikTok</a><a class="p-btn outline sm" href="/social/connect/youtube">YouTube</a><a class="p-btn outline sm" href="/social/connect/threads">Threads</a><a class="p-btn outline sm" href="/social/connect/linkedin">LinkedIn</a></div>' + offHtml;
         }
@@ -662,6 +681,12 @@
     async function loadGrowth() {
         const res = await fetchJSON('/api/social/growth?days=' + (+$('spDays').value || 30));
         const card = $('spGrowthCard');
+        if (res.success && res.data.locked) {
+            card.hidden = false;
+            $('spGrowth').innerHTML = '<div class="p-empty">🔒 ' + T('تحليلات نمو المتابعين متاحة في باقة «احترافي» وأعلى.', 'Follower growth analytics are available on the Pro plan and up.') + ' <a href="#package" data-gopkg>' + T('شوف الباقات', 'See plans') + '</a></div>';
+            card.querySelector('[data-gopkg]').addEventListener('click', e => { e.preventDefault(); showTab('package'); });
+            return;
+        }
         if (!res.success || !res.data.installed || !(res.data.accounts || []).length) { card.hidden = true; return; }
         card.hidden = false;
         $('spGrowth').innerHTML = res.data.accounts.map(a => {
@@ -763,7 +788,7 @@
         const res = await fetchJSON('/api/social/connections?_=' + Date.now(), { cache: 'no-store' });
         if (!res.success) { box.textContent = res.error || T('تعذر التحميل', 'Could not load'); return; }
         const on = res.data.connections || [], off = res.data.disconnected || [];
-        box.innerHTML = (on.length ? on.map(c => '<span class="sp-chip">' + (PF[c.platform] || '•') + ' ' + esc(c.name || c.platform) + ' <span class="sp-dot"></span></span>').join('') : '<span class="p-cell-muted">' + T('مفيش حسابات متصلة. اربط حساباتك من تحت.', 'No connected accounts. Connect below.') + '</span>')
+        box.innerHTML = (on.length ? on.map(c => '<span class="sp-chip' + (c.locked ? ' off' : '') + '">' + (c.locked ? '🔒 ' : '') + (PF[c.platform] || '•') + ' ' + esc(c.name || c.platform) + (c.locked ? ' — ' + (c.locked === 'platform' ? T('مش ضمن الباقة', 'not in plan') : T('فوق حد الباقة', 'over plan limit')) : ' <span class="sp-dot"></span>') + '</span>').join('') : '<span class="p-cell-muted">' + T('مفيش حسابات متصلة. اربط حساباتك من تحت.', 'No connected accounts. Connect below.') + '</span>')
             + off.map(c => '<span class="sp-chip off" title="' + esc(c.last_error || '') + '">' + (PF[c.platform] || '•') + ' ' + esc(c.name || c.platform) + ' — ' + T('محتاج إعادة ربط', 'needs reconnecting') + '</span>').join('');
     }
 
@@ -918,9 +943,145 @@
     }
     if (!can('inbox')) $('ibSync').hidden = true;
 
+    // ================= الباقة =================
+    const LIM_ICON = { accounts: '🔗', posts: '🗓', monthly_plans: '🧠', competitors: '🔭', ai_captions: '✨' };
+    let PKG = null, pkCycle = 'monthly';
+    const lab = k => (PKG && PKG.labels && PKG.labels[k]) ? (AR ? PKG.labels[k][0] : PKG.labels[k][1]) : k;
+    const limTxt = v => (v < 0 ? '∞' : nf(v));
+    const reqKey = () => 'pk' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    async function fetchPackage() {
+        const r = await fetchJSON('/api/social/package');
+        if (r.success) { PKG = r.data; paintChip(); applyPkgGates(); }
+        return r;
+    }
+    function paintChip() {
+        const chip = $('spPkgChip'); if (!chip || !PKG) return;
+        const lim = PKG.limits.posts, used = PKG.usage.posts;
+        chip.innerHTML = '💎 <b>' + esc(PKG.tier_name) + '</b> <span>' + nf(used) + '/' + limTxt(lim) + ' ' + T('منشور', 'posts') + '</span>';
+        chip.classList.toggle('warn', lim >= 0 && used >= lim * 0.8);
+        chip.hidden = !PKG.enforced;
+        chip.onclick = () => showTab('package');
+    }
+    function applyPkgGates() {
+        const f = PKG.features || {};
+        const track = $('trackOn');
+        if (track && !f.attribution) { track.checked = false; track.disabled = true; track.parentElement.title = T('متاحة من باقة «احترافي»', 'Available from the Pro plan'); track.parentElement.classList.add('locked'); }
+        const auto = $('ibAuto');
+        if (auto && !f.auto_private) { auto.disabled = true; auto.parentElement && (auto.parentElement.title = T('الرد الخاص التلقائي متاح من باقة «احترافي»', 'Auto private reply is available from the Pro plan')); }
+    }
+    function meter(k) {
+        const lim = PKG.limits[k], used = PKG.usage[k] || 0;
+        const pct = lim > 0 ? Math.min(100, Math.round(used * 100 / lim)) : (lim < 0 ? 0 : 100);
+        const cls = lim === 0 ? 'off' : (pct >= 100 ? 'full' : (pct >= 80 ? 'warn' : ''));
+        return '<div class="pk-meter ' + cls + '"><div class="pk-m-h"><span>' + LIM_ICON[k] + ' ' + esc(lab(k)) + '</span><b>' + (lim === 0 ? T('مش مشمول', 'Not included') : nf(used) + ' / ' + limTxt(lim)) + '</b></div><div class="pk-bar"><i style="width:' + (lim < 0 ? 4 : pct) + '%"></i></div></div>';
+    }
+    function tierAction(t) {
+        const cur = PKG.tier, curRank = (PKG.catalog.find(x => x.key === cur) || {}).rank || 0;
+        const planRank = PKG.plan_tier ? ((PKG.catalog.find(x => x.key === PKG.plan_tier) || {}).rank || 0) : -1;
+        const sub = PKG.subscription && PKG.subscription.status === 'active' ? PKG.subscription : null;
+        if (t.key === 'free') return cur === 'free' ? '<span class="pill">' + T('باقتك الحالية', 'Current plan') + '</span>' : '';
+        if (!t.for_sale) return '<span class="p-cell-muted sp-small">' + T('مش متاحة للبيع دلوقتي', 'Not available right now') + '</span>';
+        if (t.rank <= planRank) return '<span class="pill green">' + T('مشمولة في باقة المنصة ✓', 'Included in your platform plan ✓') + '</span>';
+        if (sub && sub.tier === t.key && sub.cycle === pkCycle && sub.auto_renew && !sub.pending_tier) return '<span class="pill green">' + T('باقتك الحالية', 'Current plan') + '</span>';
+        if (!PKG.can_buy) return '<span class="p-cell-muted sp-small">' + T('الاشتراك من صلاحيات مدير الحساب', 'Only the account manager can subscribe') + '</span>';
+        let label = T('اشترك', 'Subscribe');
+        if (sub && sub.tier === t.key) label = sub.cycle === pkCycle ? T('رجّع التجديد', 'Resume renewal') : (pkCycle === 'yearly' ? T('حوّل لسنوي عند التجديد', 'Switch to yearly at renewal') : T('حوّل لشهري عند التجديد', 'Switch to monthly at renewal'));
+        else if (sub && t.rank > curRank) label = T('رقّي دلوقتي (بفرق السعر)', 'Upgrade now (prorated)');
+        else if (sub && t.rank < curRank) label = T('انزل لها عند التجديد', 'Downgrade at renewal');
+        return '<button type="button" class="p-btn ' + (t.key === 'pro' ? 'primary' : 'outline') + ' sm" data-buy="' + esc(t.key) + '">' + esc(label) + '</button>';
+    }
+    function renderPackage() {
+        const root = $('pkRoot'); if (!PKG) return;
+        const src = { plan: T('من باقة المنصة', 'from your platform plan'), social: T('اشتراك سوشيال', 'social subscription'), free: T('الباقة المجانية', 'free tier') }[PKG.source] || '';
+        const sub = PKG.subscription;
+        let subTxt = '';
+        if (sub && sub.status === 'active') {
+            const end = spLocal(sub.period_end + ' UTC');
+            subTxt = '<div class="sp-small">' + (sub.auto_renew ? T('بتتجدد تلقائي من المحفظة يوم ', 'Renews automatically from your wallet on ') : T('التجديد التلقائي مقفول - الباقة شغالة لحد ', 'Auto-renew is off — active until ')) + '<b>' + esc(end) + '</b>'
+                + (sub.pending_tier ? ' · ' + T('عند التجديد هتتحول لـ ', 'At renewal it switches to ') + '<b>' + esc((PKG.catalog.find(x => x.key === sub.pending_tier) || {}).name || sub.pending_tier) + '</b> (' + (sub.pending_cycle === 'yearly' ? T('سنوي', 'yearly') : T('شهري', 'monthly')) + ')' : '')
+                + (PKG.can_buy ? ' <button type="button" class="p-btn ghost xs" id="pkRenew">' + (sub.auto_renew ? T('إلغاء التجديد', 'Cancel renewal') : T('شغّل التجديد', 'Turn on renewal')) + '</button>' : '') + '</div>';
+        }
+        const lockedN = Object.keys(PKG.locked || {}).length;
+        const head = '<div class="p-card pk-head"><div><div class="p-cell-muted sp-small">' + T('باقتك في السوشيال', 'Your social plan') + '</div><h3 class="pk-tier">💎 ' + esc(PKG.tier_name) + ' <small>· ' + esc(src) + '</small></h3>' + subTxt
+            + (PKG.balance ? '<div class="sp-small p-cell-muted">' + T('رصيد المحفظة: ', 'Wallet balance: ') + '<b>' + esc(PKG.balance.label) + '</b> · <a href="/subscription#wallet">' + T('اشحن', 'Top up') + '</a></div>' : '') + '</div>'
+            + '<div class="pk-meters">' + ['posts', 'accounts', 'ai_captions', 'monthly_plans', 'competitors'].map(meter).join('') + '</div></div>'
+            + (lockedN ? '<div class="alert alert-warning sp-small">🔒 ' + nf(lockedN) + T(' حساب مربوط مقفول للنشر بسبب حدود الباقة (الحسابات مش بتتمسح - بترجع تشتغل أول ما ترقّي أو تشتري إضافة).', ' connected account(s) locked for publishing by your plan limits (nothing is deleted — they unlock when you upgrade or buy an add-on).') + '</div>' : '')
+            + (!PKG.ready ? '<div class="alert alert-warning sp-small">' + T('شغّل ملف قاعدة البيانات 2026_10_22_000001_social_packages.sql عشان الاشتراك والإضافات يشتغلوا.', 'Run the 2026_10_22_000001_social_packages.sql migration to enable subscriptions and add-ons.') + '</div>' : '');
+        const feats = Object.keys(PKG.labels).filter(k => !(k in LIM_ICON));
+        const cards = PKG.catalog.map(t => {
+            const pr = pkCycle === 'yearly' ? t.yearly : t.monthly;
+            const save = t.monthly.usd > 0 ? Math.round(100 - t.yearly.usd * 100 / (t.monthly.usd * 12)) : 0;
+            return '<div class="pk-card' + (t.key === PKG.tier ? ' current' : '') + (t.key === 'pro' ? ' best' : '') + '">' + (t.key === 'pro' ? '<div class="pk-ribbon">' + T('الأكثر طلبًا', 'Most popular') + '</div>' : '')
+                + '<h4>' + esc(t.name) + '</h4><div class="pk-price">' + (t.key === 'free' ? T('مجانًا', 'Free') : esc(pr.label) + '<small>/' + (pkCycle === 'yearly' ? T('سنة', 'year') : T('شهر', 'month')) + '</small>') + '</div>'
+                + (pkCycle === 'yearly' && save > 0 ? '<div class="pk-save">' + T('وفّر ', 'Save ') + save + '%</div>' : '<div class="pk-save">&nbsp;</div>')
+                + '<ul class="pk-list">' + ['posts', 'accounts', 'ai_captions', 'monthly_plans', 'competitors'].map(k => '<li class="' + (t.limits[k] === 0 ? 'no' : '') + '">' + LIM_ICON[k] + ' <b>' + (t.limits[k] === 0 ? '—' : limTxt(t.limits[k])) + '</b> ' + esc(lab(k)) + '</li>').join('')
+                + feats.map(k => '<li class="' + (t.features[k] ? '' : 'no') + '">' + (t.features[k] ? '✓' : '✕') + ' ' + esc(lab(k)) + '</li>').join('') + '</ul>'
+                + '<div class="pk-plats">' + t.platforms.map(p => '<span title="' + esc(PN[p] || p) + '">' + (PF[p] || '•') + '</span>').join('') + '</div>'
+                + '<div class="pk-act">' + tierAction(t) + '</div></div>';
+        }).join('');
+        const map = PKG.plan_map || {};
+        const mapTxt = Object.keys(map).length ? '<p class="p-cell-muted sp-small">' + T('مشترك في باقة المنصة؟ السوشيال مشمول: ', 'On a platform plan? Social is included: ') + Object.entries(map).map(([p, t]) => esc(p) + ' ← ' + esc((PKG.catalog.find(x => x.key === t) || {}).name || t)).join(' · ') + ' · <a href="/subscription">' + T('باقات المنصة', 'Platform plans') + '</a></p>' : '';
+        const addons = (PKG.addons || []).length ? '<div class="p-card"><div class="p-card-head"><h3>➕ ' + T('إضافات (صالحة 30 يوم)', 'Add-ons (valid 30 days)') + '</h3></div><div class="pk-addons">'
+            + PKG.addons.map(a => '<div class="pk-addon"><span class="pk-ai">' + a.icon + '</span><div><b>+' + nf(a.qty) + ' ' + esc(lab(a.kind)) + '</b><div class="p-cell-muted sp-small">' + esc(a.price.label) + '</div></div>' + (PKG.can_buy ? '<button type="button" class="p-btn outline xs" data-addon="' + esc(a.key) + '">' + T('اشتري', 'Buy') + '</button>' : '') + '</div>').join('') + '</div>'
+            + ((PKG.addons_active || []).length ? '<div class="sp-small p-cell-muted">' + T('شغالة دلوقتي: ', 'Active: ') + PKG.addons_active.map(a => '+' + nf(a.qty) + ' ' + esc(lab(a.kind)) + ' (' + T('لحد ', 'until ') + esc(spLocal(a.expires_at + ' UTC')) + ')').join(' · ') + '</div>' : '') + '</div>' : '';
+        root.innerHTML = head
+            + '<div class="p-card"><div class="p-card-head"><h3>📦 ' + T('باقات السوشيال', 'Social plans') + '</h3><div class="sp-seg pk-cycle"><label><input type="radio" name="pkCycle" value="monthly"' + (pkCycle === 'monthly' ? ' checked' : '') + '> ' + T('شهري', 'Monthly') + '</label><label><input type="radio" name="pkCycle" value="yearly"' + (pkCycle === 'yearly' ? ' checked' : '') + '> ' + T('سنوي (شهرين ببلاش)', 'Yearly (2 months free)') + '</label></div></div>'
+            + '<div class="pk-grid">' + cards + '</div>' + mapTxt
+            + '<p class="p-cell-muted sp-small">' + T('الدفع من رصيد المحفظة. الترقية فورية وبتدفع الفرق بس (الباقي من مدتك بيتحسب رصيد)، والتخفيض بيتطبق عند التجديد. كل منصة في المنشور بتتحسب منشور. كابشن AI بيتحسب من باقة المنصة الأول لو عندك.', 'Paid from your wallet balance. Upgrades are instant and you only pay the difference (remaining time is credited); downgrades apply at renewal. Each platform in a post counts as one post. AI captions use your platform plan quota first if you have one.') + '</p></div>'
+            + addons;
+        root.querySelectorAll('input[name=pkCycle]').forEach(r => r.addEventListener('change', () => { pkCycle = r.value; renderPackage(); }));
+        root.querySelectorAll('[data-buy]').forEach(b => b.addEventListener('click', () => buyTier(b.dataset.buy, b)));
+        root.querySelectorAll('[data-addon]').forEach(b => b.addEventListener('click', () => buyAddon(b.dataset.addon, b)));
+        const rn = $('pkRenew'); if (rn) rn.addEventListener('click', toggleRenew);
+    }
+    async function loadPackage() {
+        const r = await fetchPackage();
+        if (!r.success) { $('pkRoot').innerHTML = '<div class="alert alert-danger">' + esc(r.error || T('تعذر التحميل', 'Could not load')) + '</div>'; return; }
+        renderPackage();
+    }
+    function payFail(r) {
+        const goWallet = r.details && r.details.action === '/subscription#wallet';
+        P.toast(r.error || T('تعذر', 'Failed'), 'error');
+        if (goWallet && confirm((r.error || '') + '\n\n' + T('تروح تشحن المحفظة دلوقتي؟', 'Go top up your wallet now?'))) location.href = '/subscription#wallet';
+    }
+    async function buyTier(tier, btn) {
+        const t = PKG.catalog.find(x => x.key === tier); if (!t) return;
+        const pr = pkCycle === 'yearly' ? t.yearly : t.monthly;
+        if (!confirm(T('تأكيد: باقة «', 'Confirm: «') + t.name + '» ' + (pkCycle === 'yearly' ? T('سنوي', 'yearly') : T('شهري', 'monthly')) + ' — ' + pr.label + T('\nالمبلغ (أو فرق السعر في الترقية) هيتخصم من المحفظة.', '\nThe amount (or the prorated difference when upgrading) is charged to your wallet.'))) return;
+        btn.disabled = true;
+        const r = await jsonPost('/api/social/package/subscribe', { tier, cycle: pkCycle, request_key: reqKey() });
+        btn.disabled = false;
+        if (!r.success) { payFail(r); return; }
+        P.toast(r.message || T('تم ✅', 'Done ✅'), 'success');
+        await loadPackage();
+        loadTargetsSoft();
+    }
+    async function buyAddon(key, btn) {
+        const a = (PKG.addons || []).find(x => x.key === key); if (!a) return;
+        if (!confirm(T('تأكيد شراء +', 'Confirm buying +') + a.qty + ' ' + lab(a.kind) + ' — ' + a.price.label + T(' من المحفظة (صالحة 30 يوم)', ' from your wallet (valid 30 days)'))) return;
+        btn.disabled = true;
+        const r = await jsonPost('/api/social/package/addon', { addon: key, request_key: reqKey() });
+        btn.disabled = false;
+        if (!r.success) { payFail(r); return; }
+        P.toast(r.message || T('تم ✅', 'Done ✅'), 'success');
+        await loadPackage();
+        loadTargetsSoft();
+    }
+    async function toggleRenew() {
+        const on = !(PKG.subscription && PKG.subscription.auto_renew);
+        if (!on && !confirm(T('إلغاء التجديد التلقائي؟ الباقة هتفضل شغالة لآخر المدة المدفوعة.', 'Cancel auto-renew? The plan stays active until the end of the paid period.'))) return;
+        const r = await jsonPost('/api/social/package/auto-renew', { on });
+        if (!r.success) { P.toast(r.error || T('تعذر', 'Failed'), 'error'); return; }
+        P.toast(r.message || T('تم', 'Done'), 'success');
+        loadPackage();
+    }
+    // بعد الترقية: الحسابات المقفولة تتفتح في المحرر وتبويب الحسابات
+    function loadTargetsSoft() { if (loaded.accounts) loadAccounts(); }
+
     // ================= البداية =================
     loadStats();
     loadBest();
+    fetchPackage();
     fetchJSON('/api/social/inbox?status=open').then(r => { if (r.success) paintBadge(r.data.counts); });
     const startTab = (location.hash || '').slice(1);
     showTab(startTab || 'overview');

@@ -32,6 +32,13 @@ class PlanGateMiddleware
         }
         if ($this->mode === 'ai_tool') {
             self::ensureWalletPrice();
+            // أدوات السوشيال (كابشن...): بعد حصة باقة المنصة، بتتخصم من حصة باقة السوشيال قبل المحفظة
+            if (str_starts_with((string) parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH), '/api/social/') && empty(PlanUsage::quota($uid, 'ai_tool')['covered'])) {
+                require_once __DIR__ . '/../Services/SocialMedia/SocialPackages.php';
+                if (SocialPackages::consumeAi(class_exists('SocialTeam') ? (int) SocialTeam::context($uid)['account_id'] : $uid)) {
+                    return null;
+                }
+            }
             $check = PlanUsage::check($uid, 'ai_tool', 'ai_tool', 'خلصت أدوات الذكاء الصناعي في باقتك الشهر ده، ورصيد المحفظة مش كفاية. اشحن المحفظة أو رقّي باقتك.');
             if (empty($check['ok'])) {
                 return $this->error((string) ($check['error'] ?? 'خلصت حصتك'), 402, ['upgrade_url' => '/subscription']);

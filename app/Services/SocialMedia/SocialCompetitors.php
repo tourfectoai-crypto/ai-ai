@@ -13,7 +13,7 @@ require_once __DIR__ . '/MetaSocialAPI.php';
 
 final class SocialCompetitors
 {
-    public const MAX_PER_USER = 5;
+    public const MAX_PER_USER = 50; // سقف أمان؛ الحد الفعلي من باقة السوشيال (SocialPackages)
 
     /** @var callable|null حقن عميل Meta في الاختبارات */
     public static $apiFactory = null;

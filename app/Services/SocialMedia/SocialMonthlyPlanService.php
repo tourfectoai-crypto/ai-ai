@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/SocialPackages.php';
 require_once __DIR__.'/../BusinessHub/BusinessHubService.php';
 require_once __DIR__.'/SocialBrandStudio.php';
 require_once __DIR__.'/SocialBestTimes.php';
@@ -262,6 +263,8 @@ class SocialMonthlyPlanService
             if($p['status']!=='draft'||(int)$p['version']!==$version)throw new InvalidArgumentException('Plan changed. Reload and review before approval.');
             if(!self::worker()['ready'])throw new InvalidArgumentException('Automatic publishing worker is not running. Enable the every-minute hosting cron first.');
             $items=$this->q('SELECT * FROM social_monthly_plan_items WHERE plan_id=? ORDER BY id FOR UPDATE',[$id])->fetchAll(PDO::FETCH_ASSOC);if(!$items)throw new InvalidArgumentException('Plan has no posts');
+            // حدود باقة السوشيال: الحسابات مش مقفولة + فاضل منشورات كفاية في الشهر (كل بند = منشور)
+            if(class_exists('SocialPackages'))SocialPackages::assertPublish($uid,array_map('intval',array_column($items,'connection_id')),count($items));
             $ttOpts=null;if(array_filter($items,static fn($i)=>$i['platform']==='tiktok')){$ttOpts=class_exists('TikTokAPI')?TikTokAPI::cleanOptions($tiktok):['error'=>'TikTok unavailable'];if(isset($ttOpts['error']))throw new InvalidArgumentException($ttOpts['error']);}
             $brief=json_decode($p['brief_json'],true);(new BusinessHubService($this->db))->assertRevision($uid,(int)$p['website_id'],$brief);$this->connections($uid,(int)$p['website_id'],$brief['connection_ids']);
             $queue=Container::getInstance()->make(QueueManager::class);
@@ -278,6 +281,7 @@ class SocialMonthlyPlanService
                 }
                 $this->q("UPDATE social_monthly_plan_items SET social_post_id=?,target_id=?,job_id=?,state='scheduled',updated_at=UTC_TIMESTAMP() WHERE id=?",[$postId,$targetId,$job,$i['id']]);
             }
+            if(class_exists('SocialPackages'))SocialPackages::record($uid,'posts',count($items));
             $this->q("UPDATE social_monthly_plans SET status='active',approved_at=UTC_TIMESTAMP(),version=version+1,updated_at=UTC_TIMESTAMP() WHERE id=?",[$id]);return $this->detail($uid,$id);
         });}finally{ExternalExecution::unlock('social-monthly-plan:'.$id);}
     }
