@@ -96,10 +96,12 @@ class MediaGenerationService
         if(($options['reference_id']||$options['resolution']!=='720p')&&$durationSeconds!==8)throw new InvalidArgumentException('Eight seconds required');
         if(!VeoClient::supportsResolution($options['resolution'])||($options['resolution']!=='720p'&&!$billing))throw new InvalidArgumentException('Approved premium quote required');
         $aspectRatio=$options['aspect_ratio']?:self::VIDEO_ASPECT_RATIOS[$platform];
+        // مشهد السكربت: العميل يشوف وصف المشهد بلغته، وتعليمات الموديل الداخلية تفضل في final_prompt بس
+        $display=isset($storyboard['label'])&&is_string($storyboard['label'])&&trim($storyboard['label'])!==''?trim($storyboard['label']):$prompt;unset($storyboard['label']);
         $finalPrompt=$this->buildVideoPrompt($prompt,$style).' '.GenerationOptions::direction($options,true);
         if($brand){$colors=BrandPromptBuilder::paletteNames($brand);if($colors)$finalPrompt.=' Brand mood: subtle '.implode(', ',$colors).' color accents in wardrobe, props or light, keeping natural realism.';}
         return $this->enqueue($userId,[
-            'type'=>'short_video','prompt'=>$prompt,'aspect_ratio'=>$aspectRatio,'duration_seconds'=>$durationSeconds,
+            'type'=>'short_video','prompt'=>$display,'aspect_ratio'=>$aspectRatio,'duration_seconds'=>$durationSeconds,
             'brand_profile_id'=>$brand?(int)$brand->getAttribute('id'):null,'final_prompt'=>$finalPrompt,
             'generation_meta'=>json_encode(array_filter(['style'=>$style,'platform'=>$platform,'options'=>$options,'billing'=>$billing?:null,'storyboard'=>$storyboard?:null]),JSON_THROW_ON_ERROR),
         ],GenerateVideoJob::class,$requestKey,$storyboard?self::MAX_ACTIVE+CreativePricing::STORYBOARD_MAX_SCENES:self::MAX_ACTIVE);
@@ -143,7 +145,7 @@ class MediaGenerationService
             $group=substr(hash('sha256',$userId.'|'.$requestKey),0,24);$items=[];$total=count($scenes);
             foreach(array_values($scenes) as $i=>$scene){
                 $prompt=$scene['prompt'].' This is shot '.($i+1).' of '.$total.' in one continuous tourism ad: keep the same visual style, color grade, time of day and location identity as the other shots.';
-                $items[]=$this->requestVideoGeneration($userId,mb_substr($prompt,0,2000),$platform,$duration,$style,$brand,$options,$keys[$i],$quote['units'][$i],['group'=>$group,'script_id'=>$scriptId,'scene'=>$i+1,'total'=>$total]);
+                $items[]=$this->requestVideoGeneration($userId,mb_substr($prompt,0,2000),$platform,$duration,$style,$brand,$options,$keys[$i],$quote['units'][$i],['group'=>$group,'script_id'=>$scriptId,'scene'=>$i+1,'total'=>$total,'label'=>$scene['label']]);
             }
             return $items;
         });
@@ -159,7 +161,7 @@ class MediaGenerationService
             $pick=[];foreach($selected as $n){if(!is_scalar($n)||!ctype_digit((string)$n)||!isset($scenes[(int)$n-1]))throw new InvalidArgumentException('Invalid scene');$pick[(int)$n-1]=$scenes[(int)$n-1];}
             ksort($pick);$scenes=$pick;
         }else $scenes=array_slice($scenes,0,CreativePricing::STORYBOARD_MAX_SCENES,true);
-        $out=[];foreach($scenes as $i=>$scene){$p=$scene['visual_prompt_en']!==''?$scene['visual_prompt_en']:$scene['visual'];if(mb_strlen($p)<8)throw new InvalidArgumentException('Scene description too short');$out[$i]=['prompt'=>$p,'voiceover'=>$scene['voiceover'],'on_screen_text'=>$scene['on_screen_text']];}
+        $out=[];foreach($scenes as $i=>$scene){$p=$scene['visual_prompt_en']!==''?$scene['visual_prompt_en']:$scene['visual'];if(mb_strlen($p)<8)throw new InvalidArgumentException('Scene description too short');$out[$i]=['prompt'=>$p,'label'=>mb_substr($scene['visual']!==''?$scene['visual']:$p,0,500),'voiceover'=>$scene['voiceover'],'on_screen_text'=>$scene['on_screen_text']];}
         return $out;
     }
     private function enqueue(int $userId,array $attributes,string $job,string $requestKey,int $maxActive=self::MAX_ACTIVE): MediaItem

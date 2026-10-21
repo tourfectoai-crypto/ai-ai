@@ -82,7 +82,8 @@ class VideoEditing
             $queue=Container::getInstance()->make(QueueManager::class);if(!$queue->isReady())throw new RuntimeException('Editing queue unavailable');
             $ids=array_map(fn($c)=>(int)$c['id'],$clips);$seconds=0;foreach($clips as $c)$seconds+=(int)($c['duration_seconds']?:8);
             $meta=['source'=>'storyboard_render','group'=>$group,'parents'=>$ids,'edit'=>['mute'=>$mute],'billing'=>['source'=>'edit','amount'=>0,'currency'=>'USD','settled'=>true]];
-            $item=new MediaItem(['user_id'=>$userId,'type'=>'short_video','prompt'=>'Storyboard video — '.count($ids).' scenes','aspect_ratio'=>$ratio,'duration_seconds'=>$seconds,'status'=>'generating','generation_stage'=>'queued','usage_charged'=>1,'request_key'=>$key,'generation_meta'=>json_encode($meta,JSON_THROW_ON_ERROR)]);GenerationLifecycle::save($item);
+            $scriptId=(int)(json_decode((string)$clips[0]['generation_meta'],true)['storyboard']['script_id']??0);$s=$pdo->prepare('SELECT topic FROM video_scripts WHERE id=? AND user_id=?');$s->execute([$scriptId,$userId]);$topic=trim((string)$s->fetchColumn());
+            $item=new MediaItem(['user_id'=>$userId,'type'=>'short_video','prompt'=>mb_substr('فيديو مجمّع'.($topic!==''?': '.$topic:'').' ('.count($ids).' مشاهد)',0,500),'aspect_ratio'=>$ratio,'duration_seconds'=>$seconds,'status'=>'generating','generation_stage'=>'queued','usage_charged'=>1,'request_key'=>$key,'generation_meta'=>json_encode($meta,JSON_THROW_ON_ERROR)]);GenerationLifecycle::save($item);
             $job=$queue->push(RenderStoryboardJob::class,['media_item_id'=>(int)$item->getAttribute('id')],'media');if(!$job)throw new RuntimeException('Editing queue rejected');$item->setAttribute('job_id',(int)$job);GenerationLifecycle::save($item);return $item;
         });
     }

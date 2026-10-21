@@ -20,7 +20,9 @@ class CreativePricing
         $unit=$paid?round((float)$price['price'],2):0.0;$total=round($unit*$paid,2);$balance=$wallet->getBalance($userId);
         $units=[];for($i=0;$i<$count;$i++)$units[]=['source'=>$i<$plan?'plan':'wallet','amount'=>$i<$plan?0.0:$unit,'currency'=>'USD','key'=>$key,'settled'=>false];
         $data=['kind'=>$kind,'storyboard'=>$storyboard,'count'=>$count,'resolution'=>$o['resolution'],'duration'=>$kind==='video'?$duration:0,'reference_id'=>$o['reference_id'],'plan_units'=>$plan,'wallet_units'=>$paid,'unit_price'=>$unit,'total'=>$total,'currency'=>'USD','units'=>$units];
-        $data['hash']=hash('sha256',json_encode([$userId,$data],JSON_THROW_ON_ERROR));$data['ok']=$balance+0.00001>=$total;return $data;
+        $data['hash']=hash('sha256',json_encode([$userId,$data],JSON_THROW_ON_ERROR));$data['ok']=$balance+0.00001>=$total;
+        // للعرض بس (خارج الـ hash): العميل يعرف رصيده وناقصه كام بدل رسالة عامة
+        $data['balance']=round(max(0,$balance),2);$data['shortfall']=round(max(0,$total-$balance),2);return $data;
     }
     public static function settle(MediaItem $item,array $billing,string $feature): string
     {

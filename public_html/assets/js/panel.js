@@ -647,6 +647,9 @@
         }
     }
 
+    // أي صفحة بتخصم من الرصيد (الاستوديو مثلًا) تقدر تحدّث الرصيد اللي فوق من غير reload
+    window.refreshWalletBadge = loadWalletBadge;
+
     document.addEventListener('DOMContentLoaded', function () {
         initSidebar();
         initTilt();

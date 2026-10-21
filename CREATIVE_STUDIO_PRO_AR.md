@@ -101,7 +101,7 @@
 - `database/migrations/2026_10_21_000001_creative_studio_pro.sql`
 - `tools/test_creative_studio_pro.php`, `tools/e2e_creative_studio_pro.php`
 
-**معدّلة:** `AdsController`, `CreativeStudioController`, `GbpProfileController`, `GoogleBusinessContentController`, `WebsiteBuilderController`, `GenerateMediaJob`, `GenerateVideoJob`, `ArticleImageService`, `GeminiClient`, `OpenAIImageClient`, `VeoClient`, `BrandPromptBuilder`, `CreativeLibrary`, `CreativePlanService`, `CreativePricing`, `GeneratedMediaFiles`, `GenerationLifecycle`, `GenerationOptions`, `MediaGenerationService`, `ReferenceMedia`, `VideoEditing`, `VideoScriptService`, `GbpMediaUploadHandler`, `SocialMonthlyPlanService`, `WebsiteBuilderService`, `app/routes/api.php`, `cron/schedule.php`, `public_html/assets/js/creative-studio-pro.js`, و`app/Config/project_classmap.php` و`app/project_classmap.php` (4 كلاسات جديدة بس)، و`env.example`.
+**معدّلة:** `public_html/assets/js/panel.js` (تحديث الرصيد)، `public_html/assets/css/creative-studio-pro.css`، `AdsController`, `CreativeStudioController`, `GbpProfileController`, `GoogleBusinessContentController`, `WebsiteBuilderController`, `GenerateMediaJob`, `GenerateVideoJob`, `ArticleImageService`, `GeminiClient`, `OpenAIImageClient`, `VeoClient`, `BrandPromptBuilder`, `CreativeLibrary`, `CreativePlanService`, `CreativePricing`, `GeneratedMediaFiles`, `GenerationLifecycle`, `GenerationOptions`, `MediaGenerationService`, `ReferenceMedia`, `VideoEditing`, `VideoScriptService`, `GbpMediaUploadHandler`, `SocialMonthlyPlanService`, `WebsiteBuilderService`, `app/routes/api.php`, `cron/schedule.php`, `public_html/assets/js/creative-studio-pro.js`, و`app/Config/project_classmap.php` و`app/project_classmap.php` (4 كلاسات جديدة بس)، و`env.example`.
 
 **مسارات API جديدة:**
 - `POST /api/creative-studio/video-scripts/{id}/storyboard/quote`
@@ -129,6 +129,38 @@
 - واجهة الاستوديو في Chromium مع ردود مصطنعة من السيرفر: **20/20 نجحت**. بيغطي الشارات، و"تلقائي"، ومنع الطلب من غير موافقة، وفتح فكرة الخطة في النافذة من غير خصم، وتحويل السكربت، والتجميع، وإحصائية الفيديو، ومفيش أي أخطاء JavaScript.
 - اختبارات قديمة اتشغلت للتأكد إن مفيش حاجة باظت: `test_creative_photo_fix` و`test_social_monthly_plan` نجحوا.
   - `tests/Integration/CreativeStudioModuleIntegrationTest.php` كان مكسور قبل التعديلات: بيطلب `GenerationLifecycle` من غير autoloader، والـ fakes مش متوافقة مع توقيعات العملاء الحالية. اتصلح علشان يشتغل، وبيطلع **نفس الـ 11 حالة فشل بالظبط قبل التعديلات وبعدها**. دي توقعات قديمة (زي إظهار نص خطأ المزود الخام للعميل، أو التوليد من غير حجز رصيد)، ومش حاجة باظت من الشغل ده.
+
+## 8.5) فحص الخدمة كعميل حقيقي (2026-10-21)
+
+شغّلت الموقع كامل محليًا: Apache بديل (PHP) وMariaDB وطابور المهام. مزودات Gemini/Veo اتبدّلت بخادم محلي بنفس عناوين Google الحقيقية، فالموقع اشتغل من غير أي تعديل في الكود. بعد كده عملت حساب جديد من صفحة التسجيل ومشيت رحلة العميل كاملة:
+تسجيل ← دخول ← الاستوديو ← محاولة توليد من غير رصيد ← شحن ← تحسين الوصف ← نسختين ستوري ← فيديو ← سكربت ← تحويل السكربت لفيديو وتجميعه ← طلب محجوب أمنيًا ← الإحصائيات ← النشر.
+
+**اللي اشتغل صح من أول مرة:**
+- نسختين مختلفتين بمقاس 1080×1920 JPEG، وفحص الجودة 8/10، وخصم 0.40 مرة واحدة بعد النجاح.
+- فيديو 720×1280 بغلافه.
+- السكربت ← مشهدين ← فيديو مجمّع 8 ثواني بخصم 3.00 بالظبط زي العرض.
+- الطلب المحجوب: رسالة واضحة، من غير خصم، والحجز رجع.
+- مفتاح Gemini مابيظهرش في أي رابط.
+
+**مشاكل لاحظتها كعميل واتصلحت:**
+
+| المشكلة | الإصلاح |
+|---|---|
+| عنوان الواجهة "من الفكرة إلى حملة بصرية" شبه مش باين (غامق على خلفية غامقة) | لون أبيض واضح |
+| عميل جديد من غير رصيد بيشوف رسالة عن "8 ثواني والجودة الأعلى" في نافذة **الصور**، والزرار بيقول "راجع الإعدادات" | "رصيدك 0.00 والتكلفة 0.20 — ناقصك 0.20" + رابط الشحن. ولو مفيش سعر مفعّل بتظهر رسالة صريحة إن الخدمة مش متاحة على حسابه |
+| التكلفة والموافقة في آخر النافذة بخط صغير بعيد عن الزرار | التكلفة وخانة الموافقة جنب زرار التوليد مباشرة، وخانة الموافقة بتختفي لو الطلب مجاني من الباقة |
+| الأبعاد بتتعرض مقلوبة في الواجهة العربية (ستوري 1080×1920 بيظهر 1920×1080) | عرض الأرقام من الشمال لليمين |
+| الرصيد اللي فوق مابيتحدثش بعد الخصم | بيتحدث تلقائيًا بعد إرسال الطلب وبعد ما الطلب يخلص |
+| الكارت الفاشل بيعرض "0.20 USD · المحفظة" وده عكس "لم يُخصم أي رصيد" | التكلفة بتظهر على النتايج الجاهزة بس |
+| "تحسين الوصف" بيستبدل وصف العميل العربي بإنجليزي من غير شرح | ملاحظة بتشرح السبب + زرار "↩ رجّع وصفي" |
+| حوالي 12 زرار في كل كارت | الأساسي ظاهر (تنزيل، نشر، النص والشعار، التقييم)، والباقي تحت "⋯ المزيد" |
+| زرار رفع الملف بالإنجليزي "Choose File" | زرار عربي "⬆ اختار صورة من جهازك" |
+| المنصة في السكربتات بتظهر بالكود "tiktok" | TikTok / Instagram Reels / YouTube Shorts |
+| مشاهد السكربت في المكتبة بتعرض تعليمات الموديل الداخلية بالإنجليزي ("This is shot 1 of 2…")، والفيديو المجمّع اسمه "Storyboard video" | المكتبة بتعرض وصف المشهد بلغة السكربت، والفيديو المجمّع اسمه "فيديو مجمّع: (موضوع السكربت) (2 مشاهد)" |
+| **غلاف الفيديو مابيظهرش أبدًا في المكتبة**، حتى في المونتاج القديم (Chromium مابيحمّلش غلاف فيديو اتنقل من `<template>`) | الغلاف بيتعاد تعيينه بعد إضافة الكارت للصفحة |
+| في الواجهة الإنجليزي، أجزاء من الصفحة فاضلة بالعربي (كارت "صورك الحقيقية" وتبويبات الهوية والإحصائيات) | اتترجمت |
+
+**ملاحظة تشغيل مهمة:** مفيش أي migration بيضيف سعر لـ `media_image` و`media_video`. لازم الأدمن يحدد السعر من لوحة التسعير، وإلا العميل اللي مش مشترك في باقة فيها صور مش هيقدر يولّد (وبيشوف الرسالة الواضحة اللي فوق).
 
 ## 9) ملاحظات محتاجة قرار منك
 

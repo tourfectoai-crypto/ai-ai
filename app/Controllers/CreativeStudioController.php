@@ -41,8 +41,8 @@ class CreativeStudioController extends Controller
             <div><span class="cs-eyebrow">TOURFECTO CREATIVE STUDIO</span><h2 data-cs-title>من الفكرة إلى حملة بصرية</h2><p data-cs-intro>صمّم صورًا وفيديوهات تعبر عن وجهتك وهويتك. وجّه الإضاءة والتكوين، تابع مراحل التوليد، وحمّل النتيجة الأصلية أو انشرها.</p></div><div class="cs-emblem" aria-hidden="true">✦</div>
             </section>
             <section class="p-card" style="padding:14px 18px;margin:12px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:space-between">
-                <div><b>📷 عندك صور حقيقية لرحلاتك؟ دي أحلى من أي صورة متولدة</b><div class="p-cell-muted" style="font-size:13px">ارفع صورك أو اسحبها من موقعك من زرار المكتبة تحت، وهتفضل محفوظة هنا. وفي "خطة الشهر" الذكاء الصناعي بيتعلم منها ويعمل بوستات بلوجو شركتك وألوانها - مجانًا من غير توليد صور.</div></div>
-                <a class="p-btn" href="/social">صمّم بوستات من صوري</a>
+                <div><b data-cs-en="📷 Have real photos of your trips? They beat any generated image">📷 عندك صور حقيقية لرحلاتك؟ دي أحلى من أي صورة متولدة</b><div class="p-cell-muted" data-cs-en="Upload your photos or pull them from your website with the library buttons below; they stay saved here. In the monthly plan, the AI learns from them and builds posts with your logo and colors — free, with no image generation." style="font-size:13px">ارفع صورك أو اسحبها من موقعك من زرار المكتبة تحت، وهتفضل محفوظة هنا. وفي "خطة الشهر" الذكاء الصناعي بيتعلم منها ويعمل بوستات بلوجو شركتك وألوانها - مجانًا من غير توليد صور.</div></div>
+                <a class="p-btn" href="/social" data-cs-en="Design posts from my photos">صمّم بوستات من صوري</a>
         </section>
         <div class="p-toolbar">
             <button class="p-btn" onclick="document.getElementById('mediaModal').classList.add('open')">🎨 توليد صورة</button>
@@ -331,7 +331,7 @@ HTML;
                 <div class="p-card" style="margin-bottom:14px;">
                     <div class="p-card-head">
                         <h3>${esc(s.topic)}</h3>
-                        <span class="p-card-sub">${esc(s.platform)} · ${esc(s.duration_seconds)} ثانية</span>
+                        <span class="p-card-sub">${esc(({tiktok:'TikTok',instagram_reels:'Instagram Reels',youtube_shorts:'YouTube Shorts'})[s.platform]||s.platform)} · ${esc(s.duration_seconds)} ثانية</span>
                     </div>
                     ${s.status === 'completed'
                         ? `<p style="white-space:pre-wrap;line-height:1.8;background:var(--panel-bg,#f7f8fa);padding:12px 14px;border-radius:8px;">${esc(s.script_text || '')}</p>${scenesHtml}
@@ -361,7 +361,11 @@ HTML;
     window.enhancePrompt = async function (textareaId,kind,btn) {
         const el=document.getElementById(textareaId),original=btn.textContent,before=el.value;
         if(!before.trim())return;btn.disabled=true;btn.textContent='…';
-        try{const res=await fetchJSON('/api/creative-studio/enhance-prompt',{method:'POST',headers:jsonHeaders,body:JSON.stringify({prompt:before.trim(),kind})});if(res.success&&typeof res.data?.prompt==='string'){if(el.value===before){el.value=res.data.prompt;el.dispatchEvent(new Event('input'));}else P.toast('The draft changed; your current text was retained.','info');}else P.toast('تعذر تحسين الوصف / Could not enhance prompt','error');}catch(e){P.toast('تعذر الاتصال / Connection unavailable','error');}finally{btn.disabled=false;btn.textContent=original;}
+        try{const res=await fetchJSON('/api/creative-studio/enhance-prompt',{method:'POST',headers:jsonHeaders,body:JSON.stringify({prompt:before.trim(),kind})});if(res.success&&typeof res.data?.prompt==='string'){if(el.value===before){el.value=res.data.prompt;el.dispatchEvent(new Event('input'));
+            // الوصف المحسّن بالإنجليزي (الموديلات بتفهمه أدق)؛ العميل يقدر يرجع لوصفه بضغطة
+            let note=el.parentElement.querySelector('.cs-enhance-note');if(!note){note=document.createElement('div');note.className='cs-enhance-note';btn.after(note);}
+            note.innerHTML='<span>✨ اتحوّل وصفك لبريف احترافي بالإنجليزي عشان النتيجة تطلع أدق — نفس فكرتك بالظبط.</span>';const undo=document.createElement('button');undo.type='button';undo.className='p-btn outline xs';undo.textContent='↩ رجّع وصفي';undo.onclick=()=>{el.value=before;el.dispatchEvent(new Event('input'));note.remove();};note.append(undo);
+        }else P.toast('الوصف اتغيّر أثناء التحسين، فسبنا نصك زي ما هو.','info');}else P.toast(res.error||'تعذر تحسين الوصف دلوقتي. تقدر تولّد بوصفك زي ما هو.','error');}catch(e){P.toast('تعذر الاتصال / Connection unavailable','error');}finally{btn.disabled=false;btn.textContent=original;}
     };
 
     window.requestMedia=()=>studio.request('image',currentBrand?Number(currentBrand.id):0);
@@ -827,7 +831,14 @@ JS;
     {
         if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
         if($e=$this->rateLimitGuard('user','creative_quote',60,60))return $e;
-        try{$count=$this->get('count',1);if(!in_array($count,[1,2,'1','2'],true))throw new InvalidArgumentException('Invalid count');return $this->success(CreativePricing::quote((int)$this->user['id'],GenerationOptions::text($this->get('kind','image'),'kind',10),$this->generationInputOptions(),(int)$count,$this->generationDuration()));}catch(InvalidArgumentException $e){return $this->error('راجع الرصيد والإعدادات. الجودة الأعلى وتحويل الصورة يتطلبان 8 ثوانٍ وسعرًا مفعّلًا.',422);}catch(Throwable $e){Logger::error('Creative quote unavailable',['message'=>$e->getMessage()]);return $this->error('تعذر حساب التكلفة الآن.',503);}
+        $kind=$this->get('kind','image');
+        try{$count=$this->get('count',1);if(!in_array($count,[1,2,'1','2'],true))throw new InvalidArgumentException('Invalid count');return $this->success(CreativePricing::quote((int)$this->user['id'],GenerationOptions::text($kind,'kind',10),$this->generationInputOptions(),(int)$count,$this->generationDuration()));}
+        catch(InvalidArgumentException $e){
+            // رسالة مفهومة للعميل حسب السبب الحقيقي
+            if($e->getMessage()==='Pricing unavailable')return $this->error($kind==='video'?'توليد الفيديو مش متاح على حسابك دلوقتي: اشترك في باقة فيها فيديو، أو تواصل مع الدعم لتفعيل الدفع من المحفظة.':'توليد الصور مش متاح على حسابك دلوقتي: اشترك في باقة فيها صور، أو تواصل مع الدعم لتفعيل الدفع من المحفظة.',422,['reason'=>'pricing_unavailable']);
+            if($kind==='video')return $this->error('الإعداد ده مش متاح: الجودة 1080p/4K وتحويل صورة لفيديو بيتطلبوا مدة 8 ثواني.',422,['reason'=>'settings']);
+            return $this->error('راجع الإعدادات المختارة (الصورة المرجعية لازم تكون من مكتبتك وجاهزة).',422,['reason'=>'settings']);
+        }catch(Throwable $e){Logger::error('Creative quote unavailable',['message'=>$e->getMessage()]);return $this->error('تعذر حساب التكلفة الآن.',503);}
     }
     public function referenceUpload(array $params=[]): array
     {
