@@ -642,7 +642,7 @@ class SocialMediaController extends Controller
     // صندوق التعليقات
     // ------------------------------------------------------------------
 
-    /** GET /api/social/inbox?status=open|new|replied|hidden|done|all&intent= */
+    /** GET /api/social/inbox?status=open|new|replied|hidden|done|all&intent=&page={connection_id} */
     public function inboxList(array $params = []): array
     {
         if (!$this->isAuthenticated()) {
@@ -653,8 +653,10 @@ class SocialMediaController extends Controller
             return $this->success(['installed' => false, 'comments' => [], 'counts' => ['open' => 0, 'hot' => 0]]);
         }
         try {
-            $r = $inbox->list($this->uid(), (string) $this->get('status', 'open'), (string) $this->get('intent', ''));
-            return $this->success(['installed' => true] + $r);
+            $inbox->ensurePagesSchema();
+            $r = $inbox->list($this->uid(), (string) $this->get('status', 'open'), (string) $this->get('intent', ''), 60, (int) $this->get('page', 0));
+            // الصفحات اللي الصندوق بيسحب منها ويرد عليها (مع سبب أي صفحة مش شغالة)
+            return $this->success(['installed' => true, 'pages' => $inbox->pages($this->uid())] + $r);
         } catch (Throwable $e) {
             Logger::error('Social inbox list failed', ['message' => $e->getMessage()]);
             return $this->error('تعذر تحميل التعليقات', 500);
@@ -802,10 +804,12 @@ class SocialMediaController extends Controller
             return $this->error('Unauthorized', 401);
         }
         $inbox = new SocialCommentInbox();
-        return $this->success(['installed' => $inbox->privateReady()] + $inbox->settings($this->uid()));
+        $inbox->ensurePagesSchema();
+        // allowed = الباقة فيها الرد التلقائي (لو مش فيها الإعداد بيفضل محفوظ بس مش بيشتغل)
+        return $this->success(['installed' => $inbox->privateReady(), 'allowed' => SocialPackages::has($this->uid(), 'auto_private'), 'pages' => $inbox->ready() ? $inbox->pages($this->uid()) : []] + $inbox->settings($this->uid()));
     }
 
-    /** POST /api/social/inbox-settings  body: {auto_private, auto_intents[], private_template, public_ack} */
+    /** POST /api/social/inbox-settings  body: {auto_private, auto_intents[], private_template, public_ack, auto_pages[]?} */
     public function inboxSettingsSave(array $params = []): array
     {
         if (!$this->isAuthenticated()) {
@@ -825,10 +829,14 @@ class SocialMediaController extends Controller
             if (!empty($this->data['auto_private'])) {
                 SocialPackages::assertFeature($this->uid(), 'auto_private');
             }
-            return $this->success($inbox->saveSettings($this->uid(), $this->data), 'اتحفظت إعدادات الرد');
+            $saved = $inbox->saveSettings($this->uid(), $this->data);
+            if (isset($this->data['auto_pages']) && is_array($this->data['auto_pages'])) {
+                $inbox->setAutoPages($this->uid(), $this->data['auto_pages']);
+            }
+            return $this->success($saved + ['pages' => $inbox->pages($this->uid())], 'اتحفظت إعدادات الرد');
         } catch (SocialPackageLimit $e) {
             return $this->limitError($e);
-        } catch (InvalidArgumentException $e) {
+        } catch (InvalidArgumentException | RuntimeException $e) {
             return $this->error($e->getMessage(), 422);
         }
     }

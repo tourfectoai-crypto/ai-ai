@@ -3,7 +3,7 @@
 /**
  * Tourfecto - صندوق تعليقات السوشيال (فيسبوك + إنستجرام)
  *
- * بيسحب تعليقات الجمهور على المنشورات اللي اتنشرت من المنصة، بيصنّف نيّة كل تعليق
+ * بيسحب تعليقات الجمهور على منشورات صفحات العميل (من المنصة أو من فيسبوك/إنستجرام مباشرة)، بيصنّف نيّة كل تعليق
  * (سعر/حجز/سؤال/شكوى/مدح/سبام)، وبيخلّي الفريق يرد بنقرة بنص مقترح من الذكاء الاصطناعي
  * مبني على بيانات الشركة المؤكدة - أو يخفي السبام. التعليقات اللي فيها "بكام/السعر/حجز"
  * بتطلع فوق، لأنها عملاء جاهزين للحجز.
@@ -86,59 +86,310 @@ final class SocialCommentInbox
         return 'other';
     }
 
+    // ------------------------------------------------------------------
+    // الصفحات اللي الصندوق شغال عليها
+    // ------------------------------------------------------------------
+
+    /** منشورات مباشرة (اتنشرت من فيسبوك/إنستجرام نفسه) بنفحصها لكل صفحة في السحبة الواحدة */
+    public const DIRECT_POSTS_PER_PAGE = 5;
+    public const DIRECT_PAGES_PER_SYNC = 8;
+
+    private static ?bool $pagesReady = null;
+
+    /** جدول الصفحات + أعمدة المنشور المباشر (idempotent، برا أي transaction عشان الـ DDL بيعمل commit) */
+    public function ensurePagesSchema(): void
+    {
+        if ($this->pagesReady()) {
+            return;
+        }
+        $pdo = $this->db->getConnection();
+        if ($pdo->inTransaction() || !$this->ready()) {
+            return;
+        }
+        try {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS social_inbox_pages (
+                platform_connection_id INT(11) NOT NULL, user_id INT(11) NOT NULL, auto_reply TINYINT(1) NOT NULL DEFAULT 1,
+                last_sync_at DATETIME DEFAULT NULL, last_error VARCHAR(500) DEFAULT NULL, posts_checked INT(11) NOT NULL DEFAULT 0,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (platform_connection_id), KEY idx_user (user_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            if (!$this->db->query("SHOW COLUMNS FROM social_comments LIKE 'post_excerpt'")) {
+                $pdo->exec('ALTER TABLE social_comments ADD COLUMN post_excerpt VARCHAR(300) DEFAULT NULL, ADD COLUMN post_permalink VARCHAR(600) DEFAULT NULL');
+            }
+        } catch (Throwable $e) {
+            Logger::warning('Social inbox pages schema failed', ['message' => $e->getMessage()]);
+        }
+        self::$pagesReady = null;
+    }
+
+    public function pagesReady(): bool
+    {
+        if (self::$pagesReady === null) {
+            try {
+                self::$pagesReady = (bool) $this->db->query("SHOW TABLES LIKE 'social_inbox_pages'")
+                    && (bool) $this->db->query("SHOW COLUMNS FROM social_comments LIKE 'post_excerpt'");
+            } catch (Throwable $e) {
+                self::$pagesReady = false;
+            }
+        }
+        return self::$pagesReady;
+    }
+
+    /** اتصالات فيسبوك/إنستجرام بتاعة الحساب (بما فيها المفصولة عشان العميل يشوف السبب)، من غير تكرار نفس الصفحة */
+    private function connections(int $userId): array
+    {
+        $rows = $this->db->query(
+            "SELECT id, platform, external_location_id, external_location_name AS name, status, last_error, access_token
+               FROM platform_connections
+              WHERE (user_id = ? OR website_id IN (SELECT id FROM websites WHERE user_id = ?)) AND platform IN ('facebook','instagram')
+              ORDER BY (status = 'connected') DESC, id DESC",
+            [$userId, $userId]
+        ) ?: [];
+        $out = [];
+        $seen = [];
+        foreach ($rows as $r) {
+            $k = $r['platform'] . ':' . ($r['external_location_id'] ?: 'c' . $r['id']);
+            if (!isset($seen[$k])) {
+                $seen[$k] = true;
+                $out[] = $r;
+            }
+        }
+        return $out;
+    }
+
+    /** connection_id => صف social_inbox_pages */
+    private function pageRows(int $userId): array
+    {
+        if (!$this->pagesReady()) {
+            return [];
+        }
+        $out = [];
+        foreach ($this->db->query('SELECT * FROM social_inbox_pages WHERE user_id = ?', [$userId]) ?: [] as $r) {
+            $out[(int) $r['platform_connection_id']] = $r;
+        }
+        return $out;
+    }
+
+    /** سبب إن الصفحة مش بتتسحب (null = شغالة) */
+    private static function pageState(array $conn, bool $active, ?string $locked): ?string
+    {
+        if ($conn['status'] !== 'connected') {
+            return 'reconnect';
+        }
+        if (!$active) {
+            return 'paused';
+        }
+        return $locked ? 'locked' : null;
+    }
+
     /**
-     * سحب التعليقات الجديدة لمنشورات العميل المنشورة في آخر 30 يوم (فيسبوك/إنستجرام، مش ستوري).
-     * @return array ['checked'=>int,'new'=>int,'hot'=>int,'errors'=>[platform=>msg],'needs_permission'=>bool]
+     * الصفحات اللي الصندوق بيسحب تعليقاتها ويرد عليها، مع حالة كل واحدة وعدد التعليقات.
+     * @return array [['id','platform','name','avatar','username','state'=>null|reconnect|paused|locked,'auto_reply','open','total','last_sync_at','last_error']]
+     */
+    public function pages(int $userId): array
+    {
+        $conns = $this->connections($userId);
+        if (!$conns) {
+            return [];
+        }
+        $ids = array_map('intval', array_column($conns, 'id'));
+        $inactive = class_exists('SocialAccounts') ? SocialAccounts::inactiveIds($userId) : [];
+        $locked = class_exists('SocialPackages') ? SocialPackages::locked($userId) : [];
+        $prof = class_exists('SocialAccounts') ? SocialAccounts::profiles($ids) : [];
+        $meta = $this->pageRows($userId);
+        $counts = [];
+        foreach ($this->db->query(
+            "SELECT platform_connection_id AS id, COUNT(*) AS total, SUM(status = 'new') AS open FROM social_comments
+              WHERE user_id = ? AND platform_connection_id IN (" . implode(',', $ids) . ') GROUP BY platform_connection_id', [$userId]
+        ) ?: [] as $c) {
+            $counts[(int) $c['id']] = $c;
+        }
+        $out = [];
+        foreach ($conns as $c) {
+            $id = (int) $c['id'];
+            $pf = $prof[$id] ?? [];
+            $m = $meta[$id] ?? [];
+            $out[] = [
+                'id' => $id,
+                'platform' => $c['platform'],
+                'name' => (string) ($c['name'] ?: ($pf['display_name'] ?? '')),
+                'avatar' => !empty($pf['avatar_url']) ? (string) $pf['avatar_url'] : null,
+                'username' => $pf['username'] ?? null,
+                'state' => self::pageState($c, !in_array($id, $inactive, true), $locked[$id] ?? null),
+                'auto_reply' => !isset($m['auto_reply']) || (int) $m['auto_reply'] === 1,
+                'open' => (int) ($counts[$id]['open'] ?? 0),
+                'total' => (int) ($counts[$id]['total'] ?? 0),
+                'last_sync_at' => $m['last_sync_at'] ?? null,
+                'last_error' => !empty($m['last_error']) ? (string) $m['last_error'] : null,
+            ];
+        }
+        return $out;
+    }
+
+    /** الرد الخاص التلقائي على صفحات بعينها: $ids = الصفحات اللي يرد عليها (الباقي بيتقفل) */
+    public function setAutoPages(int $userId, array $ids): void
+    {
+        $this->ensurePagesSchema();
+        if (!$this->pagesReady()) {
+            throw new RuntimeException('شغّل migration صندوق التعليقات (2026_10_25_000001_inbox_pages.sql) الأول');
+        }
+        $on = array_map('intval', $ids);
+        foreach ($this->connections($userId) as $c) {
+            $id = (int) $c['id'];
+            $this->db->query(
+                'INSERT INTO social_inbox_pages (platform_connection_id, user_id, auto_reply) VALUES (?,?,?) ON DUPLICATE KEY UPDATE auto_reply = VALUES(auto_reply), user_id = VALUES(user_id)',
+                [$id, $userId, in_array($id, $on, true) ? 1 : 0]
+            );
+        }
+    }
+
+    private function notePage(int $userId, int $connectionId, int $checked, ?string $error): void
+    {
+        if (!$this->pagesReady()) {
+            return;
+        }
+        try {
+            $this->db->query(
+                'INSERT INTO social_inbox_pages (platform_connection_id, user_id, last_sync_at, last_error, posts_checked) VALUES (?,?,UTC_TIMESTAMP(),?,?)
+                 ON DUPLICATE KEY UPDATE last_sync_at = UTC_TIMESTAMP(), last_error = VALUES(last_error), posts_checked = VALUES(posts_checked), user_id = VALUES(user_id)',
+                [$connectionId, $userId, $error !== null ? mb_substr($error, 0, 500) : null, $checked]
+            );
+        } catch (Throwable $e) {
+        }
+    }
+
+    /**
+     * سحب التعليقات الجديدة في آخر 30 يوم (فيسبوك/إنستجرام، مش ستوري) من:
+     *  1) المنشورات اللي اتنشرت من المنصة، و 2) آخر منشورات كل صفحة اتنشرت من فيسبوك/إنستجرام مباشرة.
+     * الصفحات الموقوفة أو اللي فوق حد الباقة أو المفصولة ما بتتسحبش.
+     * @return array ['checked'=>int,'new'=>int,'hot'=>int,'errors'=>[platform=>msg],'needs_permission'=>bool,'pages'=>int]
      */
     public function sync(int $userId, int $maxTargets = 12): array
     {
-        $out = ['checked' => 0, 'new' => 0, 'hot' => 0, 'errors' => [], 'needs_permission' => false];
+        $out = ['checked' => 0, 'new' => 0, 'hot' => 0, 'errors' => [], 'needs_permission' => false, 'pages' => 0];
         if (!$this->ready()) {
             return $out + ['not_installed' => true];
         }
+        $this->ensurePagesSchema();
+        $inactive = class_exists('SocialAccounts') ? SocialAccounts::inactiveIds($userId) : [];
+        $locked = class_exists('SocialPackages') ? SocialPackages::locked($userId) : [];
+        $meta = $this->pageRows($userId);
+        $pages = [];
+        foreach ($this->connections($userId) as $c) {
+            $id = (int) $c['id'];
+            if (self::pageState($c, !in_array($id, $inactive, true), $locked[$id] ?? null) === null) {
+                $c['auto_reply'] = !isset($meta[$id]['auto_reply']) || (int) $meta[$id]['auto_reply'] === 1;
+                $pages[$id] = $c;
+            }
+        }
+        $out['pages'] = count($pages);
+        if (!$pages) {
+            return $out;
+        }
         $storyFilter = SocialPostService::proSchema() ? " AND (sp.post_format IS NULL OR sp.post_format <> 'story')" : '';
         $rows = $this->db->query(
-            "SELECT t.id AS target_id, t.external_post_id, c.id AS connection_id, c.platform, c.access_token, c.external_location_id
+            "SELECT t.id AS target_id, t.external_post_id, t.platform_connection_id AS connection_id, sp.content
                FROM social_post_targets t
                JOIN social_posts sp ON sp.id = t.social_post_id
-               JOIN platform_connections c ON c.id = t.platform_connection_id
               WHERE sp.user_id = ? AND t.status = 'published' AND t.external_post_id IS NOT NULL AND t.external_post_id <> ''
-                AND c.platform IN ('facebook','instagram') AND c.status = 'connected'
+                AND t.platform_connection_id IN (" . implode(',', array_keys($pages)) . ")
                 AND t.published_at >= DATE_SUB(NOW(), INTERVAL 30 DAY){$storyFilter}
               ORDER BY t.published_at DESC LIMIT " . max(1, min(40, $maxTargets)),
             [$userId]
         ) ?: [];
-        $enc = new Encryption();
-        $hotSamples = [];
+        $objects = [];
+        $known = [];
+        foreach ($rows as $r) {
+            $k = (int) $r['connection_id'] . '|' . $r['external_post_id'];
+            if (!isset($known[$k])) { // نفس المنشور ممكن يتكرر (إعادة نشر/أكتر من target)
+                $known[$k] = true;
+                $objects[] = ['conn' => (int) $r['connection_id'], 'object' => (string) $r['external_post_id'], 'target' => (int) $r['target_id'], 'excerpt' => null, 'permalink' => null];
+            }
+        }
         $settings = $this->privateReady() ? $this->settings($userId) : null;
         // الرد الخاص التلقائي ميزة في الباقة: لو الباقة نزلت بيقف لوحده (الإعداد بيفضل محفوظ)
         if ($settings && $settings['auto_private'] && class_exists('SocialPackages') && !SocialPackages::has($userId, 'auto_private')) {
             $settings['auto_private'] = false;
         }
-        $autoSent = 0;
-        foreach ($rows as $r) {
-            $platform = (string) $r['platform'];
-            if (isset($out['errors'][$platform]) && $out['needs_permission']) {
-                continue; // الصلاحية ناقصة على المنصة دي: ما نكررش نفس الخطأ لكل منشور
+        $enc = new Encryption();
+        $tokens = [];
+        $token = static function (array $page) use ($enc, &$tokens): ?string {
+            $id = (int) $page['id'];
+            if (!array_key_exists($id, $tokens)) {
+                try {
+                    $tokens[$id] = $enc->decrypt((string) $page['access_token']);
+                } catch (Throwable $e) {
+                    $tokens[$id] = null;
+                }
             }
-            try {
-                $token = $enc->decrypt((string) $r['access_token']);
-            } catch (Throwable $e) {
+            return $tokens[$id];
+        };
+        // المنشورات المباشرة: آخر كام منشور لكل صفحة (اللي اتسحبت من زمان الأول)، من غير اللي اتنشر من هنا
+        $order = array_keys($pages);
+        usort($order, static fn ($a, $b) => strcmp((string) ($meta[$a]['last_sync_at'] ?? ''), (string) ($meta[$b]['last_sync_at'] ?? '')));
+        $pageErr = [];
+        $since = time() - 30 * 86400;
+        foreach (array_slice($order, 0, self::DIRECT_PAGES_PER_SYNC) as $id) {
+            $page = $pages[$id];
+            $tk = $token($page);
+            if ($tk === null || (string) $page['external_location_id'] === '') {
                 continue;
             }
-            $res = $this->api($token)->getObjectComments($platform, (string) $r['external_post_id'], $token, 50);
+            $api = $this->api($tk);
+            $res = $page['platform'] === 'instagram'
+                ? $api->getInstagramRecentMedia((string) $page['external_location_id'], $tk, self::DIRECT_POSTS_PER_PAGE * 2)
+                : $api->getFacebookPublishedPosts((string) $page['external_location_id'], $tk, self::DIRECT_POSTS_PER_PAGE * 2);
+            if (empty($res['success'])) {
+                // صلاحية ناقصة = لازم العميل يعرف؛ أي عطل تاني بنكمّل بمنشورات المنصة ونحاول المرة الجاية
+                if (in_array((string) ($res['category'] ?? ''), [MetaApiError::PERMISSION, MetaApiError::TOKEN], true)) {
+                    $out['needs_permission'] = true;
+                    $pageErr[$id] = self::readableError($res, '');
+                } else {
+                    Logger::info('Social inbox: page posts listing failed', ['connection_id' => $id, 'error' => (string) ($res['error'] ?? '')]);
+                }
+                continue;
+            }
+            $n = 0;
+            foreach ((array) ($res['posts'] ?? []) as $p) {
+                $pid = (string) ($p['id'] ?? '');
+                $ts = !empty($p['created_time']) ? strtotime((string) $p['created_time']) : false;
+                if ($pid === '' || ($ts && $ts < $since) || isset($known[$id . '|' . $pid])) {
+                    continue;
+                }
+                $known[$id . '|' . $pid] = true;
+                $objects[] = ['conn' => $id, 'object' => $pid, 'target' => null, 'excerpt' => mb_substr(trim((string) ($p['message'] ?? '')), 0, 290), 'permalink' => $p['permalink_url'] ?? null];
+                if (++$n >= self::DIRECT_POSTS_PER_PAGE) {
+                    break;
+                }
+            }
+        }
+        $hotSamples = [];
+        $autoSent = 0;
+        $checked = [];
+        $extra = $this->pagesReady();
+        foreach ($objects as $o) {
+            $page = $pages[$o['conn']];
+            $platform = (string) $page['platform'];
+            if (isset($pageErr[$o['conn']]) && $out['needs_permission']) {
+                continue; // الصلاحية ناقصة على الصفحة دي: ما نكررش نفس الخطأ لكل منشور
+            }
+            $tk = $token($page);
+            if ($tk === null) {
+                continue;
+            }
+            $res = $this->api($tk)->getObjectComments($platform, $o['object'], $tk, 50);
             $out['checked']++;
+            $checked[$o['conn']] = ($checked[$o['conn']] ?? 0) + 1;
             if (!$res['success']) {
                 $cat = (string) ($res['category'] ?? '');
                 if (in_array($cat, [MetaApiError::PERMISSION, MetaApiError::TOKEN], true)) {
                     $out['needs_permission'] = true;
                 }
-                $out['errors'][$platform] = self::readableError($res, 'تعذر قراءة التعليقات من Meta دلوقتي (عطل مؤقت أو مشكلة اتصال). هنحاول تاني تلقائيًا.');
+                $pageErr[$o['conn']] = self::readableError($res, 'تعذر قراءة التعليقات من Meta دلوقتي (عطل مؤقت أو مشكلة اتصال). هنحاول تاني تلقائيًا.');
                 continue;
             }
             foreach ($res['comments'] as $c) {
                 // تعليقات الصفحة نفسها (ردودنا أو أول تعليق) مش رسايل جمهور
-                if ($c['author_id'] !== '' && $c['author_id'] === (string) $r['external_location_id']) {
+                if ($c['author_id'] !== '' && $c['author_id'] === (string) $page['external_location_id']) {
                     continue;
                 }
                 if (trim($c['message']) === '') {
@@ -147,9 +398,9 @@ final class SocialCommentInbox
                 $intent = self::classify($c['message']);
                 $ts = $c['created_time'] ? strtotime((string) $c['created_time']) : false;
                 // اترد عليه = الصفحة نفسها ردّت (من المنصة أو من تطبيق فيسبوك/إنستجرام مباشرة)، مش أي رد من الجمهور
-                $pageReplied = in_array((string) $r['external_location_id'], (array) ($c['reply_author_ids'] ?? []), true);
+                $pageReplied = in_array((string) $page['external_location_id'], (array) ($c['reply_author_ids'] ?? []), true);
                 $status = $c['hidden'] ? 'hidden' : ($pageReplied ? 'replied' : 'new');
-                $exists = $this->db->query('SELECT id FROM social_comments WHERE platform_connection_id = ? AND external_comment_id = ? LIMIT 1', [(int) $r['connection_id'], $c['id']]);
+                $exists = $this->db->query('SELECT id FROM social_comments WHERE platform_connection_id = ? AND external_comment_id = ? LIMIT 1', [$o['conn'], $c['id']]);
                 if ($exists) {
                     // لو الفريق ردّ أو أخفى من تطبيق Meta مباشرة نقفل التعليق هنا كمان
                     $this->db->query(
@@ -158,16 +409,19 @@ final class SocialCommentInbox
                     );
                     continue;
                 }
-                $this->db->query(
-                    'INSERT INTO social_comments (user_id, platform_connection_id, target_id, platform, external_comment_id, external_object_id, author_name, author_id, message, commented_at, like_count, intent, status)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                    [$userId, (int) $r['connection_id'], (int) $r['target_id'], $platform, $c['id'], (string) $r['external_post_id'], mb_substr($c['author_name'], 0, 190) ?: null, $c['author_id'] ?: null,
-                     mb_substr($c['message'], 0, 5000), $ts ? gmdate('Y-m-d H:i:s', $ts) : null, $c['like_count'], $intent, $status]
-                );
+                $cols = 'user_id, platform_connection_id, target_id, platform, external_comment_id, external_object_id, author_name, author_id, message, commented_at, like_count, intent, status';
+                $vals = [$userId, $o['conn'], $o['target'], $platform, $c['id'], $o['object'], mb_substr($c['author_name'], 0, 190) ?: null, $c['author_id'] ?: null,
+                         mb_substr($c['message'], 0, 5000), $ts ? gmdate('Y-m-d H:i:s', $ts) : null, $c['like_count'], $intent, $status];
+                if ($extra) {
+                    $cols .= ', post_excerpt, post_permalink';
+                    $vals[] = $o['excerpt'] !== null && $o['excerpt'] !== '' ? $o['excerpt'] : null;
+                    $vals[] = $o['permalink'] ? mb_substr((string) $o['permalink'], 0, 600) : null;
+                }
+                $this->db->query('INSERT INTO social_comments (' . $cols . ') VALUES (' . implode(',', array_fill(0, count($vals), '?')) . ')', $vals);
                 $out['new']++;
                 $newId = (int) $this->db->getConnection()->lastInsertId();
-                // رد خاص تلقائي (لو العميل مفعّله): العميل اللي بيسأل عن السعر بيوصله الرد في الخاص فورًا
-                if ($status === 'new' && $settings && $settings['auto_private'] && in_array($intent, $settings['auto_intents'], true)
+                // رد خاص تلقائي (لو العميل مفعّله على الصفحة دي): العميل اللي بيسأل عن السعر بيوصله الرد في الخاص فورًا
+                if ($status === 'new' && $settings && $settings['auto_private'] && $page['auto_reply'] && in_array($intent, $settings['auto_intents'], true)
                     && $ts && $ts > time() - 6 * 86400 && $autoSent < self::AUTO_PER_SYNC) {
                     try {
                         $this->privateReply($userId, $newId, null, true);
@@ -182,6 +436,14 @@ final class SocialCommentInbox
                     $out['hot']++;
                     $hotSamples[] = mb_substr($c['message'], 0, 60);
                 }
+            }
+        }
+        foreach ($pageErr as $id => $msg) {
+            $out['errors'][$pages[$id]['platform']] = $msg;
+        }
+        foreach ($pages as $id => $_) {
+            if (isset($checked[$id]) || isset($pageErr[$id])) {
+                $this->notePage($userId, $id, $checked[$id] ?? 0, $pageErr[$id] ?? null);
             }
         }
         if ($out['hot'] > 0 && class_exists('Notification')) {
@@ -326,10 +588,14 @@ final class SocialCommentInbox
     }
 
     /** قائمة التعليقات: الأولوية (عملاء محتملين) الأول، وبعدين الأحدث */
-    public function list(int $userId, string $status = 'open', string $intent = '', int $limit = 60): array
+    public function list(int $userId, string $status = 'open', string $intent = '', int $limit = 60, int $connectionId = 0): array
     {
         $where = ['sc.user_id = ?'];
         $args = [$userId];
+        if ($connectionId > 0) {
+            $where[] = 'sc.platform_connection_id = ?';
+            $args[] = $connectionId;
+        }
         if ($status === 'open') {
             $where[] = "sc.status = 'new'";
         } elseif (in_array($status, ['new', 'replied', 'hidden', 'done'], true)) {
@@ -342,7 +608,7 @@ final class SocialCommentInbox
         }
         $rows = $this->db->query(
             "SELECT sc.id, sc.platform, sc.author_name, sc.message, sc.commented_at, sc.like_count, sc.intent, sc.status, sc.ai_suggestion, sc.reply_text, sc.replied_at, " . ($this->privateReady() ? 'sc.private_replied_at, sc.private_reply_text, sc.auto_handled,' : '') . "
-                    c.external_location_name AS page_name, sp.content AS post_content, pm.permalink
+                    sc.platform_connection_id AS page_id, c.external_location_name AS page_name, " . ($this->pagesReady() ? 'COALESCE(sp.content, sc.post_excerpt) AS post_content, COALESCE(pm.permalink, sc.post_permalink) AS permalink' : 'sp.content AS post_content, pm.permalink') . "
                FROM social_comments sc
                LEFT JOIN platform_connections c ON c.id = sc.platform_connection_id
                LEFT JOIN social_post_targets t ON t.id = sc.target_id

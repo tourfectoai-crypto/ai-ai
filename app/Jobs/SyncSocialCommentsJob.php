@@ -22,13 +22,15 @@ class SyncSocialCommentsJob implements QueueJobInterface
             if (!$inbox->ready()) {
                 return;
             }
+            // كل عميل عنده صفحة فيسبوك/إنستجرام مربوطة (حتى لو بينشر من Meta مباشرة)، اللي اتسحب من زمان الأول
             $users = Database::getInstance()->query(
-                "SELECT sp.user_id, MAX(COALESCE(sc.last_fetch, '2000-01-01')) AS last_fetch
-                   FROM social_post_targets t
-                   JOIN social_posts sp ON sp.id = t.social_post_id
-                   LEFT JOIN (SELECT user_id, MAX(fetched_at) AS last_fetch FROM social_comments GROUP BY user_id) sc ON sc.user_id = sp.user_id
-                  WHERE t.status = 'published' AND t.published_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-                  GROUP BY sp.user_id ORDER BY last_fetch ASC LIMIT " . self::USERS_PER_RUN
+                "SELECT u.user_id, COALESCE(MAX(sc.fetched_at), '2000-01-01') AS last_fetch
+                   FROM (SELECT DISTINCT COALESCE(w.user_id, c.user_id) AS user_id
+                           FROM platform_connections c LEFT JOIN websites w ON w.id = c.website_id
+                          WHERE c.platform IN ('facebook','instagram') AND c.status = 'connected') u
+                   LEFT JOIN social_comments sc ON sc.user_id = u.user_id
+                  WHERE u.user_id IS NOT NULL
+                  GROUP BY u.user_id ORDER BY last_fetch ASC LIMIT " . self::USERS_PER_RUN
             ) ?: [];
             foreach ($users as $u) {
                 try {

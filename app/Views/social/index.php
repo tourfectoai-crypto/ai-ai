@@ -110,7 +110,11 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
     <!-- ============ صندوق التعليقات ============ -->
     <section class="sp-panel" data-panel="inbox" hidden>
         <div class="p-card">
+            <div class="ib-pages" id="ibPages" hidden></div>
             <div class="p-toolbar sp-bar">
+                <select id="ibPage" class="p-select" aria-label="<?= $t('الصفحة', 'Page') ?>" hidden>
+                    <option value=""><?= $t('كل الصفحات', 'All pages') ?></option>
+                </select>
                 <select id="ibStatus" class="p-select" aria-label="<?= $t('الحالة', 'Status') ?>">
                     <option value="open"><?= $t('محتاجة رد', 'Needs reply') ?></option>
                     <option value="replied"><?= $t('اترد عليها', 'Replied') ?></option>
@@ -139,6 +143,10 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
                     <label class="sp-radio"><input type="checkbox" value="price" checked> <?= $t('أسئلة السعر', 'Price questions') ?></label>
                     <label class="sp-radio"><input type="checkbox" value="booking" checked> <?= $t('طلبات الحجز/التفاصيل', 'Booking / details requests') ?></label>
                     <label class="sp-radio"><input type="checkbox" value="question"> <?= $t('الأسئلة العامة', 'General questions') ?></label>
+                </div>
+                <div class="sp-field" id="ibAutoPagesWrap" hidden>
+                    <div class="sp-row" style="justify-content:space-between"><b><?= $t('الصفحات اللي يرد عليها', 'Pages it replies on') ?></b><span class="sp-row sp-gap-s"><button type="button" class="p-btn ghost xs" data-ap-all="1"><?= $t('الكل', 'All') ?></button><button type="button" class="p-btn ghost xs" data-ap-all="0"><?= $t('ولا واحدة', 'None') ?></button></span></div>
+                    <div class="ib-ap" id="ibAutoPages"></div>
                 </div>
                 <label class="sp-field"><?= $t('الرسالة الخاصة', 'Private message') ?> <span class="p-cell-muted sp-small"><?= $t('متغيرات: {name} الاسم، {company} الشركة، {link} رابط الحجز', 'Variables: {name}, {company}, {link}') ?></span><textarea id="ibTemplate" rows="4" class="p-select" maxlength="1500"></textarea></label>
                 <label class="sp-field"><?= $t('الرد العلني القصير', 'Short public reply') ?><input type="text" id="ibAck" class="p-select" maxlength="300"></label>

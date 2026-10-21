@@ -861,11 +861,12 @@
     };
     async function loadInbox() {
         const list = $('ibList');
-        const qs = new URLSearchParams({ status: $('ibStatus').value, intent: $('ibIntent').value });
+        const qs = new URLSearchParams({ status: $('ibStatus').value, intent: $('ibIntent').value, page: $('ibPage').value });
         const res = await fetchJSON('/api/social/inbox?' + qs);
         if (!res.success) { list.innerHTML = '<div class="alert alert-danger">' + esc(res.error || T('تعذر التحميل', 'Could not load')) + '</div>'; return; }
         const d = res.data;
         paintBadge(d.counts);
+        if (d.pages) { IB.pages = d.pages; paintInboxPages(); }
         if (!d.installed) {
             list.innerHTML = '<div class="alert alert-warning">' + T('صندوق التعليقات محتاج تشغيل ملف قاعدة البيانات database/migrations/2026_10_20_000001_social_pro.sql مرة واحدة.', 'The comments inbox needs database/migrations/2026_10_20_000001_social_pro.sql to be run once.') + '</div>';
             return;
@@ -879,7 +880,7 @@
             const it = INTENT[c.intent] || INTENT.other;
             const done = c.status !== 'new';
             return '<article class="ib-item ' + (done ? 'done' : '') + '" data-id="' + c.id + '">'
-                + '<div class="ib-head"><span class="ib-tag ' + it[2] + '">' + it[0] + ' ' + it[1] + '</span><b>' + esc(c.author_name || T('مستخدم', 'User')) + '</b><span class="p-cell-muted">' + (PF[c.platform] || '') + ' ' + esc(c.page_name || '') + ' · ' + esc(c.commented_at ? spLocal(c.commented_at) : '') + '</span>' + (c.like_count ? '<span class="p-cell-muted">' + IC('thumb') + ' ' + nf(c.like_count) + '</span>' : '') + '</div>'
+                + '<div class="ib-head"><span class="ib-tag ' + it[2] + '">' + it[0] + ' ' + it[1] + '</span><b>' + esc(c.author_name || T('مستخدم', 'User')) + '</b><span class="p-cell-muted ib-on">' + (pageOf(c.page_id) ? av(pageOf(c.page_id), 20) : (PF[c.platform] || '')) + ' ' + esc(c.page_name || '') + ' · ' + esc(c.commented_at ? spLocal(c.commented_at) : '') + '</span>' + (c.like_count ? '<span class="p-cell-muted">' + IC('thumb') + ' ' + nf(c.like_count) + '</span>' : '') + '</div>'
                 + '<div class="ib-msg">' + esc(c.message) + '</div>'
                 + (c.post_content ? '<div class="ib-post p-cell-muted">↳ ' + esc(c.post_content) + (safeUrl(c.permalink) ? ' <a href="' + esc(safeUrl(c.permalink)) + '" target="_blank" rel="noopener">' + T('افتح المنشور ' + IC('external') + '', 'Open post ' + IC('external') + '') + '</a>' : '') + '</div>' : '')
                 + (c.private_replied_at ? '<div class="ib-reply-done">' + IC('mail') + ' ' + (+c.auto_handled ? T('اتبعتله رسالة خاصة تلقائيًا: ', 'Auto private message sent: ') : T('اتبعتله رسالة خاصة: ', 'Private message sent: ')) + esc((c.private_reply_text || '').slice(0, 160)) + '</div>' : '')
@@ -893,6 +894,68 @@
                 + '</article>';
         }).join('');
     }
+    // ---- الصفحات اللي الصندوق شغال عليها (بيسحب تعليقاتها ويرد عليها)
+    const IB = { pages: [], auto: false };
+    const pageOf = id => IB.pages.find(p => +p.id === +id);
+    const PSTATE = {
+        reconnect: [T('محتاجة إعادة ربط', 'Needs reconnecting'), 'bad'],
+        paused: [T('موقوفة من «الحسابات»', 'Paused in Accounts'), 'mute'],
+        locked: [T('فوق حد باقتك', 'Over your plan limit'), 'warm']
+    };
+    const pgName = p => p.name || p.username || PN[p.platform];
+    function paintInboxPages() {
+        const box = $('ibPages'), sel = $('ibPage');
+        const pages = IB.pages;
+        box.hidden = false;
+        if (!pages.length) {
+            box.innerHTML = '<div class="alert alert-warning sp-small">' + IC('alert') + ' ' + T('مفيش صفحة فيسبوك أو حساب إنستجرام مربوط، فالصندوق مش بيسحب تعليقات من أي مكان.', 'No Facebook page or Instagram account is connected, so the inbox has nowhere to fetch comments from.') + ' <a href="#accounts">' + T('اربط صفحاتك', 'Connect your pages') + '</a></div>';
+            sel.hidden = true;
+            return;
+        }
+        const live = pages.filter(p => !p.state);
+        const autoN = live.filter(p => p.auto_reply).length;
+        box.innerHTML = '<div class="ib-pages-h"><b>' + IC('chat') + ' ' + T('الصفحات اللي الصندوق شغال عليها', 'Pages the inbox works on') + '</b> <span class="p-cell-muted sp-small">'
+            + nf(live.length) + T(' من ', ' of ') + nf(pages.length) + T(' بتتسحب تعليقاتها', ' are being read')
+            + (IB.auto ? ' · ' + IC('bot', 13) + ' ' + T('الرد التلقائي شغال على ', 'Auto-reply on ') + nf(autoN) : '') + '</span></div>'
+            + '<div class="ib-pg-list">' + pages.map(p => {
+                const st = p.state && PSTATE[p.state];
+                const on = $('ibPage').value === String(p.id);
+                const tip = st ? st[0] : (p.last_error ? p.last_error : (p.last_sync_at ? T('آخر سحب: ', 'Last fetched: ') + spLocal(p.last_sync_at) : T('لسه ما اتسحبتش - اضغط «اسحب التعليقات الجديدة»', 'Not fetched yet - press "Fetch new comments"')));
+                const badge = st ? '<span class="ib-st ' + st[1] + '">' + st[0] + '</span>'
+                    : p.last_error ? '<span class="ib-st bad">' + IC('alert', 12) + ' ' + T('خطأ في السحب', 'Fetch error') + '</span>'
+                    : p.open ? '<span class="ib-st hot">' + nf(p.open) + ' ' + T('محتاجة رد', 'need reply') + '</span>'
+                    : '<span class="ib-st ok">' + IC('check', 12) + ' ' + T('شغالة', 'Active') + '</span>';
+                const bot = !st && IB.auto && p.auto_reply ? ' <span class="ib-st bot" title="' + T('الرد الخاص التلقائي شغال على الصفحة دي', 'Automatic private reply is on for this page') + '">' + IC('bot', 12) + ' ' + T('رد تلقائي', 'Auto') + '</span>' : '';
+                return '<button type="button" class="ib-pg' + (on ? ' on' : '') + (st ? ' off' : '') + '" data-pg="' + p.id + '" title="' + esc(tip) + '" aria-pressed="' + on + '">'
+                    + av(p, 30) + '<span class="ib-pg-t"><b>' + esc(pgName(p)) + '</b><small>' + badge + bot + '</small></span></button>';
+            }).join('') + '</div>'
+            + '<div class="p-cell-muted sp-small">' + T('بيسحب تعليقات آخر 30 يوم من المنشورات اللي اتنشرت من هنا ومن آخر منشورات كل صفحة على فيسبوك/إنستجرام نفسه. اضغط على صفحة عشان تشوف تعليقاتها بس.', 'Fetches the last 30 days of comments from posts published here and from each page\'s latest posts on Facebook/Instagram. Click a page to see only its comments.')
+            + (pages.some(p => p.state) ? ' ' + T('الصفحات الباهتة مش بيتسحب منها ولا بيترد عليها: ', 'Faded pages are not read or replied on: ') + '<a href="#accounts">' + T('إدارة الصفحات', 'Manage pages') + '</a>' : '') + '</div>';
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">' + T('كل الصفحات', 'All pages') + '</option>' + pages.map(p => '<option value="' + p.id + '">' + esc((p.platform === 'instagram' ? 'IG · ' : 'FB · ') + pgName(p)) + (p.open ? ' (' + nf(p.open) + ')' : '') + '</option>').join('');
+        sel.value = pages.some(p => String(p.id) === cur) ? cur : '';
+        sel.hidden = pages.length < 2;
+    }
+    $('ibPages').addEventListener('click', e => {
+        const b = e.target.closest('[data-pg]'); if (!b) return;
+        const p = pageOf(b.dataset.pg);
+        if (p && p.state) { location.hash = '#accounts'; return; }
+        $('ibPage').value = $('ibPage').value === b.dataset.pg ? '' : b.dataset.pg;
+        loadInbox();
+    });
+    $('ibPage').addEventListener('change', loadInbox);
+    function paintAutoPages() {
+        const pages = IB.pages;
+        $('ibAutoPagesWrap').hidden = !pages.length;
+        $('ibAutoPages').innerHTML = pages.map(p => {
+            const st = p.state && PSTATE[p.state];
+            return '<label class="ib-ap-it' + (st ? ' off' : '') + '"><input type="checkbox" value="' + p.id + '"' + (p.auto_reply && !st ? ' checked' : '') + (st ? ' disabled' : '') + '>'
+                + av(p, 26) + '<span><b>' + esc(pgName(p)) + '</b><small class="p-cell-muted">' + (st ? st[0] : PN[p.platform]) + '</small></span></label>';
+        }).join('');
+    }
+    document.querySelectorAll('[data-ap-all]').forEach(b => b.addEventListener('click', () => {
+        document.querySelectorAll('#ibAutoPages input:not(:disabled)').forEach(cb => { cb.checked = b.dataset.apAll === '1'; });
+    }));
     function paintBadge(counts) {
         const b = $('spInboxBadge');
         const n = counts ? +counts.open : 0;
@@ -942,14 +1005,19 @@
         document.querySelectorAll('#ibIntents input').forEach(cb => { cb.checked = (d.auto_intents || []).includes(cb.value); });
         $('ibTemplate').value = d.private_template || '';
         $('ibAck').value = d.public_ack || '';
+        IB.auto = !!d.auto_private && d.allowed !== false;
+        if (d.pages) IB.pages = d.pages;
+        paintAutoPages();
+        paintInboxPages();
         const st = $('ibAutoState');
-        st.textContent = d.auto_private ? T('مفعّل', 'On') : T('مقفول', 'Off');
-        st.classList.toggle('hot', !!d.auto_private);
+        const autoN = IB.pages.filter(p => !p.state && p.auto_reply).length;
+        st.textContent = IB.auto ? T('مفعّل على ', 'On for ') + nf(autoN) + T(' صفحة', autoN === 1 ? ' page' : ' pages') : d.auto_private ? T('مش في باقتك', 'Not in your plan') : T('مقفول', 'Off');
+        st.classList.toggle('hot', IB.auto);
         if (!d.installed) $('ibSaveSettings').disabled = true;
     }
     $('ibSaveSettings').addEventListener('click', async () => {
         const btn = $('ibSaveSettings'); btn.disabled = true;
-        const res = await jsonPost('/api/social/inbox-settings', { auto_private: $('ibAuto').checked, auto_intents: [...document.querySelectorAll('#ibIntents input:checked')].map(cb => cb.value), private_template: $('ibTemplate').value, public_ack: $('ibAck').value });
+        const res = await jsonPost('/api/social/inbox-settings', { auto_private: $('ibAuto').checked, auto_intents: [...document.querySelectorAll('#ibIntents input:checked')].map(cb => cb.value), private_template: $('ibTemplate').value, public_ack: $('ibAck').value, auto_pages: IB.pages.length ? [...document.querySelectorAll('#ibAutoPages input:checked')].map(cb => +cb.value) : undefined });
         btn.disabled = false;
         if (res.success) { P.toast(T('اتحفظت الإعدادات ✔', 'Settings saved ✔'), 'success'); loadInboxSettings(); } else P.toast(res.error || T('تعذر الحفظ', 'Could not save'), 'error');
     });
@@ -963,7 +1031,7 @@
         note.innerHTML = r.needs_permission
             ? '<div class="alert alert-warning">' + T('Meta رفضت قراءة التعليقات: الصلاحيات ناقصة. شوف تبويب «الحسابات» ← «ليه صندوق التعليقات مش شغال؟».', 'Meta refused to read comments: missing permissions. See Accounts → "Why don\'t the comments inbox… work?".') + (Object.values(r.errors || {})[0] ? '<div class="p-cell-muted sp-small">' + esc(Object.values(r.errors)[0]) + '</div>' : '') + '</div>'
             : (Object.keys(r.errors || {}).length ? '<div class="alert alert-warning sp-small">' + esc(Object.values(r.errors).join(' | ')) + '</div>' : '');
-        P.toast(T('اتفحص ', 'Checked ') + nf(r.checked) + T(' منشور · ', ' posts · ') + nf(r.new) + T(' تعليق جديد', ' new comments') + (r.auto_private ? T(' · اتبعت ', ' · ') + nf(r.auto_private) + T(' رد خاص تلقائي', ' auto private replies') : ''), 'success');
+        P.toast(T('اتفحص ', 'Checked ') + nf(r.checked) + T(' منشور على ', ' posts on ') + nf(r.pages || 0) + T(' صفحة · ', ' pages · ') + nf(r.new) + T(' تعليق جديد', ' new comments') + (r.auto_private ? T(' · اتبعت ', ' · ') + nf(r.auto_private) + T(' رد خاص تلقائي', ' auto private replies') : ''), 'success');
         loadInbox();
     });
 
