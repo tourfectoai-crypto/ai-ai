@@ -20,7 +20,15 @@ class ClientNavigation
                 'competitor_intelligence'=>[$l('تحليل المنافسين','Competitor research'),'/competitor-intelligence'],
                 'outreach'=>[$l('العلاقات والروابط','Outreach and links'),'/outreach']]],
             'social'=>[$l('السوشيال ميديا','Social media'),'smartphone',[
-                'social'=>[$l('خطة الشهر والنشر','Monthly plan and publishing'),'/social'],
+                // أقسام صفحة السوشيال نفسها بتنزل من زرار الخدمة في الهيدر (بدل تبويبات جوه الصفحة)
+                'social'=>[$l('السوشيال ميديا','Social media'),'/social',false,[
+                    'overview'=>[$l('نظرة عامة','Overview'),'/social#overview','overview'],
+                    'posts'=>[$l('المنشورات والتقويم','Posts & calendar'),'/social#posts','posts'],
+                    'inbox'=>[$l('صندوق التعليقات','Comments inbox'),'/social#inbox','chat'],
+                    'competitors'=>[$l('المنافسين','Competitors'),'/social#competitors','target'],
+                    'plan'=>[$l('الخطة الشهرية','Monthly plan'),'/social#plan','planCheck'],
+                    'accounts'=>[$l('الحسابات','Accounts'),'/social#accounts','link'],
+                    'package'=>[$l('الباقة','Plan'),'/social#package','gem']]],
                 'whatsapp_marketing'=>['WhatsApp Marketing','/whatsapp-marketing'],
                 'email_marketing'=>[$l('تسويق البريد','Email marketing'),'/email-marketing']]],
             'ads'=>[$l('الإعلانات','Advertising'),'megaphone',[
@@ -68,8 +76,21 @@ class ClientNavigation
         foreach([['_integrations',$ar?'الحسابات والصلاحيات':'Accounts and permissions','link','/integrations'],['business_hub',$ar?'بيانات الشركة':'Company details','briefcase','/business-hub#bhForm'],['_subscription',$ar?'الاشتراك والفواتير':'Subscription and billing','credit-card','/subscription'],['_profile',$ar?'إعدادات الحساب':'Account settings','user','/profile/settings'],['agency',$ar?'إدارة الوكالة':'Agency management','building','/agency'],['_help',$ar?'الدعم':'Support','help-circle','/help/contact']] as [$key,$label,$icon,$url]){if(!self::enabled($key,$flags))continue;$on=$key===$active&&$key!=='business_hub';$html.='<a class="panel-nav-link'.($on?' active':'').'" href="'.self::esc($url).'" data-search="'.self::esc($label).'"><span class="ic">'.icon_svg($icon).'</span><span class="lbl">'.self::esc($label).'</span></a>';}
         return $html.'</div></div><div class="panel-nav-essentials">'.(self::enabled('ai_assistant',$flags)?'<a class="panel-nav-link" href="/ai-assistant"><span class="ic">'.icon_svg('sparkles').'</span><span class="lbl">'.($ar?'اسأل المساعد':'Ask the assistant').'</span></a>':'').'</div>';
     }
+    /** زرار خدمة في الهيدر بينزل منه أقسامها (القسم الحالي بيتعلّم من الـ hash في الصفحة) */
+    private static function dropdown(string $label,string $url,array $children,bool $on,bool $ar): string{
+        $items='';
+        foreach($children as $sec=>[$cl,$cu]){$items.='<a role="menuitem" class="tf-dd-item" data-sec="'.self::esc((string)$sec).'" href="'.self::esc($cu).'">'.self::esc($cl).'</a>';}
+        static $css=false;$style='';
+        if(!$css){$css=true;$style='<style>.tf-dd{position:relative}.tf-dd>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px}.tf-dd>summary::-webkit-details-marker{display:none}.tf-dd>summary .tf-dd-cur{opacity:.75;font-weight:400}.tf-dd>summary::after{content:"";width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);margin-top:-4px;transition:transform .15s}.tf-dd[open]>summary::after{transform:rotate(-135deg);margin-top:3px}.tf-dd-menu{position:absolute;z-index:40;inset-inline-start:0;top:calc(100% + 6px);min-width:230px;padding:6px;display:flex;flex-direction:column;gap:2px;background:var(--panel-card-bg,#fff);border:1px solid var(--panel-border,#e5e7eb);border-radius:12px;box-shadow:0 12px 32px rgba(15,23,42,.14)}.tf-dd-item{padding:9px 12px;border-radius:8px;color:var(--panel-text);text-decoration:none;font-size:14px}.tf-dd-item:hover,.tf-dd-item:focus-visible{background:rgba(127,127,127,.1);outline:none}.tf-dd-item.on{background:var(--panel-accent-light,rgba(37,99,235,.1));color:var(--panel-accent);font-weight:600}</style>'
+            .'<script>(function(){function mark(){var h=(location.hash||"#overview").slice(1);document.querySelectorAll(".tf-dd").forEach(function(d){var cur=null;d.querySelectorAll(".tf-dd-item").forEach(function(a){var on=location.pathname===a.pathname&&a.dataset.sec===h;a.classList.toggle("on",on);if(on)cur=a.textContent;});var c=d.querySelector(".tf-dd-cur");if(c)c.textContent=cur?"· "+cur:"";});}'
+            .'document.addEventListener("click",function(e){document.querySelectorAll(".tf-dd[open]").forEach(function(d){if(!d.contains(e.target)||e.target.closest(".tf-dd-item"))d.removeAttribute("open");});});'
+            .'document.addEventListener("keydown",function(e){if(e.key==="Escape")document.querySelectorAll(".tf-dd[open]").forEach(function(d){d.removeAttribute("open");d.querySelector("summary").focus();});});'
+            .'window.addEventListener("hashchange",mark);document.addEventListener("DOMContentLoaded",mark);})();</script>';}
+        return $style.'<details class="tf-dd"'.($on?' data-on="1"':'').'><summary class="p-btn outline sm'.($on?' on':'').'" aria-haspopup="menu"'.($on?' aria-current="page"':'').'>'.self::esc($label).' <span class="tf-dd-cur"></span></summary><div class="tf-dd-menu" role="menu">'.$items.'</div></details>';
+    }
     public static function workspace(string $active,bool $ar,array $flags): string{
-        foreach(self::groups($ar) as [$title,$icon,$items]){if(!array_key_exists($active,$items))continue;$links=[];$more=[];$index=0;foreach($items as $key=>$item){[$label,$url]=$item;if(!self::enabled($key,$flags)||(!empty($item[2])&&$key!==$active))continue;$on=$key===$active;$link='<a class="p-btn outline sm'.($on?' on':'').'" href="'.self::esc($url).'"'.($on?' aria-current="page"':'').'>'.self::esc($label).'</a>';if($index++<3||$on)$links[]=$link;else $more[]=$link;}
+        foreach(self::groups($ar) as [$title,$icon,$items]){if(!array_key_exists($active,$items))continue;$links=[];$more=[];$index=0;foreach($items as $key=>$item){[$label,$url]=$item;if(!self::enabled($key,$flags)||(!empty($item[2])&&$key!==$active))continue;$on=$key===$active;
+                $link=!empty($item[3])?self::dropdown($label,$url,$item[3],$on,$ar):'<a class="p-btn outline sm'.($on?' on':'').'" href="'.self::esc($url).'"'.($on?' aria-current="page"':'').'>'.self::esc($label).'</a>';if($index++<3||$on)$links[]=$link;else $more[]=$link;}
             // شريط خفيف من غير كارت ولا عنوان: اسم القسم ظاهر في القائمة الجانبية وعنوان الصفحة
             return '<nav aria-label="'.self::esc($title).'" class="panel-subnav" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px">'.implode('',$links).($more?'<details style="position:relative"><summary class="p-btn outline sm" style="list-style:none;cursor:pointer">'.($ar?'المزيد ▾':'More ▾').'</summary><div class="p-card" style="position:absolute;z-index:20;inset-inline-start:0;margin-top:6px;padding:8px;display:flex;flex-direction:column;gap:6px;min-width:220px">'.implode('',$more).'</div></details>':'').'</nav>';}
         return '';

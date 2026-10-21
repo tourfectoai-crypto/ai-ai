@@ -108,6 +108,8 @@ class SocialMediaController extends Controller
             'jsUrl' => $asset('/assets/js/social-pro.js'),
             'iconsJs' => $asset('/assets/js/sp-icons.js'),
             'deployWarning' => $this->deployWarning(),
+            // العميل بيتنقل بين أقسام السوشيال من القايمة اللي بتنزل من زرار الخدمة في الهيدر؛ الأدمن (من غير الهيدر ده) بيفضل شايف التبويبات
+            'headerNav' => !in_array($this->user['role'] ?? 'user', ['admin', 'super_admin'], true) || !empty($_SESSION['admin_customer_view']),
             'monthlyCss' => $asset('/assets/css/social-monthly-plans.css'),
             'monthlyJs' => $asset('/assets/js/social-monthly-plans.js'),
             'pickerJs' => $asset('/assets/js/site-photo-picker.js'),

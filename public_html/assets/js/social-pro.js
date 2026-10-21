@@ -78,8 +78,12 @@
             if (name === 'package') loadPackage();
         }
         if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
+        // القسم الحالي في القايمة اللي بتنزل من الهيدر
+        document.querySelectorAll('.tf-dd').forEach(d => { let cur = ''; d.querySelectorAll('.tf-dd-item').forEach(x => { const on = x.pathname === location.pathname && x.dataset.sec === name; x.classList.toggle('on', on); if (on) cur = x.textContent; }); const c = d.querySelector('.tf-dd-cur'); if (c) c.textContent = cur ? '· ' + cur : ''; });
     }
     tabs.forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+    // التنقل من القايمة اللي بتنزل من زرار السوشيال في الهيدر (روابط /social#inbox ...)
+    window.addEventListener('hashchange', () => { const h = (location.hash || '').slice(1); if (h && document.querySelector('.sp-panel[data-panel="' + h + '"]')) { showTab(h); window.scrollTo({ top: 0, behavior: 'smooth' }); } });
 
     // ================= المحرر =================
     let media = null;          // {id, file_path, is_video}

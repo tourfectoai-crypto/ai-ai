@@ -30,7 +30,7 @@ $t = static fn (string $a, string $e): string => htmlspecialchars($ar ? $a : $e,
         </div>
     </div>
 
-    <nav class="p-tabs sp-tabs" role="tablist" aria-label="<?= $t('أقسام السوشيال', 'Social sections') ?>">
+    <nav class="p-tabs sp-tabs" role="tablist" aria-label="<?= $t('أقسام السوشيال', 'Social sections') ?>"<?= !empty($headerNav) ? ' hidden' : '' ?>>
         <button class="p-tab active" role="tab" data-tab="overview" type="button"><i data-ico="overview"></i> <?= $t('نظرة عامة', 'Overview') ?></button>
         <button class="p-tab" role="tab" data-tab="posts" type="button"><i data-ico="posts"></i> <?= $t('المنشورات والتقويم', 'Posts & calendar') ?></button>
         <button class="p-tab" role="tab" data-tab="inbox" type="button"><i data-ico="chat"></i> <?= $t('صندوق التعليقات', 'Comments inbox') ?> <span class="sp-badge" id="spInboxBadge" hidden></span></button>
