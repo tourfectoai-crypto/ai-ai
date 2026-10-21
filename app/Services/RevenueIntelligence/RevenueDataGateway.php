@@ -56,33 +56,105 @@ class RevenueDataGateway
      */
     public function getRevenueTotals(int $userId, string $fromDate, string $toDate): array
     {
-        $row = $this->db->query(
-            "SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count, COUNT(DISTINCT currency) AS currency_count,
-                    MIN(currency) AS single_currency
-             FROM rev_revenue_records WHERE user_id = ? AND recorded_at >= ? AND recorded_at < ?",
+        $currencies = $this->db->query(
+            'SELECT UPPER(currency) AS currency, SUM(amount) AS total, COUNT(*) AS count FROM rev_revenue_records WHERE user_id=? AND recorded_at>=? AND recorded_at<? GROUP BY UPPER(currency)',
             [$userId, $fromDate, $toDate]
         );
-        $currencyCount = (int) ($row[0]['currency_count'] ?? 0);
-        $currencies=$this->db->query('SELECT currency,SUM(amount) total,COUNT(*) count FROM rev_revenue_records WHERE user_id=? AND recorded_at>=? AND recorded_at<? GROUP BY currency',[$userId,$fromDate,$toDate]);
+        $count = 0;
+        foreach ($currencies as $c) {
+            $count += (int) $c['count'];
+        }
+        $expr = $this->amountExpr($userId, $fromDate, $toDate);
+        if ($expr === null) {
+            // عملات مختلطة ومفيش أسعار صرف لكلها => لا نجمع أبدًا (السلوك الآمن الأصلي)
+            return [
+                'total' => null,
+                'totals_by_currency' => $currencies,
+                'count' => $count,
+                'mixed_currency' => true,
+                'currency' => null,
+                'fx_converted' => false,
+            ];
+        }
+        $total = 0.0;
+        foreach ($currencies as $c) {
+            $total += (float) $c['total'] * (float) ($expr['factors'][$c['currency']] ?? 1.0);
+        }
         return [
-            'total' => $currencyCount>1?null:(float)($row[0]['total']??0),
-            'totals_by_currency'=>$currencies,
-            'count' => (int) ($row[0]['count'] ?? 0),
-            'mixed_currency' => $currencyCount > 1,
-            'currency' => $currencyCount === 1 ? $row[0]['single_currency'] : null,
+            'total' => round($total, 2),
+            'totals_by_currency' => $currencies,
+            'count' => $count,
+            'mixed_currency' => false,
+            'currency' => $expr['currency'],
+            'fx_converted' => $expr['converted'],
+            'fx_basis' => $expr['converted'] ? 'latest' : null,
         ];
+    }
+
+    /** @var array<string, array|null> */
+    private $amountExprMemo = [];
+
+    /**
+     * v2.0 (FX): تعبير SQL موحّد لمبلغ الإيراد. لو كل العملات في الفترة
+     * ليها سعر صرف => تحويل للعملة الأساسية. لو عملة واحدة بس من غير
+     * سعر => المبلغ كما هو بعملته. لو عملات مختلطة من غير أسعار => null.
+     *
+     * @return array{sql:string,params:array,currency:?string,converted:bool,factors:array}|null
+     */
+    private function amountExpr(int $userId, string $fromDate, string $toDate): ?array
+    {
+        $key = $userId . '|' . $fromDate . '|' . $toDate;
+        if (array_key_exists($key, $this->amountExprMemo)) {
+            return $this->amountExprMemo[$key];
+        }
+        $rows = $this->db->query(
+            'SELECT DISTINCT UPPER(currency) AS currency FROM rev_revenue_records WHERE user_id=? AND recorded_at>=? AND recorded_at<?',
+            [$userId, $fromDate, $toDate]
+        );
+        $currencies = array_values(array_filter(array_map(static function ($r) {
+            return (string) $r['currency'];
+        }, $rows), 'strlen'));
+        $result = null;
+        if (class_exists('FxRateService') && class_exists('RevenueSettingsService') && !empty($currencies)) {
+            $base = RevenueSettingsService::baseCurrency($userId);
+            $factors = FxRateService::factorsTo($base, $currencies, FxRateService::latestRates($userId));
+            if ($factors !== null) {
+                $converted = false;
+                foreach ($factors as $f) {
+                    if (abs($f - 1.0) > 1e-12) {
+                        $converted = true;
+                    }
+                }
+                [$sql, $params] = $converted ? FxRateService::buildAmountSql($factors) : ['amount', []];
+                $result = ['sql' => $sql, 'params' => $params, 'currency' => $base, 'converted' => $converted, 'factors' => $factors];
+            }
+        }
+        if ($result === null && count($currencies) <= 1) {
+            $result = ['sql' => 'amount', 'params' => [], 'currency' => $currencies[0] ?? null, 'converted' => false, 'factors' => []];
+        }
+        return $this->amountExprMemo[$key] = $result;
+    }
+
+    /** العملة اللي الأرقام بترجع بيها للفترة (للعرض في الواجهة). */
+    public function getReportingCurrency(int $userId, string $fromDate, string $toDate): ?string
+    {
+        $e = $this->amountExpr($userId, $fromDate, $toDate);
+        return $e['currency'] ?? null;
     }
 
     /** سلسلة إيراد يومية (لأغراض الرسم البياني/الـ Forecast/الـ Anomaly Detection). */
     public function getDailyRevenueSeries(int $userId, string $fromDate, string $toDate): array
     {
-        if($this->getRevenueTotals($userId,$fromDate,$toDate)['mixed_currency'])return [];
+        $expr = $this->amountExpr($userId, $fromDate, $toDate);
+        if ($expr === null) {
+            return [];
+        }
         $rows = $this->db->query(
-            "SELECT DATE(recorded_at) AS d, SUM(amount) AS revenue, COUNT(*) AS records
+            "SELECT DATE(recorded_at) AS d, SUM({$expr['sql']}) AS revenue, COUNT(*) AS records
              FROM rev_revenue_records
              WHERE user_id = ? AND recorded_at >= ? AND recorded_at < ?
              GROUP BY DATE(recorded_at) ORDER BY d ASC",
-            [$userId, $fromDate, $toDate]
+            array_merge($expr['params'], [$userId, $fromDate, $toDate])
         );
         return array_map(static function ($r) {
             return ['date' => $r['d'], 'revenue' => (float) $r['revenue'], 'records' => (int) $r['records']];
@@ -92,13 +164,16 @@ class RevenueDataGateway
     /** الإيراد مجمّع حسب المصدر (booking/order/subscription/manual...) - المصدر الحقيقي الوحيد المتاح. */
     public function getRevenueBySource(int $userId, string $fromDate, string $toDate): array
     {
-        if($this->getRevenueTotals($userId,$fromDate,$toDate)['mixed_currency'])return [];
+        $expr = $this->amountExpr($userId, $fromDate, $toDate);
+        if ($expr === null) {
+            return [];
+        }
         return $this->db->query(
-            "SELECT source, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+            "SELECT source, COALESCE(SUM({$expr['sql']}), 0) AS total, COUNT(*) AS count
              FROM rev_revenue_records
              WHERE user_id = ? AND recorded_at >= ? AND recorded_at < ?
              GROUP BY source ORDER BY total DESC",
-            [$userId, $fromDate, $toDate]
+            array_merge($expr['params'], [$userId, $fromDate, $toDate])
         );
     }
 
@@ -109,13 +184,16 @@ class RevenueDataGateway
      */
     public function getRevenueRecordsWithProduct(int $userId, string $fromDate, string $toDate): array
     {
-        if($this->getRevenueTotals($userId,$fromDate,$toDate)['mixed_currency'])return [];
+        $expr = $this->amountExpr($userId, $fromDate, $toDate);
+        if ($expr === null) {
+            return [];
+        }
         return $this->db->query(
-            "SELECT source, product_name, category, amount, currency, recorded_at
+            "SELECT source, product_name, category, {$expr['sql']} AS amount, currency, recorded_at
              FROM rev_revenue_records
              WHERE user_id = ? AND recorded_at >= ? AND recorded_at < ?
              ORDER BY recorded_at ASC",
-            [$userId, $fromDate, $toDate]
+            array_merge($expr['params'], [$userId, $fromDate, $toDate])
         );
     }
 
@@ -125,14 +203,10 @@ class RevenueDataGateway
      */
     public function getRevenueSumForMonth(int $userId, string $period): ?float
     {
-        $totals=$this->getRevenueTotals($userId,$period.'-01',(new DateTimeImmutable($period.'-01'))->modify('+1 month')->format('Y-m-d'));if($totals['mixed_currency'])return null;
-        $row = $this->db->query(
-            "SELECT COALESCE(SUM(amount), 0) AS total
-             FROM rev_revenue_records
-             WHERE user_id = ? AND DATE_FORMAT(recorded_at, '%Y-%m') = ?",
-            [$userId, $period]
-        );
-        return (float) ($row[0]['total'] ?? 0);
+        $from = $period . '-01';
+        $to = (new DateTimeImmutable($from))->modify('+1 month')->format('Y-m-d');
+        $totals = $this->getRevenueTotals($userId, $from, $to);
+        return $totals['mixed_currency'] ? null : (float) ($totals['total'] ?? 0);
     }
 
     /** مجموع قيمة الصفقات المكسوبة (won) في شهر معيّن (G7) - نفس منطق تقرير CRM. */
@@ -179,19 +253,24 @@ class RevenueDataGateway
      */
     public function getMonthlyRevenueSeries(int $userId, int $months = 6, ?string $source = null): array
     {
-        if($this->getRevenueTotals($userId,date('Y-m-01',strtotime('-'.max(1,$months).' months')),date('Y-m-d H:i:s'))['mixed_currency'])return [];
-        $params = [$userId];
+        $months = max(1, $months);
+        $from = (new DateTimeImmutable('today'))->modify("-{$months} months")->format('Y-m-d');
+        $expr = $this->amountExpr($userId, $from, date('Y-m-d H:i:s', strtotime('+1 day')));
+        if ($expr === null) {
+            return [];
+        }
+        $params = array_merge($expr['params'], [$userId, $from]);
         $sourceFilter = '';
         if ($source !== null) {
             $sourceFilter = ' AND source = ?';
             $params[] = $source;
         }
         return $this->db->query(
-            "SELECT DATE_FORMAT(recorded_at, '%Y-%m') AS month, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+            "SELECT DATE_FORMAT(recorded_at, '%Y-%m') AS month, COALESCE(SUM({$expr['sql']}), 0) AS total, COUNT(*) AS count
              FROM rev_revenue_records
-             WHERE user_id = ? AND recorded_at >= DATE_SUB(CURDATE(), INTERVAL ? MONTH) {$sourceFilter}
+             WHERE user_id = ? AND recorded_at >= ? {$sourceFilter}
              GROUP BY month ORDER BY month ASC",
-            [$userId, max(1, $months), ...array_slice($params, 1)]
+            $params
         );
     }
 
@@ -711,6 +790,289 @@ class RevenueDataGateway
     public function hasComparableCurrency(int $userId): bool{
         $pdo=$this->db->getConnection();
         try{$q=$pdo->prepare("SELECT COUNT(DISTINCT currency) n,SUM(currency IS NULL OR currency='') unknown FROM (SELECT currency FROM rev_revenue_records WHERE user_id=? UNION ALL SELECT currency FROM crm_deals WHERE owner_user_id=?) x");$q->execute([$userId,$userId]);$r=$q->fetch(PDO::FETCH_ASSOC);return (int)$r['n']<=1&&(int)$r['unknown']===0;}catch(Throwable $e){return false;}
+    }
+
+
+    // ============================================================
+    // v2.0 PRO: Bookings (Tourism KPIs / Collections / Profitability) - قراءة فقط
+    // ============================================================
+
+    /**
+     * حجوزات الحساب اللي تاريخ إنشائها أو تاريخ رحلتها داخل الفترة.
+     * بنقرأ من bookings مباشرة (نفس جدول BookingEngine) - Tenant-scoped.
+     */
+    public function getBookings(int $userId, string $fromDate, string $toDate, string $dateField = 'created_at'): array
+    {
+        $col = $dateField === 'start_date' ? 'b.start_date' : 'b.created_at';
+        try {
+            return $this->db->query(
+                "SELECT b.id, b.booking_reference, b.product_id, b.customer_id, b.customer_name, b.customer_phone,
+                        b.start_date, b.adults_count, b.children_count, b.total_amount, b.currency, b.status, b.source,
+                        b.created_at, b.updated_at, COALESCE(b.amount_paid, 0) AS amount_paid, p.name AS product_name
+                 FROM bookings b
+                 LEFT JOIN crm_products p ON p.id = b.product_id AND p.user_id = b.user_id
+                 WHERE b.user_id = ? AND {$col} >= ? AND {$col} < ?
+                 ORDER BY {$col} ASC",
+                [$userId, $fromDate, $toDate]
+            );
+        } catch (Throwable $e) {
+            // عمود amount_paid اتضاف في 2026_10_09 - على نشرات أقدم نرجع بدونه
+            try {
+                return $this->db->query(
+                    "SELECT b.id, b.booking_reference, b.product_id, b.customer_id, b.customer_name, b.customer_phone,
+                            b.start_date, b.adults_count, b.children_count, b.total_amount, b.currency, b.status, b.source,
+                            b.created_at, b.updated_at, 0 AS amount_paid, p.name AS product_name
+                     FROM bookings b
+                     LEFT JOIN crm_products p ON p.id = b.product_id AND p.user_id = b.user_id
+                     WHERE b.user_id = ? AND {$col} >= ? AND {$col} < ?
+                     ORDER BY {$col} ASC",
+                    [$userId, $fromDate, $toDate]
+                );
+            } catch (Throwable $e2) {
+                return [];
+            }
+        }
+    }
+
+    /** الحجوزات المؤكدة/المكتملة اللي لسه عليها رصيد مستحق (Receivables). */
+    public function getOpenReceivables(int $userId): array
+    {
+        try {
+            return $this->db->query(
+                "SELECT b.id, b.booking_reference, b.customer_id, b.customer_name, b.customer_phone, b.start_date,
+                        b.total_amount, COALESCE(b.amount_paid, 0) AS amount_paid, b.currency, b.status, b.source,
+                        b.created_at, p.name AS product_name
+                 FROM bookings b
+                 LEFT JOIN crm_products p ON p.id = b.product_id AND p.user_id = b.user_id
+                 WHERE b.user_id = ? AND b.status IN ('confirmed','completed')
+                   AND b.total_amount > COALESCE(b.amount_paid, 0)
+                 ORDER BY b.start_date ASC
+                 LIMIT 2000",
+                [$userId]
+            );
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /** مدفوعات حقيقية اتحصّلت على حجوزات الحساب (payment_transactions الناجحة). */
+    public function getCollectedPayments(int $userId, string $fromDate, string $toDate): array
+    {
+        try {
+            return $this->db->query(
+                "SELECT DATE(t.created_at) AS d, UPPER(t.currency) AS currency, SUM(t.amount) AS total, COUNT(*) AS count
+                 FROM payment_transactions t
+                 INNER JOIN bookings b ON b.id = t.booking_id AND b.user_id = ?
+                 WHERE t.status IN ('succeeded','partially_refunded')
+                   AND t.created_at >= ? AND t.created_at < ?
+                 GROUP BY DATE(t.created_at), UPPER(t.currency)
+                 ORDER BY d ASC",
+                [$userId, $fromDate, $toDate]
+            );
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /** تكاليف المنتجات المسجّلة (revai_product_costs). */
+    public function getProductCosts(int $userId): array
+    {
+        try {
+            return $this->db->query(
+                "SELECT id, product_id, product_name, label, cost_type, amount, currency FROM revai_product_costs WHERE user_id = ? ORDER BY id ASC",
+                [$userId]
+            );
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    public function saveProductCost(int $userId, array $row): int
+    {
+        $type = in_array($row['cost_type'] ?? '', ['per_booking', 'per_traveler', 'percent_of_revenue'], true) ? $row['cost_type'] : 'per_traveler';
+        $productId = isset($row['product_id']) && (int) $row['product_id'] > 0 ? (int) $row['product_id'] : null;
+        if ($productId !== null) {
+            $own = $this->db->query('SELECT id FROM crm_products WHERE id = ? AND user_id = ? LIMIT 1', [$productId, $userId]);
+            if (empty($own)) {
+                throw new InvalidArgumentException('Product not found');
+            }
+        }
+        $currency = strtoupper(trim((string) ($row['currency'] ?? '')));
+        $this->db->query(
+            "INSERT INTO revai_product_costs (user_id, product_id, product_name, label, cost_type, amount, currency) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [$userId, $productId, $productId === null ? mb_substr(trim((string) ($row['product_name'] ?? '')), 0, 255) : null,
+             mb_substr(trim((string) ($row['label'] ?? 'cost')) ?: 'cost', 0, 120), $type, round((float) ($row['amount'] ?? 0), 2),
+             $type === 'percent_of_revenue' || !preg_match('/^[A-Z]{3}$/', $currency) ? null : $currency]
+        );
+        return (int) $this->db->getConnection()->lastInsertId();
+    }
+
+    public function deleteProductCost(int $userId, int $id): void
+    {
+        $this->db->query('DELETE FROM revai_product_costs WHERE id = ? AND user_id = ?', [$id, $userId]);
+    }
+
+    /** منتجات الحساب (للربط بالتكاليف في الواجهة). */
+    public function getProducts(int $userId): array
+    {
+        try {
+            return $this->db->query('SELECT id, name FROM crm_products WHERE user_id = ? ORDER BY name ASC LIMIT 500', [$userId]);
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * v2.0 (G9): إيراد العميل الحقيقي من سجل الإيراد المدفوع (rev_revenue_records.customer_id)
+     * - مش من الصفقات بس. محوّل للعملة الأساسية لو متاح.
+     */
+    public function getRevenueByCustomer(int $userId, string $fromDate, string $toDate, int $limit = 200): array
+    {
+        $expr = $this->amountExpr($userId, $fromDate, $toDate);
+        if ($expr === null) {
+            return [];
+        }
+        try {
+            return $this->db->query(
+                "SELECT r.customer_id, c.name AS contact_name, c.email AS contact_email,
+                        SUM({$expr['sql']}) AS revenue, COUNT(*) AS records, MIN(r.recorded_at) AS first_at, MAX(r.recorded_at) AS last_at
+                 FROM rev_revenue_records r
+                 LEFT JOIN crm_contacts c ON c.id = r.customer_id AND c.user_id = r.user_id
+                 WHERE r.user_id = ? AND r.customer_id IS NOT NULL AND r.recorded_at >= ? AND r.recorded_at < ?
+                 GROUP BY r.customer_id, c.name, c.email
+                 ORDER BY revenue DESC
+                 LIMIT " . max(1, min(1000, $limit)),
+                array_merge($expr['params'], [$userId, $fromDate, $toDate])
+            );
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * v2.0 (G9): سجلات إيراد فعلي مربوطة بعميل، بنفس شكل صفوف الصفقات
+     * المكسوبة (contact_id/value/closed_at) عشان CustomerRevenueService
+     * يستخدم نفس منطق التقسيم. السجلات السالبة (استرداد/إلغاء) بتتجمع مع
+     * الموجبة لنفس العميل.
+     */
+    public function getCustomerRevenueRows(int $userId, int $years = 3): array
+    {
+        $from = (new DateTimeImmutable('today'))->modify('-' . max(1, $years) . ' years')->format('Y-m-d');
+        $to = date('Y-m-d H:i:s', strtotime('+1 day'));
+        $expr = $this->amountExpr($userId, $from, $to);
+        if ($expr === null) {
+            return [];
+        }
+        try {
+            return $this->db->query(
+                "SELECT r.customer_id AS contact_id, {$expr['sql']} AS value, r.recorded_at AS closed_at,
+                        COALESCE(r.booking_id, r.id) AS id, r.product_name AS title,
+                        c.name AS contact_name, c.email AS contact_email
+                 FROM rev_revenue_records r
+                 INNER JOIN crm_contacts c ON c.id = r.customer_id AND c.user_id = r.user_id
+                 WHERE r.user_id = ? AND r.customer_id IS NOT NULL AND r.recorded_at >= ? AND r.recorded_at < ?
+                 ORDER BY r.recorded_at ASC",
+                array_merge($expr['params'], [$userId, $from, $to])
+            );
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /** الصفقات المغلقة (won/lost) لتدريب نموذج احتمالية الفوز. */
+    public function getClosedDealsForModel(int $userId, int $limit = 2000): array
+    {
+        try {
+            return $this->db->query(
+                "SELECT d.id, d.status, d.value, d.currency, d.stage_id, d.created_at, d.closed_at, d.lost_reason,
+                        d.contact_id, d.assigned_rep_id
+                 FROM crm_deals d
+                 WHERE d.owner_user_id = ? AND d.status IN ('won','lost') AND d.closed_at IS NOT NULL
+                 ORDER BY d.closed_at DESC LIMIT " . max(1, min(5000, $limit)),
+                [$userId]
+            );
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    // ============================================================
+    // v2.0 PRO: Stripe cash events -> rev_revenue_records (idempotent)
+    // ============================================================
+
+    /**
+     * يسجّل إيراد/استرداد نقدي من Stripe كسجل إيراد فعلي. Idempotent عبر
+     * (user_id, source, reference_id). يرجع true لو اتسجل جديد.
+     */
+    public function recordStripeRevenue(int $userId, array $row): bool
+    {
+        $source = (string) ($row['source'] ?? '');
+        $ref = (string) ($row['reference_id'] ?? '');
+        if (!in_array($source, ['stripe_invoice', 'stripe_charge', 'stripe_refund', 'stripe_dispute', 'stripe_dispute_reversal'], true) || $ref === '') {
+            return false;
+        }
+        try {
+            $exists = $this->db->query(
+                'SELECT id FROM rev_revenue_records WHERE user_id = ? AND source = ? AND reference_id = ? LIMIT 1',
+                [$userId, $source, $ref]
+            );
+            if (!empty($exists)) {
+                return false;
+            }
+            $this->db->query(
+                "INSERT INTO rev_revenue_records (user_id, source, product_name, category, reference_id, amount, currency, recorded_at, notes)
+                 VALUES (?, ?, ?, 'subscription', ?, ?, ?, ?, ?)",
+                [$userId, $source, $row['product_name'] ?? null, mb_substr($ref, 0, 100), round((float) $row['amount'], 2),
+                 strtoupper((string) ($row['currency'] ?? 'USD')), (string) ($row['recorded_at'] ?? gmdate('Y-m-d H:i:s')),
+                 mb_substr((string) ($row['notes'] ?? ''), 0, 500)]
+            );
+            if (function_exists('event')) {
+                event('revenue.updated', ['user_id' => $userId, 'amount' => (float) $row['amount'], 'source' => $source]);
+            }
+            return true;
+        } catch (Throwable $e) {
+            if (class_exists('Logger')) {
+                Logger::warning('Stripe revenue record failed', ['user_id' => $userId, 'source' => $source]);
+            }
+            return false;
+        }
+    }
+
+    /** آخر MRR مسجّل لاشتراك (لحساب فرق التوسّع/الانكماش). */
+    public function getBizSubscriptionMrr(int $userId, string $stripeSubscriptionId): ?float
+    {
+        try {
+            $rows = $this->db->query(
+                'SELECT mrr FROM biz_subscriptions WHERE user_id = ? AND stripe_subscription_id = ? LIMIT 1',
+                [$userId, $stripeSubscriptionId]
+            );
+            return isset($rows[0]) ? (float) $rows[0]['mrr'] : null;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /** تعليم اشتراك past_due عند فشل الدفع. */
+    public function markBizSubscriptionPastDue(int $userId, string $stripeSubscriptionId): void
+    {
+        if ($stripeSubscriptionId === '') {
+            return;
+        }
+        try {
+            $this->db->query(
+                "UPDATE biz_subscriptions SET status = 'past_due', last_payment_failed_at = NOW(), updated_at = NOW()
+                 WHERE user_id = ? AND stripe_subscription_id = ?",
+                [$userId, $stripeSubscriptionId]
+            );
+        } catch (Throwable $e) {
+            try {
+                $this->db->query(
+                    "UPDATE biz_subscriptions SET status = 'past_due', updated_at = NOW() WHERE user_id = ? AND stripe_subscription_id = ?",
+                    [$userId, $stripeSubscriptionId]
+                );
+            } catch (Throwable $e2) {
+            }
+        }
     }
 
 }

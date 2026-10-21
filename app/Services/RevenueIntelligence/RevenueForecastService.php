@@ -36,9 +36,20 @@ class RevenueForecastService
         $lookbackDays = 90;
         $now = new DateTime('now');
         $from = (clone $now)->modify("-{$lookbackDays} days");
-        $series = $this->gateway->getDailyRevenueSeries($userId, $from->format('Y-m-d H:i:s'), $now->format('Y-m-d H:i:s'));
+        // v2.0: تاريخ أطول (سنة + 90 يوم) للمحرك المتقدم عشان الموسمية السنوية
+        $longFrom = (clone $now)->modify('-' . (365 + 120) . ' days');
+        $longSeries = $this->gateway->getDailyRevenueSeries($userId, $longFrom->format('Y-m-d H:i:s'), $now->format('Y-m-d H:i:s'));
+        $fromStr = $from->format('Y-m-d');
+        $series = array_values(array_filter($longSeries, static function ($p) use ($fromStr) {
+            return (string) $p['date'] >= $fromStr;
+        }));
 
-        $result = self::computeForecast($series, $periodType, $now->format('Y-m-d'));
+        $result = self::applyAdvancedEngine(
+            self::computeForecast($series, $periodType, $now->format('Y-m-d')),
+            $longSeries,
+            $periodType,
+            $now->format('Y-m-d')
+        );
 
         if ($persist) {
             try {
@@ -52,7 +63,7 @@ class RevenueForecastService
                     'high_estimate' => $result['forecast_range']['high'] ?? null,
                     'confidence' => $result['confidence'],
                     'growth_trend' => $result['growth_trend'],
-                    'method' => 'linear_regression_daily',
+                    'method' => $result['method'] ?? 'linear_regression_daily',
                     'data_points_used' => $result['data_points_used'],
                     'insufficient_data' => $result['insufficient_data'] ? 1 : 0,
                 ]);
@@ -72,6 +83,47 @@ class RevenueForecastService
         }, $series);
 
         return $result;
+    }
+
+    /**
+     * v2.0: يطبّق RevenueForecastEngine (اختيار أفضل نموذج بالاختبار الرجعي)
+     * فوق التوقع الأساسي. لو المحرك مش لاقي بيانات كفاية يفضل الأساسي كما
+     * هو تمامًا. التوقع الأساسي بيتحفظ في 'baseline' للشفافية. Pure.
+     */
+    public static function applyAdvancedEngine(array $baseResult, array $longSeries, string $periodType, string $todayStr): array
+    {
+        if (!class_exists('RevenueForecastEngine') || empty($longSeries)) {
+            return $baseResult;
+        }
+        $horizon = RevenueOverviewService::periodToDays($periodType);
+        $dense = RevenueForecastEngine::densify($longSeries, $todayStr);
+        $adv = RevenueForecastEngine::forecast($dense, $horizon);
+        if (!empty($adv['insufficient_data'])) {
+            $baseResult['engine'] = ['used' => false, 'reason' => $adv['message'] ?? null];
+            return $baseResult;
+        }
+        $baseline = [
+            'method' => $baseResult['method'] ?? 'linear_regression_daily',
+            'expected_revenue' => $baseResult['expected_revenue'] ?? null,
+            'forecast_range' => $baseResult['forecast_range'] ?? null,
+            'confidence' => $baseResult['confidence'] ?? null,
+        ];
+        $baseResult['insufficient_data'] = false;
+        $baseResult['message'] = null;
+        $baseResult['method'] = 'engine_' . $adv['model'];
+        $baseResult['model_label'] = RevenueForecastEngine::modelLabel($adv['model']);
+        $baseResult['expected_revenue'] = $adv['expected_revenue'];
+        $baseResult['forecast_range'] = $adv['forecast_range'];
+        $baseResult['confidence'] = $adv['confidence'];
+        $baseResult['backtest'] = $adv['backtest'];
+        $baseResult['daily_forecast'] = $adv['daily_forecast'];
+        $baseResult['baseline'] = $baseline;
+        $baseResult['engine'] = ['used' => true, 'span_days' => $adv['span_days'], 'interval' => $adv['interval']];
+        if (empty($baseResult['growth_trend'])) {
+            $baseResult['growth_trend'] = 'flat';
+        }
+        $baseResult['note'] = 'Model auto-selected by backtesting on your own recent history. Estimated, not guaranteed.';
+        return $baseResult;
     }
 
     /**

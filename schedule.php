@@ -125,4 +125,8 @@ return [
         'file' => 'revai_benchmarks_rebuild.php', 'when' => '0 4 * * 1', 'group' => 'growth',
         'title' => 'إعادة حساب متوسطات السوق (أسبوعي)', 'enabled' => true, 'max_minutes' => 60,
     ],
+    'revenue_fx_rates' => [
+        'file' => 'revai_fx_rates_refresh.php', 'when' => '20 5 * * *', 'group' => 'growth',
+        'title' => 'تحديث أسعار الصرف لذكاء الإيرادات (يومي)', 'enabled' => true, 'max_minutes' => 5,
+    ],
 ];

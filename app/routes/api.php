@@ -212,6 +212,18 @@ $router->post('/api/revenue-intelligence/stripe/settings', 'RevenueIntelligenceC
 // أي بيانات مالك الحساب خارج نطاق user_id المحدد.
 $router->post('/api/revenue-intelligence/stripe/webhook/{user_id}', 'RevenueIntelligenceController', 'apiStripeWebhook');
 $router->get('/api/revenue-intelligence/reports/export', 'RevenueIntelligenceController', 'apiExportReport', ['AuthMiddleware']);
+// v2.0 PRO: التحصيل، مؤشرات السياحة، الموسم مقابل السنة الماضية، الربحية، نموذج الفوز، الإعدادات
+$router->get('/api/revenue-intelligence/collections', 'RevenueIntelligenceController', 'apiCollections', ['AuthMiddleware']);
+$router->get('/api/revenue-intelligence/tourism-kpis', 'RevenueIntelligenceController', 'apiTourismKpis', ['AuthMiddleware']);
+$router->get('/api/revenue-intelligence/pace', 'RevenueIntelligenceController', 'apiPace', ['AuthMiddleware']);
+$router->get('/api/revenue-intelligence/profitability', 'RevenueIntelligenceController', 'apiProfitability', ['AuthMiddleware']);
+$router->post('/api/revenue-intelligence/product-costs', 'RevenueIntelligenceController', 'apiProductCostSave', ['AuthMiddleware']);
+$router->post('/api/revenue-intelligence/product-costs/delete', 'RevenueIntelligenceController', 'apiProductCostDelete', ['AuthMiddleware']);
+$router->get('/api/revenue-intelligence/win-model', 'RevenueIntelligenceController', 'apiWinModel', ['AuthMiddleware']);
+$router->get('/api/revenue-intelligence/settings', 'RevenueIntelligenceController', 'apiSettingsGet', ['AuthMiddleware']);
+$router->post('/api/revenue-intelligence/settings', 'RevenueIntelligenceController', 'apiSettingsSave', ['AuthMiddleware']);
+$router->post('/api/revenue-intelligence/settings/fx-rate', 'RevenueIntelligenceController', 'apiFxRateSave', ['AuthMiddleware']);
+$router->post('/api/revenue-intelligence/settings/test-alert', 'RevenueIntelligenceController', 'apiTestAlert', ['AuthMiddleware']);
 
 $router->get('/api/website-optimizer/websites', 'WebsiteOptimizerController', 'listWebsites', ['AuthMiddleware']);
 $router->post('/api/website-optimizer/audit', 'WebsiteOptimizerController', 'runAudit', ['AuthMiddleware']);

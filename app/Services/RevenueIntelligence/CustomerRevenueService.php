@@ -28,6 +28,26 @@ class CustomerRevenueService
     /** قائمة عملاء مع مؤشرات الإيراد والتقسيم لكل واحد منهم. */
     public function getCustomerRevenueIntelligence(int $userId): array
     {
+        // v2.0 (G9): الأولوية للإيراد المدفوع فعلًا والمربوط بالعميل (حجوزات/OTA)،
+        // والصفقات المكسوبة fallback فقط - من غير جمع الاتنين (منع العد المزدوج).
+        $paidRows = method_exists($this->gateway, 'getCustomerRevenueRows') ? $this->gateway->getCustomerRevenueRows($userId) : [];
+        if (!empty($paidRows)) {
+            $byContact = self::groupPaidRevenueByContact($paidRows);
+            $byContact = array_filter($byContact, static function ($c) {
+                return $c['total'] > 0;
+            });
+            if (!empty($byContact)) {
+                $totals = array_map(static function ($d) {
+                    return $d['total'];
+                }, $byContact);
+                $customers = self::buildCustomerRecords($byContact, $totals);
+                usort($customers, static function ($a, $b) {
+                    return $b['customer_revenue'] <=> $a['customer_revenue'];
+                });
+                return ['has_data' => true, 'customers' => $customers, 'data_source' => 'rev_revenue_records (paid bookings linked to CRM contacts)'];
+            }
+        }
+
         $wonDeals = $this->gateway->getWonDealsByContact($userId);
         if (empty($wonDeals)) {
             return [
@@ -49,6 +69,25 @@ class CustomerRevenueService
         });
 
         return ['has_data' => true, 'customers' => $customers, 'data_source' => 'crm_deals (status=won)'];
+    }
+
+    /**
+     * v2.0: تجميع سجلات الإيراد المدفوع حسب العميل. السجلات الموجبة = عمليات
+     * شراء (تدخل في التكرار/الاتجاه)، والسالبة (استرداد/إلغاء) بتتخصم من
+     * الإجمالي بس من غير ما تتحسب "شراء". Pure.
+     */
+    public static function groupPaidRevenueByContact(array $rows): array
+    {
+        $positive = array_values(array_filter($rows, static function ($r) {
+            return (float) $r['value'] > 0;
+        }));
+        $out = self::groupDealsByContact($positive);
+        foreach ($rows as $r) {
+            if ((float) $r['value'] < 0 && isset($out[(int) $r['contact_id']])) {
+                $out[(int) $r['contact_id']]['total'] += (float) $r['value'];
+            }
+        }
+        return $out;
     }
 
     /** تجميع الصفقات المكسوبة حسب contact_id. */

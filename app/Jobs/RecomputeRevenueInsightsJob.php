@@ -50,7 +50,31 @@ class RecomputeRevenueInsightsJob implements QueueJobInterface
             );
         }
 
-        $this->notifyHighSeverity($userId, $risks, $anomalies['anomalies'] ?? [], $cache);
+        // v2.0 PRO: مخاطر/فرص سياحية حقيقية (تحصيل متأخر، موسم أضعف من السنة الماضية، منتجات خاسرة)
+        $proInsights = self::proInsights($userId);
+        if (!empty($proInsights)) {
+            RevenueInsightPersister::persist($userId, $proInsights);
+        }
+        $proRisks = array_values(array_filter($proInsights, static function ($i) {
+            return ($i['type'] ?? '') === 'risk';
+        }));
+
+        $this->notifyHighSeverity($userId, array_merge($risks, $proRisks), $anomalies['anomalies'] ?? [], $cache);
+
+        // v2.0 PRO: نفس التنبيهات المهمة على Slack/Webhook/Email لو الحساب مفعّلها
+        if (class_exists('RevenueAlertChannelService')) {
+            try {
+                RevenueAlertChannelService::dispatch($userId, array_merge(
+                    $risks,
+                    $proRisks,
+                    array_map([RevenueInsightPersister::class, 'anomalyToInsight'], $anomalies['anomalies'] ?? [])
+                ));
+            } catch (Throwable $e) {
+                if (class_exists('Logger')) {
+                    Logger::warning('Revenue alert dispatch failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+                }
+            }
+        }
 
         // كل حساب قديم في الكاش بقى غير دقيق دلوقتي - نبطّله عشان أول طلب جاي يحسب من جديد بالبيانات المحدّثة.
         $cache->invalidateForUser($userId);
@@ -58,6 +82,34 @@ class RecomputeRevenueInsightsJob implements QueueJobInterface
         if (class_exists('Logger')) {
             Logger::info('RecomputeRevenueInsightsJob completed', ['user_id' => $userId]);
         }
+    }
+
+    /** Insights الإضافية من خدمات PRO - كل خدمة معزولة عشان فشل واحدة مايوقفش الباقي. */
+    private static function proInsights(int $userId): array
+    {
+        $out = [];
+        $tasks = [
+            static function () use ($userId) {
+                $c = (new RevenueCollectionsService())->getCollections($userId);
+                return RevenueCollectionsService::toRiskInsights($c);
+            },
+            static function () use ($userId) {
+                return TourismKpiService::paceToInsights((new TourismKpiService())->getPace($userId, 90));
+            },
+            static function () use ($userId) {
+                return RevenueProfitabilityService::toInsights((new RevenueProfitabilityService())->getProfitability($userId, 'quarterly'));
+            },
+        ];
+        foreach ($tasks as $task) {
+            try {
+                $out = array_merge($out, $task());
+            } catch (Throwable $e) {
+                if (class_exists('Logger')) {
+                    Logger::warning('Revenue PRO insight failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+                }
+            }
+        }
+        return $out;
     }
 
     /** يبعت Notification حقيقي بس للمخاطر/الشذوذ عالية الخطورة - مش كل حاجة، عشان الجرس متبقاش مليانة ضوضاء. */

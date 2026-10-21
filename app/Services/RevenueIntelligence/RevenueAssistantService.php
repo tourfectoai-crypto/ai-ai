@@ -67,9 +67,9 @@ class RevenueAssistantService
         $this->actionService = $actionService ?? new RevenueActionService($this->insightService, $this->anomalyService);
     }
 
-    public function ask(int $userId, string $question, bool $persist = true): array
+    public function ask(int $userId, string $question, bool $persist = true, ?string $forcedIntent = null): array
     {
-        $intent = self::matchIntent($question);
+        $intent = $forcedIntent ?? self::matchIntent($question);
         $answer = $this->answerIntent($userId, $intent, $question);
         $answer['follow_up_questions'] = self::suggestFollowUps($intent);
 
@@ -107,7 +107,17 @@ class RevenueAssistantService
     public function askWithCopilot(int $userId, string $question, bool $persist = true, string $lang = 'ar'): array
     {
         $intent = self::matchIntent($question);
-        $answer = $this->ask($userId, $question, $persist);
+        $routed = false;
+        // v2.0: سؤال برّه الأنماط -> راوتر LLM مقيّد يختار حسبة حقيقية من قائمة بيضاء فقط
+        if ($intent === 'unknown' && class_exists('RevenueIntentRouter')) {
+            $candidate = RevenueIntentRouter::route($question);
+            if ($candidate !== 'unknown') {
+                $intent = $candidate;
+                $routed = true;
+            }
+        }
+        $answer = $this->ask($userId, $question, $persist, $routed ? $intent : null);
+        $answer['routed_by_ai'] = $routed;
 
         if (class_exists('RevenueCopilotService')) {
             $answer = RevenueCopilotService::enhance($answer, $intent, $question, $lang);
@@ -145,6 +155,11 @@ class RevenueAssistantService
             'customer_segments' => ['الشرائح', 'تقسيم العملاء', 'فئات العملاء', 'تقسيم الزباين', 'فئات الزبون', 'customer segment', 'vip customer', 'customer tier', 'segmentation'],
             'anomaly_check' => ['حاجة غريبة', 'شذوذ', 'حاجة مش طبيعية', 'انحراف في', 'حصل حاجة غريبة', 'anomal', 'unusual', 'weird spike', 'strange drop', 'suspicious', 'outlier'],
             'next_best_action' => ['أعمل إيه دلوقتي', 'اعمل ايه دلوقتي', 'إيه المفروض أعمله', 'ايه المفروض اعمله', 'اقترح', 'إيه الأولوية', 'ايه الاولويه', 'خطوتي الجاية', 'ايه الخطوه الجايه', 'what should i do', 'next step', 'what.*priorit', 'recommend.*action'],
+            // v2.0 PRO - أسئلة السياحة والتحصيل والربحية
+            'cash_collection' => ['تحصيل', 'اتحصل', 'محصل', 'المستحقات', 'مستحق', 'مديونيات', 'فلوس.*(برا|بره|لسه|ماتحصلت|متحصلتش)', 'العربون', 'الباقي.*(عميل|حجز|عملاء)', 'مادفعوش', 'ما دفعوش', 'لسه مادفع', 'receivable', 'outstanding', 'collect', 'unpaid', 'owed', 'cash in'],
+            'booking_pace' => ['الموسم الجاي', 'الموسم القادم', 'الحجوزات الجايه', 'الحجوزات القادمه', 'محجوز.*(الجاي|القادم)', 'مقارنه بالسنه اللي فاتت', 'عن السنه اللي فاتت', 'زي السنه اللي فاتت', 'booking pace', 'on the books', 'upcoming bookings', 'next season', 'vs last year', 'compared to last year'],
+            'profitability' => ['ربح', 'ارباح', 'مكسب', 'هامش', 'بتخسر', 'خسران', 'بيكسب', 'بتكسب', 'profit', 'margin', 'losing money', 'loses money', 'net income'],
+            'tourism_kpis' => ['الغاء', 'لكل مسافر', 'للمسافر', 'عدد المسافرين', 'حجم المجموعه', 'متوسط.*حجز', 'قبل الرحله', 'بيحجزوا قبل', 'عموله', 'بوكينج', 'booking\\.com', 'viator', 'cancellation', 'cancel rate', 'per traveler', 'per traveller', 'no-show', 'no show', 'group size', 'average booking', 'lead time', 'commission'],
         ];
     }
 
@@ -180,10 +195,25 @@ class RevenueAssistantService
             'yearly' => ['السنه', 'السنة', 'العام', 'سنه', 'سنة', 'عام', 'year', 'yearly', 'annual'],
         ];
 
+        // v2.0: مطابقة كلمة كاملة (مع سوابق عربية شائعة) بدل البحث الجزئي -
+        // قبل كده "عاملة" كانت بتتفهم "عام" (سنة) و"شهرية" كانت بتتفهم صح بالصدفة بس.
+        $tokens = array_values(array_filter(preg_split('/[^\p{L}\p{N}]+/u', $q), 'strlen'));
+        $prefixes = ['', 'ال', 'و', 'وال', 'ب', 'بال', 'ف', 'فال', 'لل', 'ل'];
         foreach ($periodWords as $period => $words) {
             foreach ($words as $w) {
-                if (mb_strpos($q, self::normalizeArabic($w)) !== false) {
-                    return $period;
+                $w = self::normalizeArabic(mb_strtolower($w));
+                if (mb_strpos($w, ' ') !== false) {
+                    if (mb_strpos($q, $w) !== false) {
+                        return $period;
+                    }
+                    continue;
+                }
+                foreach ($tokens as $tok) {
+                    foreach ($prefixes as $pre) {
+                        if ($tok === $pre . $w) {
+                            return $period;
+                        }
+                    }
                 }
             }
         }
@@ -284,6 +314,26 @@ class RevenueAssistantService
                 'إيه المخاطر الموجودة؟',
                 'إيه حالة خط الصفقات؟',
             ],
+            'cash_collection' => [
+                'مين العملاء اللي لسه مادفعوش؟',
+                'الموسم الجاي محجوز قد إيه مقارنة بالسنة اللي فاتت؟',
+                'أنهي رحلة بتكسب أكتر؟',
+            ],
+            'tourism_kpis' => [
+                'أنهي قناة بتجيب أحسن صافي بعد العمولة؟',
+                'نسبة الإلغاء عاملة إيه؟',
+                'أنهي رحلة بتكسب أكتر؟',
+            ],
+            'booking_pace' => [
+                'إيه المتوقع الشهر القادم؟',
+                'إيه المفروض أعمله دلوقتي؟',
+                'فلوس لسه ماتحصلتش قد إيه؟',
+            ],
+            'profitability' => [
+                'أنهي قناة بتجيب أحسن صافي بعد العمولة؟',
+                'إيه أكبر مصادر الإيرادات؟',
+                'إيه المفروض أعمله دلوقتي؟',
+            ],
         ];
 
         return $map[$intent] ?? [
@@ -361,6 +411,14 @@ class RevenueAssistantService
                 return $this->answerAnomalyCheck($userId);
             case 'next_best_action':
                 return $this->answerNextBestAction($userId);
+            case 'cash_collection':
+                return $this->answerCashCollection($userId, $period);
+            case 'tourism_kpis':
+                return $this->answerTourismKpis($userId, $period);
+            case 'booking_pace':
+                return $this->answerBookingPace($userId);
+            case 'profitability':
+                return $this->answerProfitability($userId, $period);
             default:
                 return $this->answerUnknown($originalQuestion);
         }
@@ -376,6 +434,8 @@ class RevenueAssistantService
             'next_month_forecast' => 'next period forecast', 'what_if_scenario' => 'what-if scenario forecast',
             'pipeline_status' => 'pipeline status', 'customer_segments' => 'customer segments',
             'anomaly_check' => 'unusual revenue activity', 'next_best_action' => 'recommended next actions',
+            'cash_collection' => 'collected cash and unpaid balances', 'tourism_kpis' => 'tourism KPIs (cancellations, travelers, channels)',
+            'booking_pace' => 'upcoming season vs last year', 'profitability' => 'profit and margins per trip',
         ];
 
         if (!empty($suggestions)) {
@@ -397,7 +457,7 @@ class RevenueAssistantService
             'confidence' => null,
             'finding' => 'Not enough data.',
             'evidence' => [],
-            'reasoning_summary' => 'I can answer questions about: revenue trend, revenue sources, top customers, customer segments, growth opportunities, risks, unusual activity, pipeline status, next-period forecast, what-if scenarios, and recommended next actions. Try rephrasing around one of those, or use the matching tab directly.',
+            'reasoning_summary' => 'I can answer questions about: revenue trend, revenue sources, top customers, customer segments, growth opportunities, risks, unusual activity, pipeline status, next-period forecast, what-if scenarios, recommended next actions, collected cash and unpaid balances, tourism KPIs (cancellations, travelers, channels, commissions), upcoming season vs last year, and profit per trip. Try rephrasing around one of those, or use the matching tab directly.',
             'recommended_action' => null,
         ];
     }
@@ -667,6 +727,117 @@ class RevenueAssistantService
             'evidence' => ['actions' => $actions],
             'reasoning_summary' => 'Ranked from current Opportunities, Risks, and Anomalies by severity/confidence/estimated impact.',
             'recommended_action' => $actions[0]['recommended_action'] ?? null,
+        ];
+    }
+
+    /** @var array<string, object> خدمات PRO (lazy عشان الاختبارات القديمة مايتأثروش) */
+    private $pro = [];
+
+    private function proService(string $class)
+    {
+        if (!isset($this->pro[$class])) {
+            $this->pro[$class] = new $class();
+        }
+        return $this->pro[$class];
+    }
+
+    private function answerCashCollection(int $userId, string $period): array
+    {
+        $c = $this->proService('RevenueCollectionsService')->getCollections($userId, $period);
+        $p = $c['period'] ?? [];
+        if (empty($c['has_data']) && empty($p['bookings_count'])) {
+            return self::insufficientData('Not enough data. No confirmed bookings with payment information yet.');
+        }
+        $cur = $c['currency'];
+        $finding = "Outstanding customer balances: {$c['outstanding_total']} {$cur} "
+            . "(overdue {$c['aging']['overdue']}, due within 7 days {$c['aging']['due_7_days']}).";
+        if (!empty($p['bookings_count'])) {
+            $finding .= " For bookings made this {$period}: booked {$p['booked']} {$cur}, collected {$p['collected']} {$cur}"
+                . ($p['collection_rate'] !== null ? " ({$p['collection_rate']}% collection rate)." : '.');
+        }
+        return [
+            'has_data' => true,
+            'confidence' => 'high',
+            'finding' => $finding,
+            'evidence' => ['outstanding_total' => $c['outstanding_total'], 'aging' => $c['aging'], 'period' => $p, 'top_overdue' => array_slice($c['at_risk'], 0, 5)],
+            'reasoning_summary' => 'Booked value from confirmed bookings vs amount_paid and successful payment transactions.',
+            'recommended_action' => $c['aging']['overdue'] > 0 ? 'Send payment links to overdue customers today (Collections tab).' : 'Keep collecting deposits at booking time.',
+        ];
+    }
+
+    private function answerTourismKpis(int $userId, string $period): array
+    {
+        $k = $this->proService('TourismKpiService')->getKpis($userId, $period);
+        if (empty($k['has_data'])) {
+            return self::insufficientData('Not enough data. No bookings in this period.');
+        }
+        $top = $k['channels'][0] ?? null;
+        $finding = "This {$period}: {$k['bookings_revenue_generating']} paid bookings, {$k['travelers']} travelers, "
+            . "revenue per traveler {$k['revenue_per_traveler']} {$k['currency']}, avg booking {$k['avg_booking_value']} {$k['currency']}, "
+            . "cancellation rate {$k['cancellation_rate']}%, average lead time {$k['avg_lead_time_days']} days.";
+        if ($top) {
+            $finding .= " Top channel: {$top['channel']} ({$top['share_percent']}% of revenue"
+                . ($top['commission_percent'] !== null ? ", net after commission {$top['net_revenue']}" : '') . ').';
+        }
+        return [
+            'has_data' => true,
+            'confidence' => $k['bookings_total'] >= 20 ? 'high' : 'medium',
+            'finding' => $finding,
+            'evidence' => ['kpis' => array_intersect_key($k, array_flip(['travelers', 'revenue_per_traveler', 'avg_booking_value', 'cancellation_rate', 'avg_lead_time_days', 'commission_total'])), 'channels' => array_slice($k['channels'], 0, 5), 'comparison' => $k['comparison']],
+            'reasoning_summary' => 'Computed directly from your bookings table for the selected period.',
+            'recommended_action' => ($k['cancellation_rate'] ?? 0) >= 15 ? 'Cancellation rate is high: require a deposit and send trip reminders.' : 'Shift budget toward the channel with the best net revenue after commission.',
+        ];
+    }
+
+    private function answerBookingPace(int $userId): array
+    {
+        $p = $this->proService('TourismKpiService')->getPace($userId, 90);
+        if (empty($p['has_data'])) {
+            return self::insufficientData('Not enough data. No upcoming or last-year bookings for the next 90 days.');
+        }
+        $otb = $p['on_the_books'];
+        $ly = $p['last_year_same_point'];
+        $finding = "Next 90 days on the books: {$otb['revenue']} {$p['currency']} ({$otb['bookings']} bookings, {$otb['travelers']} travelers).";
+        $finding .= $p['pace_percent'] !== null
+            ? " Same point last year: {$ly['revenue']} {$p['currency']} — pace {$p['pace_percent']}% ({$p['pace_status']})."
+            : ' No comparable bookings last year to measure pace.';
+        if ($p['projected_final_revenue'] !== null) {
+            $finding .= " If the booking curve matches last year, the period should finish around {$p['projected_final_revenue']} {$p['currency']}.";
+        }
+        return [
+            'has_data' => true,
+            'confidence' => ($ly['bookings'] ?? 0) >= 10 ? 'high' : 'medium',
+            'finding' => $finding,
+            'evidence' => ['pace' => $p],
+            'reasoning_summary' => 'Confirmed bookings by trip date vs bookings that existed at the same date last year.',
+            'recommended_action' => $p['pace_status'] === 'behind' ? 'Launch an early-booking offer for the weak dates now.' : null,
+        ];
+    }
+
+    private function answerProfitability(int $userId, string $period): array
+    {
+        $r = $this->proService('RevenueProfitabilityService')->getProfitability($userId, $period === 'daily' || $period === 'weekly' ? 'monthly' : $period);
+        if (empty($r['has_data'])) {
+            return self::insufficientData('Not enough data. No bookings in this period.');
+        }
+        if ($r['totals']['net_profit'] === null) {
+            return self::insufficientData('Not enough data. Add product costs in the Profitability tab to calculate real margins (costs are never assumed to be zero).');
+        }
+        $best = $r['most_profitable'];
+        $finding = "Net profit on products with recorded costs: {$r['totals']['net_profit']} {$r['currency']} ({$r['totals']['margin_percent']}% margin, covering {$r['coverage_percent']}% of revenue).";
+        if ($best) {
+            $finding .= " Most profitable: {$best['product_name']} ({$best['margin_percent']}% margin).";
+        }
+        if (!empty($r['loss_makers'])) {
+            $finding .= ' ' . count($r['loss_makers']) . ' product(s) are losing money: ' . implode(', ', array_column(array_slice($r['loss_makers'], 0, 3), 'product_name')) . '.';
+        }
+        return [
+            'has_data' => true,
+            'confidence' => ($r['coverage_percent'] ?? 0) >= 70 ? 'high' : 'medium',
+            'finding' => $finding,
+            'evidence' => ['totals' => $r['totals'], 'most_profitable' => $best, 'loss_makers' => array_slice($r['loss_makers'], 0, 3)],
+            'reasoning_summary' => 'Revenue minus recorded direct costs minus channel commissions, per product.',
+            'recommended_action' => !empty($r['loss_makers']) ? 'Reprice or renegotiate costs for the loss-making products.' : 'Put more marketing behind the highest-margin product.',
         ];
     }
 

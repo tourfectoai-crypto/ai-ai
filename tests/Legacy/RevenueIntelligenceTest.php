@@ -872,7 +872,7 @@ class RevenueIntelligenceTest
 
     private function testStripeMapperInvoicePaid(): void
     {
-        $this->startTest('Stripe Mapper: mapInvoicePaymentSucceeded -> expansion event');
+        $this->startTest('Stripe Mapper: mapInvoicePaymentSucceeded -> cash revenue (v2.0: not an expansion event)');
         $payload = [
             'id' => 'evt_2', 'created' => 1755000000,
             'data' => ['object' => [
@@ -883,9 +883,10 @@ class RevenueIntelligenceTest
             ]],
         ];
         $result = StripeRevenueMapper::mapInvoicePaymentSucceeded($payload);
-        $this->assertTrue($result['event']['event_type'] === 'expansion', 'Payment -> expansion');
-        $this->assertTrue($result['event']['mrr_delta'] === 50.0, '5000 cents = 50 MRR');
-        $this->assertTrue($result['event']['stripe_customer_id'] === 'cus_456', 'Customer attached');
+        $this->assertTrue($result['event'] === null, 'Renewal invoice is NOT an expansion event');
+        $this->assertTrue($result['revenue']['amount'] === 50.0, '5000 cents = 50 cash revenue');
+        $this->assertTrue($result['revenue']['source'] === 'stripe_invoice', 'Recorded as stripe_invoice revenue');
+        $this->assertTrue($result['revenue']['stripe_customer_id'] === 'cus_456', 'Customer attached');
     }
 
     private function testStripeMapperSubscriptionDeleted(): void

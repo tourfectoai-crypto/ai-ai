@@ -51,11 +51,15 @@ class RevenueIntelligenceController extends Controller
         $tabs = [
             'executive' => $this->tr('revai.tab.executive'),
             'overview' => $this->tr('revai.tab.overview'),
+            'collections' => $this->tr('revai.tab.collections'),
+            'tourism' => $this->tr('revai.tab.tourism'),
+            'profitability' => $this->tr('revai.tab.profitability'),
             'forecast' => $this->tr('revai.tab.forecast'),
             'opportunities' => $this->tr('revai.tab.opportunities'),
             'risks' => $this->tr('revai.tab.risks'),
             'customers' => $this->tr('revai.tab.customers'),
             'pipeline' => $this->tr('revai.tab.pipeline'),
+            'winmodel' => $this->tr('revai.tab.winmodel'),
             'sources' => $this->tr('revai.tab.sources'),
             'anomalies' => $this->tr('revai.tab.anomalies'),
             'retention' => $this->tr('revai.tab.retention'),
@@ -66,16 +70,25 @@ class RevenueIntelligenceController extends Controller
             'churn' => $this->tr('revai.tab.churn'),
             'assistant' => $this->tr('revai.tab.assistant'),
             'reports' => $this->tr('revai.tab.reports'),
+            'settings' => $this->tr('revai.tab.settings'),
         ];
+        // v2.0: وضع مبسّط افتراضيًا - التبويبات المتقدمة بتظهر بزرار "كل التبويبات"
+        $essentialTabs = ['executive', 'overview', 'collections', 'tourism', 'profitability', 'forecast', 'risks', 'assistant', 'reports', 'settings'];
 
         $tabsHtml = '<div class="p-tabs" id="revaiTabs" style="margin-bottom:18px;flex-wrap:wrap;">';
         $first = true;
         foreach ($tabs as $key => $label) {
             $activeClass = $first ? ' active' : '';
-            $tabsHtml .= "<a href=\"#\" data-tab=\"{$key}\" class=\"p-tab{$activeClass}\" style=\"text-decoration:none;\">{$label}</a>";
+            $adv = in_array($key, $essentialTabs, true) ? '' : ' data-adv="1"';
+            $tabsHtml .= "<a href=\"#\" data-tab=\"{$key}\"{$adv} class=\"p-tab{$activeClass}\" style=\"text-decoration:none;\">{$label}</a>";
             $first = false;
         }
+        $tabsHtml .= '<a href="#" id="revaiTabsToggle" class="p-tab" style="text-decoration:none;opacity:.8;">' . $this->tr('revai.tabs.show_all') . '</a>';
         $tabsHtml .= '</div>';
+
+        // كل الأرقام في الصفحة بعملة التقارير الموحّدة (FX)
+        $reportCurrency = json_encode(RevenueSettingsService::baseCurrency((int) ($this->user['id'] ?? 0)));
+        $proJs = function_exists('asset_v') ? asset_v('/assets/js/revenue-intelligence-pro.js') : '/assets/js/revenue-intelligence-pro.js';
 
         $periodSelect = <<<HTML
         <select id="revaiPeriod" class="p-select" style="max-width:180px;">
@@ -88,6 +101,8 @@ class RevenueIntelligenceController extends Controller
 HTML;
 
         $body = <<<HTML
+        <script>window.TF_CURRENCY = {$reportCurrency};</script>
+        <script src="{$proJs}"></script>
         {$tabsHtml}
         <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">{$periodSelect}</div>
         <div id="revaiPanel"><div class="p-empty">{$this->tr('common.loading')}</div></div>
@@ -325,6 +340,9 @@ HTML;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
+        }
         $userId = (int) $this->user['id'];
         $boolOpt = function (string $key, bool $default) {
             $v = $this->get($key, null);
@@ -396,6 +414,9 @@ HTML;
     {
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
+        }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
         }
         $question = trim((string) $this->get('question', ''));
         if ($question === '') {
@@ -570,6 +591,9 @@ HTML;
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
         }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
+        }
         try {
             $layout = (array) $this->get('layout', $this->get('widgets', []));
             $saved = (new RevenueDashboardService())->saveLayout((int) $this->user['id'], $layout);
@@ -587,6 +611,9 @@ HTML;
     {
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
+        }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
         }
         try {
             $default = (new RevenueDashboardService())->resetLayout((int) $this->user['id']);
@@ -616,6 +643,7 @@ HTML;
                 'last_event_at' => $settings['last_event_at'] ?? null,
                 'last_event_type' => $settings['last_event_type'] ?? null,
                 'webhook_url' => $this->buildStripeWebhookUrl((int) $this->user['id']),
+                'supported_events' => StripeWebhookService::supportedEvents(),
             ]);
         } catch (Throwable $e) {
             return $this->serverError('stripe-settings', $e);
@@ -632,6 +660,9 @@ HTML;
     {
         if (!$this->isAuthenticated()) {
             return $this->error('Unauthorized', 401);
+        }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
         }
         try {
             $secret = trim((string) $this->get('webhook_secret', ''));
@@ -695,6 +726,217 @@ HTML;
     }
 
     /** بناء رابط الـ webhook الكامل (يُعرض للمستخدم ليلصقه في لوحة Stripe). */
+    // ============================================================
+    // v2.0 PRO endpoints
+    // ============================================================
+
+    /** GET /api/revenue-intelligence/collections - المحجوز مقابل المحصّل + المستحقات */
+    public function apiCollections(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        try {
+            return $this->success((new RevenueCollectionsService())->getCollections((int) $this->user['id'], $this->validPeriod($this->get('period', 'monthly'))));
+        } catch (Throwable $e) {
+            return $this->serverError('collections', $e);
+        }
+    }
+
+    /** GET /api/revenue-intelligence/tourism-kpis */
+    public function apiTourismKpis(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        try {
+            return $this->success((new TourismKpiService())->getKpis((int) $this->user['id'], $this->validPeriod($this->get('period', 'monthly'))));
+        } catch (Throwable $e) {
+            return $this->serverError('tourism-kpis', $e);
+        }
+    }
+
+    /** GET /api/revenue-intelligence/pace?days=90 - الحجوزات القادمة مقابل السنة الماضية */
+    public function apiPace(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        try {
+            $days = (int) $this->get('days', 90);
+            return $this->success((new TourismKpiService())->getPace((int) $this->user['id'], in_array($days, [30, 60, 90, 180, 365], true) ? $days : 90));
+        } catch (Throwable $e) {
+            return $this->serverError('pace', $e);
+        }
+    }
+
+    /** GET /api/revenue-intelligence/profitability */
+    public function apiProfitability(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        try {
+            return $this->success((new RevenueProfitabilityService())->getProfitability((int) $this->user['id'], $this->validPeriod($this->get('period', 'monthly'))));
+        } catch (Throwable $e) {
+            return $this->serverError('profitability', $e);
+        }
+    }
+
+    /** POST /api/revenue-intelligence/product-costs {product_id|product_name, label, cost_type, amount, currency} */
+    public function apiProductCostSave(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
+        }
+        $amount = $this->get('amount');
+        if (!is_numeric($amount) || (float) $amount < 0) {
+            return $this->error('Amount must be a positive number', 422);
+        }
+        if ((int) $this->get('product_id', 0) <= 0 && trim((string) $this->get('product_name', '')) === '') {
+            return $this->error('Choose a product', 422);
+        }
+        if ($this->get('cost_type') === 'percent_of_revenue' && (float) $amount > 100) {
+            return $this->error('Percentage cannot exceed 100', 422);
+        }
+        try {
+            $id = (new RevenueDataGateway())->saveProductCost((int) $this->user['id'], [
+                'product_id' => $this->get('product_id'), 'product_name' => $this->get('product_name'),
+                'label' => $this->get('label', 'cost'), 'cost_type' => $this->get('cost_type', 'per_traveler'),
+                'amount' => (float) $amount, 'currency' => $this->get('currency'),
+            ]);
+            if (class_exists('ActivityLog')) {
+                ActivityLog::record('revenue_intelligence', 'product_cost.saved', ['id' => $id]);
+            }
+            return $this->success(['id' => $id]);
+        } catch (InvalidArgumentException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            return $this->serverError('product-costs', $e);
+        }
+    }
+
+    /** POST /api/revenue-intelligence/product-costs/delete {id} */
+    public function apiProductCostDelete(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
+        }
+        try {
+            (new RevenueDataGateway())->deleteProductCost((int) $this->user['id'], (int) $this->get('id', 0));
+            return $this->success(['deleted' => true]);
+        } catch (Throwable $e) {
+            return $this->serverError('product-costs', $e);
+        }
+    }
+
+    /** GET /api/revenue-intelligence/win-model - احتمالية الفوز المتعلّمة للصفقات المفتوحة */
+    public function apiWinModel(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        try {
+            $result = (new DealWinModelService())->scoreOpenDeals((int) $this->user['id']);
+            if (!empty($result['has_data'])) {
+                $result = $this->paginate($result, 'deals');
+            }
+            return $this->success($result);
+        } catch (Throwable $e) {
+            return $this->serverError('win-model', $e);
+        }
+    }
+
+    /** GET /api/revenue-intelligence/settings */
+    public function apiSettingsGet(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        try {
+            return $this->success(RevenueSettingsService::publicView((int) $this->user['id']));
+        } catch (Throwable $e) {
+            return $this->serverError('settings', $e);
+        }
+    }
+
+    /** POST /api/revenue-intelligence/settings */
+    public function apiSettingsSave(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
+        }
+        $userId = (int) $this->user['id'];
+        try {
+            $in = array_intersect_key($this->all(), array_flip(['base_currency', 'alert_min_severity', 'alert_email', 'slack_url', 'webhook_url', 'webhook_secret', 'channel_commissions']));
+            $res = RevenueSettingsService::save($userId, $in);
+            if (!$res['ok']) {
+                return $this->error($res['error'] ?? 'Invalid settings', 422);
+            }
+            $this->cacheService->invalidateForUser($userId);
+            if (class_exists('ActivityLog')) {
+                ActivityLog::record('revenue_intelligence', 'settings.saved', ['fields' => array_keys($in)]);
+            }
+            return $this->success(RevenueSettingsService::publicView($userId));
+        } catch (Throwable $e) {
+            return $this->serverError('settings', $e);
+        }
+    }
+
+    /** POST /api/revenue-intelligence/settings/fx-rate {currency, units_per_usd} - سعر صرف يدوي للحساب */
+    public function apiFxRateSave(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
+        }
+        $userId = (int) $this->user['id'];
+        $rate = $this->get('units_per_usd');
+        if (!is_numeric($rate) || (float) $rate <= 0) {
+            return $this->error('Rate must be a positive number (units of the currency per 1 USD)', 422);
+        }
+        try {
+            if (!FxRateService::saveRate($userId, (string) $this->get('currency', ''), (float) $rate, 'manual')) {
+                return $this->error('Invalid currency code', 422);
+            }
+            $this->cacheService->invalidateForUser($userId);
+            return $this->success(['fx_rates' => FxRateService::latestRates($userId)]);
+        } catch (Throwable $e) {
+            return $this->serverError('fx-rate', $e);
+        }
+    }
+
+    /** POST /api/revenue-intelligence/settings/test-alert */
+    public function apiTestAlert(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) {
+            return $this->error('Unauthorized', 401);
+        }
+        if ($csrf = $this->verifyCsrf()) {
+            return $csrf;
+        }
+        try {
+            $results = RevenueAlertChannelService::sendTest((int) $this->user['id']);
+            if (empty($results)) {
+                return $this->error('No alert channel is configured yet', 422);
+            }
+            return $this->success(['results' => $results]);
+        } catch (Throwable $e) {
+            return $this->serverError('test-alert', $e);
+        }
+    }
+
     private function buildStripeWebhookUrl(int $userId): string
     {
         $base = env('APP_URL', '');
@@ -1147,6 +1389,7 @@ HTML;
                 <div class="p-card stat-tile"><div class="stat-icon purple">📊</div><div class="stat-info"><div class="stat-value">${fmt(d.forecast_range.low)} - ${fmt(d.forecast_range.high)}</div><div class="stat-label">${I18N['revai.forecast.range']}</div></div></div>
                 <div class="p-card stat-tile"><div class="stat-icon green">✅</div><div class="stat-info"><div class="stat-value">${esc(d.confidence)}</div><div class="stat-label">${I18N['revai.forecast.confidence']}</div></div></div>
             </div>
+            ${window.RevaiPro ? window.RevaiPro.forecastModelCard(d, esc, fmt) : ''}
             <div class="p-card" style="margin-bottom:18px;">
                 <h3 style="margin:0 0 4px;">${I18N['revai.chart.forecast_basis']}</h3>
                 <p style="margin:0 0 12px;font-size:12px;opacity:.7;">${I18N['revai.chart.forecast_basis_hint']}</p>
@@ -1158,9 +1401,10 @@ HTML;
                 <div id="revaiAccuracyBox">${loadingHtml()}</div>
             </div>`;
         const series = d.historical_series || [];
-        lineChart('revaiForecastHistoryChart', series.map(p => p.date), [
-            { label: I18N['revai.col.revenue'], data: series.map(p => p.revenue), borderColor: '#6366F1', backgroundColor: 'rgba(99,102,241,0.1)', tension: 0.3, fill: true, pointRadius: 0 },
-        ]);
+        const future = d.daily_forecast || [];
+        lineChart('revaiForecastHistoryChart', series.map(p => p.date).concat(future.map(p => p.date)), [
+            { label: I18N['revai.col.revenue'], data: series.map(p => p.revenue).concat(future.map(() => null)), borderColor: '#6366F1', backgroundColor: 'rgba(99,102,241,0.1)', tension: 0.3, fill: true, pointRadius: 0 },
+        ].concat(future.length ? [{ label: I18N['revai.forecast.expected'], data: series.map(() => null).concat(future.map(p => p.revenue)), borderColor: '#22C55E', borderDash: [6, 4], tension: 0.3, fill: false, pointRadius: 0 }] : []));
 
         const accBox = document.getElementById('revaiAccuracyBox');
         const accRes = await fetchJSON('/api/revenue-intelligence/forecast/accuracy');
@@ -1554,14 +1798,36 @@ HTML;
         churn: renderChurn,
         reports: renderReports,
     };
+    // v2.0 PRO tabs (public_html/assets/js/revenue-intelligence-pro.js)
+    if (window.RevaiPro) {
+        Object.assign(renderers, window.RevaiPro.renderers({ panel, periodSelect, esc, fetchJSON, toast, fmt, badge, loadingHtml, emptyHtml, lineChart, barChart }));
+    }
+
+    // v2.0: وضع مبسّط / كل التبويبات (بيتفتكر لكل مستخدم في المتصفح)
+    const tabsToggle = document.getElementById('revaiTabsToggle');
+    let showAllTabs = false;
+    try { showAllTabs = localStorage.getItem('revaiShowAllTabs') === '1'; } catch (e) {}
+    function applyTabsMode() {
+        document.querySelectorAll('#revaiTabs [data-adv]').forEach(el => { el.style.display = showAllTabs || el.classList.contains('active') ? '' : 'none'; });
+        if (tabsToggle) tabsToggle.textContent = showAllTabs ? I18N['revai.tabs.show_less'] : I18N['revai.tabs.show_all'];
+    }
+    if (tabsToggle) {
+        tabsToggle.addEventListener('click', e => {
+            e.preventDefault();
+            showAllTabs = !showAllTabs;
+            try { localStorage.setItem('revaiShowAllTabs', showAllTabs ? '1' : '0'); } catch (err) {}
+            applyTabsMode();
+        });
+    }
 
     function activate(tab) {
         activeTab = tab;
-        document.querySelectorAll('#revaiTabs .p-tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+        document.querySelectorAll('#revaiTabs .p-tab[data-tab]').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+        applyTabsMode();
         (renderers[tab] || renderOverview)();
     }
 
-    document.querySelectorAll('#revaiTabs .p-tab').forEach(el => {
+    document.querySelectorAll('#revaiTabs .p-tab[data-tab]').forEach(el => {
         el.addEventListener('click', e => { e.preventDefault(); activate(el.dataset.tab); });
     });
     periodSelect.addEventListener('change', () => activate(activeTab));

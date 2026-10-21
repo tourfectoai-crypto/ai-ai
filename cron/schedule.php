@@ -186,6 +186,10 @@ return [
         'file' => 'revai_benchmarks_rebuild.php', 'when' => '0 4 * * 1', 'group' => 'growth',
         'title' => 'إعادة حساب متوسطات السوق (أسبوعي)', 'enabled' => true, 'max_minutes' => 60,
     ],
+    'revenue_fx_rates' => [
+        'file' => 'revai_fx_rates_refresh.php', 'when' => '20 5 * * *', 'group' => 'growth',
+        'title' => 'تحديث أسعار الصرف لذكاء الإيرادات (يومي)', 'enabled' => true, 'max_minutes' => 5,
+    ],
     'ota_supplier_sync' => ['file'=>'ota_supplier_sync.php','when'=>'*/5 * * * *','group'=>'ota','title'=>'OTA supplier read-only sync scheduler','enabled'=>true,'max_minutes'=>3],
     'whatsapp_marketing' => ['file'=>'whatsapp_marketing.php','when'=>'* * * * *','group'=>'whatsapp','title'=>'Opt-in WhatsApp marketing campaigns','enabled'=>true,'max_minutes'=>3],
 ];
