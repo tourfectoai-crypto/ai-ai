@@ -285,7 +285,7 @@ class MorningBriefService
     {
         try {
             return (int) ($this->db->query(
-                "SELECT w.id FROM websites w JOIN platform_connections pc ON pc.website_id = w.id AND pc.platform = 'ultramsg' AND pc.status = 'connected'
+                "SELECT w.id FROM websites w JOIN platform_connections pc ON pc.website_id = w.id AND pc.platform IN ('whatsapp_qr','ultramsg') AND pc.status = 'connected'
                   WHERE w.user_id = ? ORDER BY w.id LIMIT 1",
                 [$ownerId]
             )[0]['id'] ?? 0);

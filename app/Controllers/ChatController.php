@@ -437,6 +437,14 @@ class ChatController extends Controller
                 return $this->error('No active subscription', 403);
             }
 
+            // الموقع لازم يكون بتاع صاحب الحساب - مايتبعتش من رقم عميل تاني
+            if ($websiteId) {
+                $ownerId = !empty($this->user['owner_user_id']) ? (int) $this->user['owner_user_id'] : (int) $this->user['id'];
+                if (empty($this->db->query('SELECT id FROM websites WHERE id = ? AND user_id = ? LIMIT 1', [(int) $websiteId, $ownerId]))) {
+                    return $this->error('Website not found', 404);
+                }
+            }
+
 $creditsCheck = $this->subscription->reserveChatCredits((int) $this->user['id'], 1);
             if (empty($creditsCheck['available'])) return $this->error($creditsCheck['message'] ?? 'رصيدك غير كافٍ',402);
             // لو مفيش website_id صريح، نحاول نستنتجه من جلسة موجودة (نفس
@@ -452,8 +460,8 @@ $creditsCheck = $this->subscription->reserveChatCredits((int) $this->user['id'],
                 }
             }
 
-            // إرسال الرسالة
-            if ($platform === 'ultramsg' && $websiteId) {
+            // إرسال الرسالة (واتساب بأي ربط: رسمي، QR، أو UltraMsg القديم - من رقم الموقع نفسه)
+            if (in_array($platform, ['ultramsg', 'whatsapp'], true) && $websiteId) {
                 $sent = $this->chatManager->sendMessageForWebsite((int) $websiteId, $phoneNumber, $message);
             } else {
                 $sent = $this->chatManager->sendMessage($phoneNumber, $message, $platform);
@@ -1869,7 +1877,10 @@ JS;
             </div>
         </div>
         <div id="waCloudCard" class="p-card" style="display:none;margin-top:14px;"></div>
-        <script src="/assets/js/wa-cloud.js?v=3" defer></script>
+        <script src="/assets/js/wa-cloud.js?v=4" defer></script>
+        <div id="waQrCard" class="p-card" style="display:none;margin-top:14px;"></div>
+        <div id="metaChatCard" class="p-card" style="display:none;margin-top:14px;"></div>
+        <script src="/assets/js/chat-connect.js?v=1" defer></script>
         <div id="ultramsgCard" class="p-card" style="display:none;margin-top:14px;">
             <div class="p-card-head"><h3>📱 {$tWhatsappTitle}</h3><span class="p-card-sub">{$tWhatsappSub}</span></div>
             <div id="ultramsgConnected" style="display:none;">
@@ -1919,46 +1930,6 @@ JS;
             <div id="settingsAlert" class="alert alert-danger" style="display:none;"></div>
             <button class="p-btn primary" onclick="saveSettings()">{$tSaveSettings}</button>
         </div>
-        <div id="messengerCard" class="p-card" style="display:none;margin-top:14px;">
-            <div class="p-card-head"><h3>📘 Messenger</h3><span class="p-card-sub">Connect the company Facebook page</span></div>
-            <div id="messengerConnected" style="display:none;">
-                <div class="alert alert-success">✔ Messenger Already connected</div>
-                <p class="p-cell-muted">Webhook URL:</p>
-                <code id="msgWebhookUrl" style="display:block;background:#1e1e2e;color:#a6e3a1;padding:10px;border-radius:8px;overflow-x:auto;direction:ltr;text-align:left;font-size:12px;"></code>
-                <p class="p-cell-muted" style="margin-top:8px;">Verify Token:</p>
-                <code id="msgVerifyToken" style="display:block;background:#1e1e2e;color:#a6e3a1;padding:10px;border-radius:8px;overflow-x:auto;direction:ltr;text-align:left;font-size:12px;"></code>
-            </div>
-            <div id="messengerForm">
-                <p class="p-cell-muted">Enter the Page Access Token from <a href="https://developers.facebook.com" target="_blank" rel="noopener">Meta for Developers</a>, then use the URL and Verify Token shown to you to register the Webhook there.</p>
-                <div class="form-group">
-                    <input type="text" id="msgPageId" class="form-control" placeholder="Page ID" style="margin-bottom:8px;">
-                </div>
-                <div class="form-group">
-                    <input type="text" id="msgAccessToken" class="form-control" placeholder="Page Access Token">
-                </div>
-                <button class="p-btn primary" style="margin-top:10px;" onclick="connectMessenger()">Connect Messenger</button>
-            </div>
-        </div>
-        <div id="instagramCard" class="p-card" style="display:none;margin-top:14px;">
-            <div class="p-card-head"><h3>📷 Instagram</h3><span class="p-card-sub">Connect the company Instagram business account</span></div>
-            <div id="instagramConnected" style="display:none;">
-                <div class="alert alert-success">✔ Instagram Already connected</div>
-                <p class="p-cell-muted">Webhook URL:</p>
-                <code id="igWebhookUrl" style="display:block;background:#1e1e2e;color:#a6e3a1;padding:10px;border-radius:8px;overflow-x:auto;direction:ltr;text-align:left;font-size:12px;"></code>
-                <p class="p-cell-muted" style="margin-top:8px;">Verify Token:</p>
-                <code id="igVerifyToken" style="display:block;background:#1e1e2e;color:#a6e3a1;padding:10px;border-radius:8px;overflow-x:auto;direction:ltr;text-align:left;font-size:12px;"></code>
-            </div>
-            <div id="instagramForm">
-                <p class="p-cell-muted">Enter the IG Business Account Access Token from <a href="https://developers.facebook.com" target="_blank" rel="noopener">Meta for Developers</a>.</p>
-                <div class="form-group">
-                    <input type="text" id="igAccountId" class="form-control" placeholder="Instagram Business Account ID" style="margin-bottom:8px;">
-                </div>
-                <div class="form-group">
-                    <input type="text" id="igAccessToken" class="form-control" placeholder="Access Token">
-                </div>
-                <button class="p-btn primary" style="margin-top:10px;" onclick="connectInstagram()">Connect Instagram</button>
-            </div>
-        </div>
         <div class="p-card" id="noWebsitesCard" style="display:none;">
             <div class="p-empty"><div class="p-empty-icon">{IC_GLOBE}</div>{$tNoWebsitesMsg}</div>
         </div>
@@ -1979,15 +1950,13 @@ HTML;
         if (!websiteId) {
             document.getElementById('settingsFormCard').style.display = 'none';
             document.getElementById('ultramsgCard').style.display = 'none';
-            document.getElementById('messengerCard').style.display = 'none';
-            document.getElementById('instagramCard').style.display = 'none';
+            if (window.ChatConnect) window.ChatConnect.load(null);
             return;
         }
 
         document.getElementById('ultramsgCard').style.display = 'block';
         await loadUltraMsgStatus(websiteId);
-        document.getElementById('messengerCard').style.display = 'block';
-        document.getElementById('instagramCard').style.display = 'block';
+        if (window.ChatConnect) window.ChatConnect.load(websiteId);
 
         const res = await fetchJSON('/api/chat/settings?website_id=' + websiteId + '&platform=all');
         document.getElementById('settingsFormCard').style.display = 'block';
@@ -2013,8 +1982,10 @@ HTML;
             document.getElementById('umInstanceId').textContent = res.data.instance_id || '';
             document.getElementById('umWebhookUrl').textContent = res.data.webhook_url || '';
         } else {
+            // مفيش إدخال مفاتيح للعميل: ربط واتساب بقى بمسح QR. الكارت ده بيظهر بس لاتصال UltraMsg قديم.
             connectedBox.style.display = 'none';
-            disconnectedBox.style.display = 'block';
+            disconnectedBox.style.display = 'none';
+            document.getElementById('ultramsgCard').style.display = 'none';
         }
     }
 
@@ -2048,52 +2019,6 @@ HTML;
         const res = await fetchJSON('/api/chat/disconnect/ultramsg/' + websiteId, { method: 'POST' });
         if (res.success) { toast(__DISCONNECTED__, 'success'); loadUltraMsgStatus(websiteId); }
         else { toast(res.error || __DISCONNECT_FAILED__, 'error'); }
-    };
-
-    window.connectMessenger = async function () {
-        const websiteId = document.getElementById('websiteSelect').value;
-        const pageId = document.getElementById('msgPageId').value.trim();
-        const accessToken = document.getElementById('msgAccessToken').value.trim();
-        if (!accessToken) { toast('Enter the Access Token first', 'error'); return; }
-
-        const res = await fetchJSON('/api/chat/connect/messenger', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ website_id: websiteId, access_token: accessToken, page_id: pageId }),
-        });
-
-        if (res.success) {
-            toast('Messenger connected - register the Webhook below in Meta for Developers', 'success');
-            document.getElementById('messengerForm').style.display = 'none';
-            document.getElementById('messengerConnected').style.display = 'block';
-            document.getElementById('msgWebhookUrl').textContent = res.data.webhook_url || '';
-            document.getElementById('msgVerifyToken').textContent = res.data.verify_token || '';
-        } else {
-            toast(res.error || 'Connection failed', 'error');
-        }
-    };
-
-    window.connectInstagram = async function () {
-        const websiteId = document.getElementById('websiteSelect').value;
-        const accountId = document.getElementById('igAccountId').value.trim();
-        const accessToken = document.getElementById('igAccessToken').value.trim();
-        if (!accessToken) { toast('Enter the Access Token first', 'error'); return; }
-
-        const res = await fetchJSON('/api/chat/connect/instagram', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ website_id: websiteId, access_token: accessToken, page_id: accountId }),
-        });
-
-        if (res.success) {
-            toast('Instagram connected - register the Webhook below in Meta for Developers', 'success');
-            document.getElementById('instagramForm').style.display = 'none';
-            document.getElementById('instagramConnected').style.display = 'block';
-            document.getElementById('igWebhookUrl').textContent = res.data.webhook_url || '';
-            document.getElementById('igVerifyToken').textContent = res.data.verify_token || '';
-        } else {
-            toast(res.error || 'Connection failed', 'error');
-        }
     };
 
     window.saveSettings = async function () {
@@ -3535,6 +3460,43 @@ JS;
             Logger::info('Duplicate webhook event ignored', ['channel' => $channel, 'external_event_id' => $externalEventId]);
             return false;
         }
+    }
+
+    /** GET /api/chat/meta-pages?website_id= - صفحات فيسبوك المربوطة بتسجيل الدخول ومين بيرد على الرسايل */
+    public function metaPages(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) return $this->error('Not logged in', 401);
+        $wid = (int) $this->get('website_id');
+        if (!$this->ownsChatWebsite($wid)) return $this->error('Website not found', 404);
+        try {
+            return $this->success((new MetaChatPages($this->db))->overview((int) $this->user['id'], $wid));
+        } catch (Throwable $e) {
+            Logger::error('Meta chat pages failed', ['error' => $e->getMessage()]);
+            return $this->error('Could not load your Facebook pages', 503);
+        }
+    }
+
+    /** POST /api/chat/meta-pages/messaging {website_id, connection_id, enabled} */
+    public function metaPageMessaging(array $params = []): array
+    {
+        if (!$this->isAuthenticated()) return $this->error('Not logged in', 401);
+        if ($e = $this->verifyCsrf()) return $e;
+        $wid = (int) $this->get('website_id');
+        if (!$this->ownsChatWebsite($wid)) return $this->error('Website not found', 404);
+        try {
+            $r = (new MetaChatPages($this->db))->setMessaging((int) $this->user['id'], $wid, (int) $this->get('connection_id'), filter_var($this->get('enabled', false), FILTER_VALIDATE_BOOLEAN));
+            return $this->success($r, 'Saved');
+        } catch (InvalidArgumentException | RuntimeException $e) {
+            return $this->error($e->getMessage(), 422);
+        } catch (Throwable $e) {
+            Logger::error('Meta chat page toggle failed', ['error' => $e->getMessage()]);
+            return $this->error('Could not update the page', 503);
+        }
+    }
+
+    private function ownsChatWebsite(int $wid): bool
+    {
+        return $wid > 0 && !empty($this->db->query('SELECT id FROM websites WHERE id = ? AND user_id = ? LIMIT 1', [$wid, (int) $this->user['id']]));
     }
 
     /** POST /api/chat/connect/messenger */

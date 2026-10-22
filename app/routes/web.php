@@ -404,6 +404,9 @@ $router->get('/wa/go/{token}','WhatsAppStudioController','redirect');
 
 // Service completion: existing services with explicit readiness and safe recovery.
 $router->get('/service-center','ServiceCenterController','index',['AuthMiddleware']);
+// استلام فلوس الحجوزات: ربط Stripe بتسجيل الدخول (من غير نسخ مفاتيح)
+$router->get('/payments/stripe/connect','OperatorPaymentsController','connectStripe',['AuthMiddleware']);
+$router->get('/payments/stripe/callback','OperatorPaymentsController','stripeCallback',['AuthMiddleware']);
 
 $router->get('/outreach','OutreachController','index',['AuthMiddleware']);
 

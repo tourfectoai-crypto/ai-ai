@@ -121,7 +121,7 @@ class TikTokAPI
         $expires = strtotime((string) $connection->getAttribute('token_expires_at') . ' UTC') ?: 0;
         $refreshEnc = (string) $connection->getAttribute('refresh_token');
         if ($refreshEnc !== '' && $expires < time() + 600) {
-            $fresh = self::refresh((string) env('TIKTOK_CLIENT_KEY'), (string) env('TIKTOK_CLIENT_SECRET'), $enc->decrypt($refreshEnc));
+            $fresh = self::refresh((string) MetaOAuthClient::setting('tiktok_client_key', 'TIKTOK_CLIENT_KEY'), (string) MetaOAuthClient::setting('tiktok_client_secret', 'TIKTOK_CLIENT_SECRET'), $enc->decrypt($refreshEnc));
             if (!empty($fresh['success'])) {
                 $token = (string) $fresh['access_token'];
                 $connection->setAttribute('access_token', $enc->encrypt($token));

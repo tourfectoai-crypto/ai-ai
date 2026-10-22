@@ -1209,11 +1209,13 @@ JS;
 
         $state = OAuthState::issue(['aud' => 'meta_ads', 'nonce' => $nonce], (int) ($this->user['id'] ?? 0));
         // ?for=social: الربط جاي من صفحة السوشيال (نشر بوستات) - نرجّعه هناك
-        $_SESSION['meta_oauth_return'] = $this->get('for') === 'social' ? '/social' : '/ads';
+        // ?for=chat: من إعدادات الشات (ماسنجر/إنستجرام) - نربط صفحات الموقع المختار ونرجّعه هناك
+        $_SESSION['meta_oauth_return'] = ['social' => '/social', 'chat' => '/chat/settings'][(string) $this->get('for')] ?? '/ads';
+        $_SESSION['meta_oauth_website'] = (int) $this->get('website_id') ?: null;
         // ?rerequest=1: العميل رفض صلاحية قبل كده - Meta مش بتسأله تاني من غيره
         // من صفحة السوشيال بنطلب شاشة الموافقة كل مرة (rerequest) عشان العميل يقدر يختار
         // صفحات إضافية - من غيره Meta بترجّع الصفحات المتوافق عليها قبل كده من غير ما تسأل.
-        $forceDialog = (bool) $this->get('rerequest') || $this->get('for') === 'social';
+        $forceDialog = (bool) $this->get('rerequest') || in_array($this->get('for'), ['social', 'chat'], true);
         header('Location: ' . $oauth->buildAuthUrl($state, $forceDialog));
         exit;
     }
@@ -1283,8 +1285,14 @@ JS;
 
         // جاي من السوشيال أو مالوش حساب إعلانات: نربط الصفحات وإنستجرام بس (كان الربط كله بيفشل
         // لو مفيش حساب إعلانات، مع إن الشركة عايزة تنشر بوستات بس)
-        if (($_SESSION['meta_oauth_return'] ?? '/ads') === '/social' || !$accountsResult['success'] || empty($accountsResult['accounts'])) {
-            $website = $this->firstWebsiteForUser((int) $this->user['id']);
+        $metaReturn = $_SESSION['meta_oauth_return'] ?? '/ads';
+        if (in_array($metaReturn, ['/social', '/chat/settings'], true) || !$accountsResult['success'] || empty($accountsResult['accounts'])) {
+            $website = null;
+            $chosen = (int) ($_SESSION['meta_oauth_website'] ?? 0);
+            if ($chosen > 0) {
+                $website = $this->db->query('SELECT * FROM websites WHERE id = ? AND user_id = ? LIMIT 1', [$chosen, (int) $this->user['id']])[0] ?? null;
+            }
+            $website = $website ?: $this->firstWebsiteForUser((int) $this->user['id']);
             if (!$website) {
                 $this->renderAdsOAuthError('لازم يكون عندك موقع مضاف الأول من صفحة "المواقع"، وبعدين اربط Meta.');
                 exit;
@@ -1297,7 +1305,8 @@ JS;
                     . ($missing ? '<br><br>صلاحيات ناقصة: ' . htmlspecialchars(implode('، ', array_column($missing, 'label')), ENT_QUOTES, 'UTF-8') . ' - <a href="/ads/connect/meta?for=social&rerequest=1">اربط تاني ووافق عليها</a>' : ''));
                 exit;
             }
-            header('Location: /social?meta=connected');
+            unset($_SESSION['meta_oauth_website']);
+            header('Location: ' . ($metaReturn === '/chat/settings' ? '/chat/settings?meta=connected&website_id=' . (int) $website['id'] : '/social?meta=connected'));
             exit;
         }
 

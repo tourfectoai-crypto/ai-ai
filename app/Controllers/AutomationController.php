@@ -341,7 +341,7 @@ class AutomationController extends Controller
             );
         };
         $platformName = [
-            'google_business' => 'Google Business', 'ultramsg' => 'WhatsApp (UltraMsg)', 'whatsapp' => 'WhatsApp',
+            'google_business' => 'Google Business', 'ultramsg' => 'WhatsApp (UltraMsg)', 'whatsapp_qr' => 'WhatsApp (QR)', 'whatsapp' => 'WhatsApp',
             'wati' => 'WhatsApp (WATI)', 'messenger' => 'Messenger', 'facebook' => 'Facebook', 'instagram' => 'Instagram',
             'wordpress' => 'WordPress', 'custom_api' => 'API', 'meta_ads' => 'Meta Ads', 'google_ads' => 'Google Ads', 'tiktok_ads' => 'TikTok Ads',
         ];
@@ -362,7 +362,7 @@ class AutomationController extends Controller
                 }
                 break;
             case 'chat_replies':
-                foreach ($pcRows("'ultramsg','whatsapp','wati','messenger','facebook','instagram'") as $r) {
+                foreach ($pcRows("'ultramsg','whatsapp_qr','whatsapp','wati','messenger','facebook','instagram'") as $r) {
                     $add($r['website_id'], $platformName[$r['platform']] ?? $r['platform'], $platformName[$r['platform']] ?? $r['platform']);
                 }
                 foreach ($rows("SELECT DISTINCT website_id FROM bot_settings WHERE user_id = ? AND is_enabled = 1 AND website_id IS NOT NULL", [$uid]) as $r) {
@@ -448,7 +448,7 @@ class AutomationController extends Controller
                 "SELECT w.id, w.company_name, w.main_url, COALESCE(w.is_connected, 0) AS embed_connected,
                         (SELECT COUNT(*) FROM platform_connections pc WHERE pc.website_id = w.id AND pc.platform IN ('wordpress','custom_api') AND pc.status = 'connected') AS wp_connected,
                         (SELECT COUNT(*) FROM platform_connections pc WHERE pc.website_id = w.id AND pc.platform = 'google_business' AND pc.status = 'connected') AS google_connected,
-                        (SELECT COUNT(*) FROM platform_connections pc WHERE pc.website_id = w.id AND pc.platform IN ('ultramsg','whatsapp','messenger','instagram','facebook','wati') AND pc.status = 'connected') AS chat_connected
+                        (SELECT COUNT(*) FROM platform_connections pc WHERE pc.website_id = w.id AND pc.platform IN ('ultramsg','whatsapp_qr','whatsapp','messenger','instagram','facebook','wati') AND pc.status = 'connected') AS chat_connected
                    FROM websites w WHERE w.user_id = ? ORDER BY w.id DESC LIMIT 50",
                 [$uid]
             );
@@ -525,7 +525,7 @@ class AutomationController extends Controller
 
         return [
             'google_business' => $pc("'google_business'"),
-            'chat_channel' => $pc("'ultramsg','whatsapp','messenger','instagram','facebook','wati'")
+            'chat_channel' => $pc("'ultramsg','whatsapp_qr','whatsapp','messenger','instagram','facebook','wati'")
                 || $count('SELECT COUNT(*) FROM chat_messages WHERE user_id = ?', [$uid]) > 0,
             // الإصلاحات التلقائية محتاجة كود Auto SEO أو موقع من منشئ المواقع
             'website_fix' => $embed || $builder,

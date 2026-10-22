@@ -7,6 +7,23 @@
  */
 
 return [
+    'اختياري - الحملات بتتبعت من خلال سيرفر بريد المنصة لو ماضفتش سيرفرك' => 'Optional - campaigns are sent through the platform\'s mail server unless you add your own',
+    'مش محتاج أي إعداد: حملاتك والرسايل التلقائية بتتبعت من خلال سيرفر بريد المنصة. ضيف سيرفرك تحت بس لو عايز الإيميلات تطلع من بريد شركتك' => 'No setup needed: your campaigns and automations are sent through the platform\'s mail server. Add your own server below only if you want emails to go out from your company mailbox',
+    'استخدم سيرفر البريد بتاعي (اختياري، متقدم)' => 'Use my own mail server (optional, advanced)',
+    'بتسجّل دخول في Stripe وتوافق - فلوس الحجوزات بتروح لحسابك مباشرة. مش محتاج تنسخ أي مفاتيح' => 'You sign in to Stripe and approve - booking payments go straight to your account. No keys to copy',
+    'سجّل دخول تاني / غيّر الحساب' => 'Sign in again / change account',
+    'حساب Stripe مربوط' => 'Stripe account connected',
+    'لسه مفيش حساب Stripe مربوط' => 'No Stripe account connected yet',
+    'تفك ربط حساب Stripe؟ الحجوزات هترجع طلبات من غير دفع أونلاين' => 'Disconnect your Stripe account? Bookings will go back to requests without online payment',
+    'حساب Stripe اتربط - الدفع الأونلاين شغّال على حسابك' => 'Stripe connected - online payment now goes to your account',
+    'اربط حساب Stripe الأول (زرار سجّل دخول بـ Stripe' => 'Connect your Stripe account first (Sign in with Stripe button',
+    'سجّل دخول بـ Stripe واربط حسابك' => 'Sign in with Stripe and connect your account',
+    'الربط بـ Stripe لسه بيتجهز من المنصة' => 'Stripe connection is being prepared by the platform',
+    'فك ربط Stripe' => 'Disconnect Stripe',
+    'اتلغى ربط Stripe' => 'Stripe connection cancelled',
+    'ماقدرناش نربط Stripe - جرّب تاني' => 'We could not connect Stripe - please try again',
+    'صاحب الحساب بس يقدر يربط Stripe' => 'Only the account owner can connect Stripe',
+    'Stripe ماأكدش الربط - جرّب تاني' => 'Stripe did not confirm the connection - please try again',
     'نجاح جزئي' => 'Partially completed',
     'نتيجة تحتاج مراجعة' => 'Outcome needs review',
     'تحتاج مراجعة' => 'Needs review',

@@ -45,6 +45,8 @@ class OperatorPayments
             'stripe_account_name' => $r['stripe_account_name'] ?? null,
             'verified_at' => $r['verified_at'] ?? null,
             'platform_allowed' => self::platformAllowed(),
+            'stripe_signin' => class_exists('StripeConnectOAuth') && StripeConnectOAuth::configured(),
+            'connected_by_signin' => self::connectedAccountId($userId) !== null,
         ];
     }
 
@@ -130,7 +132,7 @@ class OperatorPayments
             }
         }
         if ($mode === 'own_stripe' && !$enc) {
-            return ['success' => false, 'error' => 'حط مفتاح Stripe السري الأول'];
+            return ['success' => false, 'error' => 'اربط حساب Stripe الأول (زرار سجّل دخول بـ Stripe)'];
         }
         $db->exec(
             'INSERT INTO operator_payment_settings (user_id, mode, stripe_secret_key, stripe_key_last4, stripe_account_name, verified_at)
@@ -142,8 +144,43 @@ class OperatorPayments
         return ['success' => true];
     }
 
+    /**
+     * حساب Stripe اتربط بتسجيل الدخول (Connect): المفتاح الخاص بحساب العميل بيتحفظ مشفّر
+     * زي المفتاح اليدوي بالظبط، فالدفع والتحقق شغالين من غير أي تغيير.
+     * @return array{success:bool, error?:string}
+     */
+    public static function saveConnected(int $userId, string $accessToken, string $accountId, bool $livemode): array
+    {
+        try {
+            (new StripeCheckoutService())->withApiKey($accessToken)->testKey();
+        } catch (Throwable $e) {
+            return ['success' => false, 'error' => 'Stripe ماأكدش الربط - جرّب تاني'];
+        }
+        $enc = (new Encryption())->encrypt($accessToken, self::SALT);
+        $name = 'Stripe ' . $accountId . ($livemode ? '' : ' (Test mode)');
+        Database::getInstance()->exec(
+            'INSERT INTO operator_payment_settings (user_id, mode, stripe_secret_key, stripe_key_last4, stripe_account_name, verified_at)
+             VALUES (?, \'own_stripe\', ?, ?, ?, NOW())
+             ON DUPLICATE KEY UPDATE mode = \'own_stripe\', stripe_secret_key = VALUES(stripe_secret_key), stripe_key_last4 = VALUES(stripe_key_last4),
+                                     stripe_account_name = VALUES(stripe_account_name), verified_at = VALUES(verified_at)',
+            [$userId, $enc, substr($accountId, -4), $name]
+        );
+        return ['success' => true];
+    }
+
+    /** رقم حساب Stripe المربوط بتسجيل الدخول (لفك الربط عند Stripe كمان) */
+    public static function connectedAccountId(int $userId): ?string
+    {
+        $r = self::row($userId);
+        return ($r && preg_match('/^Stripe (acct_[A-Za-z0-9]+)/', (string) $r['stripe_account_name'], $m)) ? $m[1] : null;
+    }
+
     public static function removeKey(int $userId): void
     {
+        $acct = self::connectedAccountId($userId);
+        if ($acct && class_exists('StripeConnectOAuth') && StripeConnectOAuth::configured()) {
+            try { (new StripeConnectOAuth())->deauthorize($acct); } catch (Throwable $e) {}
+        }
         Database::getInstance()->exec(
             "UPDATE operator_payment_settings SET stripe_secret_key = NULL, stripe_key_last4 = NULL, stripe_account_name = NULL, verified_at = NULL,
                     mode = IF(mode = 'own_stripe', 'request', mode) WHERE user_id = ?",

@@ -371,6 +371,13 @@ $router->get('/api/chat/webhook', 'ChatController', 'verifyWebhook');
 $router->post('/api/chat/webhook', 'ChatController', 'webhook');
 
 // ربط UltraMsg (واتساب) لكل عميل بحسابه الخاص
+// واتساب بمسح QR (البوابة من لوحة الأدمن، العميل بيمسح الكود بس)
+$router->get('/api/whatsapp-qr/status', 'WhatsAppQrController', 'status', ['AuthMiddleware']);
+$router->post('/api/whatsapp-qr/start', 'WhatsAppQrController', 'start', ['AuthMiddleware']);
+$router->get('/api/whatsapp-qr/poll', 'WhatsAppQrController', 'poll', ['AuthMiddleware']);
+$router->post('/api/whatsapp-qr/disconnect', 'WhatsAppQrController', 'disconnect', ['AuthMiddleware']);
+$router->post('/api/whatsapp-qr/webhook/{website_id}', 'WhatsAppQrController', 'webhook');
+$router->post('/api/admin/whatsapp-qr/test', 'AdminController', 'testWhatsAppQrGateway', ['AuthMiddleware', 'AdminMiddleware']);
 $router->get('/api/chat/ultramsg/status', 'ChatController', 'getUltraMsgStatus', ['AuthMiddleware']);
 $router->post('/api/chat/connect/ultramsg', 'ChatController', 'connectUltraMsg', ['AuthMiddleware']);
 $router->post('/api/chat/disconnect/ultramsg/{website_id}', 'ChatController', 'disconnectUltraMsg', ['AuthMiddleware']);
@@ -1583,6 +1590,8 @@ $router->get('/api/ai-chat/websites/{id}/learning/gaps', 'AiLearningController',
 $router->post('/api/ai-chat/websites/{id}/learning/gaps/{gapId}/status', 'AiLearningController', 'updateGapStatus', ['AuthMiddleware']);
 $router->post('/api/ai-chat/websites/{id}/learning/gaps/scan', 'AiLearningController', 'scan', ['AuthMiddleware']);
 // ربط قنوات Messenger/Instagram (بيحتاج AuthMiddleware - بيكلم Meta Graph API)
+$router->get('/api/chat/meta-pages', 'ChatController', 'metaPages', ['AuthMiddleware']);
+$router->post('/api/chat/meta-pages/messaging', 'ChatController', 'metaPageMessaging', ['AuthMiddleware']);
 $router->post('/api/chat/connect/messenger', 'ChatController', 'connectMessenger', ['AuthMiddleware']);
 $router->post('/api/chat/connect/instagram', 'ChatController', 'connectInstagram', ['AuthMiddleware']);
 // Webhooks للقنوات الجديدة - من غير AuthMiddleware (بتتيجي من Meta/SMTP servers)

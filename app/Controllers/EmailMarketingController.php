@@ -938,13 +938,14 @@ class EmailMarketingController extends Controller
         <div class="p-card" style="margin-bottom:16px;">
             <div class="p-card-head">
                 <h3>🔌 Sending settings (SMTP)</h3>
-                <span class="p-card-sub">Connect your own mail server - like Brevo, sending happens through your own infrastructure, not a third party</span>
+                <span class="p-card-sub">Optional - campaigns are sent through the platform's mail server unless you add your own</span>
             </div>
+            <div class="alert alert-success" style="margin-top:8px;">✔ No setup needed: your campaigns and automations are sent through the platform's mail server. Add your own server below only if you want emails to go out from your company mailbox.</div>
             <div id="emSmtpStatus" style="margin-top:8px;"></div>
         </div>
 
-        <div class="p-card">
-            <div class="p-card-head"><h3>⚙️ Server details</h3></div>
+        <details class="p-card">
+            <summary style="cursor:pointer;font-weight:600">⚙️ Use my own mail server (optional, advanced)</summary>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:10px;">
                 <div>
                     <label class="p-label">Host (host)</label>
@@ -990,7 +991,7 @@ class EmailMarketingController extends Controller
                 <label for="emSmtpActive">Enable sending via these settings</label>
             </div>
             <p class="p-cell-muted" style="margin-top:12px;">Your settings override the global .env settings. The password is not shown again after saving.</p>
-        </div>
+        </details>
 
         <div class="p-card" style="margin-top:16px;">
             <div class="p-card-head">

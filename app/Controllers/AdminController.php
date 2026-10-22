@@ -626,6 +626,7 @@ class AdminController extends Controller
                 'gemini_api_key', 'google_client_id', 'google_client_secret', 'google_maps_api_key',
                 'meta_app_id', 'meta_app_secret', 'support_whatsapp_number',
                 'meta_login_config_id', 'meta_signin_config_id', 'meta_wa_config_id', 'meta_oauth_scopes',
+                'wa_qr_enabled', 'wa_qr_base_url', 'wa_qr_api_key', 'tiktok_client_key', 'tiktok_client_secret', 'stripe_connect_client_id', 'stripe_platform_secret_key',
                 'mail_host', 'mail_port', 'mail_username', 'mail_password',
                 'mail_encryption', 'mail_from_address', 'mail_from_name',
                 'oauth_microsoft_client_id', 'oauth_microsoft_client_secret', 'oauth_microsoft_tenant',
@@ -642,6 +643,19 @@ class AdminController extends Controller
             $seoBudget=$this->get('serp_monthly_budget_usd');
             if ($seoBudget!==null && (!is_numeric($seoBudget) || !is_finite((float)$seoBudget) || (float)$seoBudget<0 || (float)$seoBudget>1000000))
                 return $this->error('راجع سقف DataForSEO بالدولار: من 0 لمليون',422);
+            if ($this->get('wa_qr_enabled') !== null && !in_array((string) $this->get('wa_qr_enabled'), ['0', '1'], true)) {
+                return $this->error('اختار تفعيل أو إيقاف ربط واتساب بـ QR', 422);
+            }
+            if ($this->get('stripe_connect_client_id') !== null && $this->get('stripe_connect_client_id') !== '' && !preg_match('/^ca_[A-Za-z0-9]+$/', (string) $this->get('stripe_connect_client_id'))) {
+                return $this->error('Stripe Connect Client ID لازم يبدأ بـ ca_', 422);
+            }
+            if ($this->get('stripe_platform_secret_key') !== null && $this->get('stripe_platform_secret_key') !== '' && !preg_match('/^sk_(live|test)_[A-Za-z0-9]+$/', (string) $this->get('stripe_platform_secret_key'))) {
+                return $this->error('مفتاح Stripe بتاع المنصة لازم يبدأ بـ sk_live_ أو sk_test_', 422);
+            }
+            $waUrl = trim((string) $this->get('wa_qr_base_url', ''));
+            if ($waUrl !== '' && (!filter_var($waUrl, FILTER_VALIDATE_URL) || !in_array(strtolower((string) parse_url($waUrl, PHP_URL_SCHEME)), ['http', 'https'], true))) {
+                return $this->error('رابط بوابة واتساب غير صالح - اكتب الرابط كامل بالـ https', 422);
+            }
             foreach ($allowedKeys as $key) {
                 if ($this->get($key) !== null && $this->get($key) !== '') {
                     $service->set($key, (string) $this->get($key));
@@ -653,6 +667,25 @@ class AdminController extends Controller
             Logger::error('Admin updateSystemSettings Error', ['message' => $e->getMessage()]);
             return $this->error('تعذر التحديث', 500);
         }
+    }
+
+    /** POST /api/admin/whatsapp-qr/test - فحص بوابة واتساب QR بالقيم المكتوبة أو المحفوظة */
+    public function testWhatsAppQrGateway(array $params = []): array
+    {
+        $url = trim((string) $this->get('base_url', ''));
+        $key = trim((string) $this->get('api_key', ''));
+        if ($url !== '' && !filter_var($url, FILTER_VALIDATE_URL)) {
+            return $this->error('رابط البوابة غير صالح', 422);
+        }
+        $r = (new WhatsAppQrGateway($url !== '' ? $url : null, $key !== '' ? $key : null))->ping();
+        if (!empty($r['ok'])) {
+            return $this->success([], 'البوابة شغالة');
+        }
+        $why = (string) ($r['error'] ?? '');
+        $msg = str_contains($why, 'rejected') ? 'البوابة رفضت المفتاح - راجع AUTHENTICATION_API_KEY'
+            : (str_contains($why, 'unreachable') ? 'مش قادرين نوصل للبوابة - راجع الرابط وإن السيرفر شغال'
+            : (str_contains($why, 'required') ? 'اكتب رابط البوابة والمفتاح' : 'البوابة ردّت بخطأ - راجع الإعدادات وسجل البوابة'));
+        return $this->error($msg, 422);
     }
 
     public function listFaqAdmin(array $params = []): array
@@ -2510,6 +2543,7 @@ class AdminController extends Controller
             'gemini_api_key', 'google_client_id', 'google_client_secret', 'google_maps_api_key',
             'meta_app_id', 'meta_app_secret', 'support_whatsapp_number',
             'meta_login_config_id', 'meta_signin_config_id', 'meta_wa_config_id', 'meta_oauth_scopes',
+            'wa_qr_enabled', 'wa_qr_base_url', 'wa_qr_api_key', 'tiktok_client_key', 'tiktok_client_secret', 'stripe_connect_client_id', 'stripe_platform_secret_key',
             'mail_host', 'mail_port', 'mail_username', 'mail_password',
             'mail_encryption', 'mail_from_address', 'mail_from_name',
             'oauth_microsoft_client_id', 'oauth_microsoft_client_secret', 'oauth_microsoft_tenant',
@@ -2529,7 +2563,7 @@ class AdminController extends Controller
         if (res.success) {
             toast(I18N['common.updated'], 'success');
             // نفضّي حقول القيم الحساسة اللي اتبعتت عشان محدش يشوفها معروضة تاني
-            ['geo_openai_api_key','geo_gemini_api_key','geo_perplexity_api_key','serp_login', 'serp_password', 'gemini_api_key', 'google_client_secret', 'google_maps_api_key', 'meta_app_secret', 'mail_password', 'oauth_microsoft_client_secret', 'oauth_apple_private_key'].forEach(key => {
+            ['wa_qr_api_key','tiktok_client_secret','stripe_platform_secret_key','geo_openai_api_key','geo_gemini_api_key','geo_perplexity_api_key','serp_login', 'serp_password', 'gemini_api_key', 'google_client_secret', 'google_maps_api_key', 'meta_app_secret', 'mail_password', 'oauth_microsoft_client_secret', 'oauth_apple_private_key'].forEach(key => {
                 const el = document.getElementById('ss_' + key);
                 if (el) el.value = '';
             });
@@ -2538,6 +2572,16 @@ class AdminController extends Controller
             alertBox.textContent = res.error || I18N['common.update_failed'];
             alertBox.style.display = 'block';
         }
+    };
+
+    window.testWaQrGateway = async function (btn) {
+        const url = (document.getElementById('ss_wa_qr_base_url') || {}).value || '';
+        const key = (document.getElementById('ss_wa_qr_api_key') || {}).value || '';
+        btn.disabled = true;
+        try {
+            const res = await fetchJSON('/api/admin/whatsapp-qr/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base_url: url.trim(), api_key: key.trim() }) });
+            toast(res.success ? '✅ البوابة شغالة والمفتاح صحيح' : ('❌ ' + (res.error || 'تعذر الاتصال')), res.success ? 'success' : 'error');
+        } finally { btn.disabled = false; }
     };
 
     async function loadFaqList() {
@@ -4120,6 +4164,8 @@ HTML;
 
             case 'settings':
                 $metaSetupBox = $this->metaSetupBox();
+                $stripeRedirect = htmlspecialchars(rtrim(defined('APP_URL') ? (string) APP_URL : '', '/') . '/payments/stripe/callback', ENT_QUOTES, 'UTF-8');
+                $tiktokRedirect = htmlspecialchars(rtrim(defined('APP_URL') ? (string) APP_URL : '', '/') . '/social/connect/tiktok/callback', ENT_QUOTES, 'UTF-8');
                 return <<<HTML
                 <div class="p-card" style="margin-bottom:20px;">
                     <div class="p-card-head"><h3>🎨 {$this->tr('admin.brand.title')}</h3><span class="p-card-sub">{$this->tr('admin.brand.subtitle')}</span></div>
@@ -4237,6 +4283,29 @@ HTML;
                         <div class="form-group"><label class="form-label">الصلاحيات <span class="p-cell-muted">(لو مش Login for Business - فاضي = الكل)</span></label><input type="text" id="ss_meta_oauth_scopes" class="form-control" dir="ltr" placeholder="pages_show_list,pages_manage_posts"></div>
                     </div>
                     {$metaSetupBox}
+
+                    <h4 style="margin:18px 0 8px;font-size:13px;color:var(--panel-text-muted);">💬 ربط واتساب بمسح QR (للعملاء)</h4>
+                    <p class="p-cell-muted" style="font-size:11.5px;margin-bottom:8px;">بوابة <b>Evolution API</b> (مفتوحة المصدر) على سيرفر عندك. كل عميل بيضغط "ربط واتساب" ويمسح الكود من موبايله - من غير أي مفاتيح. الربط ده غير رسمي من واتساب: للأرقام اللي بتبعت كميات كبيرة الأفضل الربط الرسمي (Embedded Signup فوق).</p>
+                    <div class="p-grid cols-2">
+                        <div class="form-group"><label class="form-label" for="ss_wa_qr_enabled">التفعيل للعملاء</label><select id="ss_wa_qr_enabled" class="form-control"><option value="0">متوقف</option><option value="1">مفعّل</option></select></div>
+                        <div class="form-group"><label class="form-label">رابط البوابة</label><input type="url" id="ss_wa_qr_base_url" class="form-control" dir="ltr" placeholder="https://wa.yourdomain.com"></div>
+                        <div class="form-group"><label class="form-label">المفتاح العام (AUTHENTICATION_API_KEY)</label><input type="password" id="ss_wa_qr_api_key" class="form-control" placeholder="••••••••" dir="ltr"></div>
+                        <div class="form-group"><label class="form-label">&nbsp;</label><button type="button" class="p-btn outline" onclick="testWaQrGateway(this)">🔌 اختبار الاتصال بالبوابة</button></div>
+                    </div>
+
+                    <h4 style="margin:18px 0 8px;font-size:13px;color:var(--panel-text-muted);">💳 Stripe Connect (العملاء بيستلموا فلوس الحجوزات على حسابهم بتسجيل الدخول)</h4>
+                    <p class="p-cell-muted" style="font-size:11.5px;margin-bottom:8px;">من Stripe ← Settings ← Connect ← Onboarding options ← OAuth: فعّل OAuth وضيف رابط الرجوع: <code dir="ltr">{$stripeRedirect}</code></p>
+                    <div class="p-grid cols-2">
+                        <div class="form-group"><label class="form-label">Connect Client ID</label><input type="text" id="ss_stripe_connect_client_id" class="form-control" dir="ltr" placeholder="ca_..."></div>
+                        <div class="form-group"><label class="form-label">Secret key بتاع المنصة</label><input type="password" id="ss_stripe_platform_secret_key" class="form-control" placeholder="••••••••" dir="ltr"></div>
+                    </div>
+
+                    <h4 style="margin:18px 0 8px;font-size:13px;color:var(--panel-text-muted);">🎵 TikTok (ربط حسابات العملاء بتسجيل الدخول)</h4>
+                    <p class="p-cell-muted" style="font-size:11.5px;margin-bottom:8px;">من TikTok for Developers ← تطبيقك. ضيف رابط الرجوع: <code dir="ltr">{$tiktokRedirect}</code></p>
+                    <div class="p-grid cols-2">
+                        <div class="form-group"><label class="form-label">Client Key</label><input type="text" id="ss_tiktok_client_key" class="form-control" dir="ltr"></div>
+                        <div class="form-group"><label class="form-label">Client Secret</label><input type="password" id="ss_tiktok_client_secret" class="form-control" placeholder="••••••••" dir="ltr"></div>
+                    </div>
 
                     <h4 style="margin:18px 0 8px;font-size:13px;color:var(--panel-text-muted);">🔐 تسجيل الدخول الاجتماعي - Microsoft</h4>
                     <p class="p-cell-muted" style="font-size:11.5px;margin-bottom:8px;">Google وFacebook بيستخدموا نفس بيانات الاعتماد فوق (Google OAuth / Meta) - محتاجين بس تضيف رابط الـ Redirect الخاص بتسجيل الدخول في لوحة كل منصة.</p>

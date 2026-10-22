@@ -62,6 +62,16 @@ class SystemSettingsService
         'meta_login_config_id' => ['category' => 'meta', 'label' => 'Facebook Login for Business - Config ID (ربط الإعلانات والصفحات)', 'is_secret' => false, 'constant' => ''],
         'meta_signin_config_id' => ['category' => 'meta', 'label' => 'Config ID لتسجيل الدخول بفيسبوك', 'is_secret' => false, 'constant' => ''],
         'meta_wa_config_id' => ['category' => 'meta', 'label' => 'WhatsApp Embedded Signup - Config ID', 'is_secret' => false, 'constant' => ''],
+        // === واتساب بمسح QR: بوابة Evolution API متعددة الأرقام (الأدمن بيظبطها مرة، العملاء بيمسحوا الكود بس) ===
+        'wa_qr_enabled' => ['category' => 'whatsapp_qr', 'label' => 'تفعيل ربط واتساب بـ QR (1 فقط)', 'is_secret' => false, 'constant' => ''],
+        'wa_qr_base_url' => ['category' => 'whatsapp_qr', 'label' => 'رابط بوابة واتساب (Evolution API)', 'is_secret' => false, 'constant' => ''],
+        'wa_qr_api_key' => ['category' => 'whatsapp_qr', 'label' => 'المفتاح العام للبوابة (AUTHENTICATION_API_KEY)', 'is_secret' => true, 'constant' => ''],
+        // === Stripe Connect (العميل بيربط حساب Stripe بتاعه بتسجيل الدخول) ===
+        'stripe_connect_client_id' => ['category' => 'stripe', 'label' => 'Stripe Connect Client ID (ca_...)', 'is_secret' => false, 'constant' => 'STRIPE_CONNECT_CLIENT_ID'],
+        'stripe_platform_secret_key' => ['category' => 'stripe', 'label' => 'Stripe Secret Key بتاع المنصة', 'is_secret' => true, 'constant' => 'STRIPE_API_KEY'],
+        // === TikTok (تسجيل دخول العميل لحسابه) ===
+        'tiktok_client_key' => ['category' => 'tiktok', 'label' => 'TikTok Client Key', 'is_secret' => false, 'constant' => 'TIKTOK_CLIENT_KEY'],
+        'tiktok_client_secret' => ['category' => 'tiktok', 'label' => 'TikTok Client Secret', 'is_secret' => true, 'constant' => 'TIKTOK_CLIENT_SECRET'],
         'meta_oauth_scopes' => ['category' => 'meta', 'label' => 'صلاحيات Meta المطلوبة (لو مش Login for Business)', 'is_secret' => false, 'constant' => ''],
 
         // === Google Ads (بيستخدم google_client_id/secret فوق لتسجيل الدخول، ومحتاج Developer Token خاص بيه) ===

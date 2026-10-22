@@ -189,7 +189,7 @@ class TripReminderService
             return false;
         }
         try {
-            return (bool) $this->db->query("SELECT id FROM platform_connections WHERE website_id = ? AND platform IN ('ultramsg','whatsapp_cloud') AND status = 'connected' LIMIT 1", [$websiteId]);
+            return (bool) $this->db->query("SELECT id FROM platform_connections WHERE website_id = ? AND platform IN ('ultramsg','whatsapp_cloud','whatsapp_qr') AND status = 'connected' LIMIT 1", [$websiteId]);
         } catch (Throwable $e) {
             return false;
         }

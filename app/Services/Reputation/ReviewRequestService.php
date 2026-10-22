@@ -244,6 +244,7 @@ class ReviewRequestService
 
         if ($channel === 'whatsapp') {
             if(WhatsAppCloudAPI::forWebsite($websiteId))return true;
+            if (class_exists('WhatsAppQrGateway') && WhatsAppQrGateway::enabled() && (new PlatformConnection())->where(['website_id' => $websiteId, 'platform' => 'whatsapp_qr', 'status' => 'connected'], [], 1)) return true;
             $connection = (new PlatformConnection())->where([
                 'website_id' => $websiteId,
                 'platform' => 'ultramsg',

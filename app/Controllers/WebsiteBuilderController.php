@@ -56,10 +56,10 @@ class WebsiteBuilderController extends Controller
                     <label id="poPlatformRow" style="display:none;margin:10px 0;line-height:1.7"><input type="radio" name="poMode" value="platform"> <b>المنصة تقبض وتحوّلك</b></label>
                     <div id="poStripeBox" style="display:none;margin-top:12px;padding:12px;border:1px solid var(--panel-border,#e3e6ec);border-radius:10px">
                         <div id="poKeyState" style="font-size:13px;margin-bottom:8px"></div>
-                        <label class="form-label">مفتاح Stripe السري (Secret key)</label>
-                        <input type="password" id="poKey" class="form-control" dir="ltr" placeholder="sk_live_..." autocomplete="off">
-                        <div style="font-size:12px;color:var(--panel-text-muted);margin-top:6px;line-height:1.7">من لوحة Stripe ← Developers ← API keys ← Secret key. بيتخزّن مشفّر ومحدش بيشوفه.</div>
-                        <button type="button" class="p-btn outline xs" id="poRemoveKey" style="display:none;margin-top:8px" onclick="removePayoutKey()">شيل المفتاح</button>
+                        <a class="p-btn primary" id="poSignin" href="/payments/stripe/connect" style="display:inline-flex;gap:8px;align-items:center"><b>S</b> سجّل دخول بـ Stripe واربط حسابك</a>
+                        <div id="poSigninNote" style="font-size:12px;color:var(--panel-text-muted);margin-top:6px;line-height:1.7">بتسجّل دخول في Stripe وتوافق - فلوس الحجوزات بتروح لحسابك مباشرة. مش محتاج تنسخ أي مفاتيح.</div>
+                        <div id="poUnavailable" style="display:none;font-size:13px;color:var(--panel-text-muted)">الربط بـ Stripe لسه بيتجهز من المنصة.</div>
+                        <button type="button" class="p-btn outline xs" id="poRemoveKey" style="display:none;margin-top:8px" onclick="removePayoutKey()">فك ربط Stripe</button>
                     </div>
                     <div id="poAlert" class="alert alert-danger" style="display:none;margin-top:10px"></div>
                 </div>
@@ -142,8 +142,11 @@ HTML;
         const s = payoutState || { mode: 'request' };
         document.querySelectorAll('input[name=poMode]').forEach(r => { r.checked = r.value === s.mode; r.disabled = s.can_edit === false; r.onchange = poSync; });
         document.getElementById('poPlatformRow').style.display = s.platform_allowed ? 'block' : 'none';
-        document.getElementById('poKey').value = '';
-        document.getElementById('poKeyState').textContent = s.has_stripe_key ? ('مفتاح متسجّل ينتهي بـ ••••' + (s.stripe_key_last4 || '') + (s.stripe_account_name ? ' · ' + s.stripe_account_name : '') + ' - سيبه فاضي لو مش عايز تغيّره') : 'لسه مفيش مفتاح';
+        document.getElementById('poSignin').style.display = s.stripe_signin && s.can_edit !== false ? 'inline-flex' : 'none';
+        document.getElementById('poSigninNote').style.display = s.stripe_signin ? 'block' : 'none';
+        document.getElementById('poUnavailable').style.display = s.stripe_signin || s.has_stripe_key ? 'none' : 'block';
+        if (s.has_stripe_key) document.getElementById('poSignin').lastChild.textContent = ' سجّل دخول تاني / غيّر الحساب';
+        document.getElementById('poKeyState').textContent = s.has_stripe_key ? ('✔ حساب Stripe مربوط' + (s.stripe_account_name ? ': ' + s.stripe_account_name : (s.stripe_key_last4 ? ' ••••' + s.stripe_key_last4 : ''))) : 'لسه مفيش حساب Stripe مربوط.';
         document.getElementById('poRemoveKey').style.display = s.has_stripe_key && s.can_edit !== false ? 'inline-block' : 'none';
         document.getElementById('poSave').disabled = s.can_edit === false;
         document.getElementById('poAlert').style.display = s.can_edit === false ? 'block' : 'none';
@@ -155,19 +158,23 @@ HTML;
         const btn = document.getElementById('poSave'), al = document.getElementById('poAlert');
         al.style.display = 'none'; btn.disabled = true; btn.textContent = 'بنتأكد...';
         const mode = (document.querySelector('input[name=poMode]:checked') || {}).value || 'request';
-        const key = document.getElementById('poKey').value.trim();
-        const r = await fetchJSON('/api/operator-payments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(key ? { mode, stripe_secret_key: key } : { mode }) });
+        const r = await fetchJSON('/api/operator-payments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) });
         btn.disabled = false; btn.textContent = 'حفظ';
         if (r.success) { toast('تم الحفظ', 'success'); P.closeModal('payoutModal'); loadPayout(); }
         else { al.textContent = r.error || 'تعذر الحفظ'; al.style.display = 'block'; }
     };
     window.removePayoutKey = async function () {
-        if (!confirm('تشيل مفتاح Stripe؟ الحجوزات هترجع طلبات من غير دفع أونلاين.')) return;
+        if (!confirm('تفك ربط حساب Stripe؟ الحجوزات هترجع طلبات من غير دفع أونلاين.')) return;
         const r = await fetchJSON('/api/operator-payments/key', { method: 'DELETE' });
         toast(r.message || r.error, r.success ? 'success' : 'error');
         if (r.success) { P.closeModal('payoutModal'); loadPayout(); }
     };
     loadPayout();
+    (function () {
+        const st = new URLSearchParams(location.search).get('stripe');
+        const msg = { connected: ['✔ حساب Stripe اتربط - الدفع الأونلاين شغّال على حسابك', 'success'], cancelled: ['اتلغى ربط Stripe', 'info'], failed: ['ماقدرناش نربط Stripe - جرّب تاني', 'error'], unavailable: ['الربط بـ Stripe لسه بيتجهز من المنصة', 'error'], owner_only: ['صاحب الحساب بس يقدر يربط Stripe', 'error'] }[st];
+        if (msg) toast(msg[0], msg[1]);
+    })();
     let editingWebsiteId = null;
 
     function addMessage(role, html) {

@@ -45,6 +45,47 @@ class OperatorPaymentsController extends Controller
         return $this->success(OperatorPayments::settings($uid), 'تم الحفظ');
     }
 
+    /** GET /payments/stripe/connect - تسجيل دخول Stripe وربط حساب صاحب النشاط */
+    public function connectStripe(array $params = []): array
+    {
+        $uid = $this->ownerId();
+        if ($uid === null) {
+            header('Location: /website-builder?stripe=owner_only');
+            exit;
+        }
+        if (!StripeConnectOAuth::configured()) {
+            header('Location: /website-builder?stripe=unavailable');
+            exit;
+        }
+        header('Location: ' . StripeConnectOAuth::authorizeUrl(OAuthState::issue(['aud' => 'stripe_connect'], $uid)));
+        exit;
+    }
+
+    /** GET /payments/stripe/callback - Stripe بيرجّع العميل هنا بعد الموافقة */
+    public function stripeCallback(array $params = []): array
+    {
+        $uid = $this->ownerId();
+        $state = (string) $this->get('state', '');
+        if ($uid === null || !OAuthState::verify($state, $uid, null, 'stripe_connect')) {
+            header('Location: /website-builder?stripe=failed');
+            exit;
+        }
+        if ($this->get('error')) {
+            header('Location: /website-builder?stripe=cancelled');
+            exit;
+        }
+        $t = (new StripeConnectOAuth())->exchange((string) $this->get('code', ''));
+        if (empty($t['ok'])) {
+            Logger::warning('Stripe Connect exchange failed', ['user_id' => $uid, 'error' => $t['error'] ?? '']);
+            header('Location: /website-builder?stripe=failed');
+            exit;
+        }
+        $r = OperatorPayments::saveConnected($uid, $t['access_token'], $t['account_id'], (bool) $t['livemode']);
+        $this->log('operator_payments_stripe_connected', ['account' => substr($t['account_id'], -4)]);
+        header('Location: /website-builder?stripe=' . (!empty($r['success']) ? 'connected' : 'failed'));
+        exit;
+    }
+
     public function removeKey(array $params = []): array
     {
         $uid = $this->ownerId();

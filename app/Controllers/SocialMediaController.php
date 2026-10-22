@@ -1849,8 +1849,8 @@ JS;
             exit;
         }
 
-        $clientKey = env('TIKTOK_CLIENT_KEY');
-        $clientSecret = env('TIKTOK_CLIENT_SECRET');
+        $clientKey = MetaOAuthClient::setting('tiktok_client_key', 'TIKTOK_CLIENT_KEY');
+        $clientSecret = MetaOAuthClient::setting('tiktok_client_secret', 'TIKTOK_CLIENT_SECRET');
         if (!$clientKey || !$clientSecret) {
             $this->renderOAuthError('TikTok connection is not enabled yet (TIKTOK_CLIENT_KEY/SECRET details are missing).');
             exit;
@@ -1903,8 +1903,8 @@ JS;
             exit;
         }
 
-        $clientKey    = env('TIKTOK_CLIENT_KEY');
-        $clientSecret = env('TIKTOK_CLIENT_SECRET');
+        $clientKey    = MetaOAuthClient::setting('tiktok_client_key', 'TIKTOK_CLIENT_KEY');
+        $clientSecret = MetaOAuthClient::setting('tiktok_client_secret', 'TIKTOK_CLIENT_SECRET');
         $redirectUri  = env('TIKTOK_OAUTH_REDIRECT_URI') ?: (rtrim(defined('APP_URL') ? APP_URL : '', '/') . '/social/connect/tiktok/callback');
 
         $tok = TikTokAPI::exchangeCode((string) $clientKey, (string) $clientSecret, (string) $code, $redirectUri);

@@ -115,17 +115,17 @@
         } else if (verified && !connected && isWp) {
             html += banner('ok', '<strong>' + esc(t('sc.verified_title')) + '</strong>');
             html += p.authorize_url
-                ? '<h4 class="sc-h">' + esc(t('sc.connect_wp_title')) + '</h4><p class="sc-sub">' + esc(t('sc.connect_wp_desc')) + '</p>' + oneClick(p) + manualForm()
-                : publishOptional() + manualForm();
+                ? '<h4 class="sc-h">' + esc(t('sc.connect_wp_title')) + '</h4><p class="sc-sub">' + esc(t('sc.connect_wp_desc')) + '</p>' + oneClick(p)
+                : publishOptional();
         } else if (verified) {
             html += banner('ok', '<strong>' + esc(t('sc.verified_title')) + '</strong>');
         } else if (isWp) {
             html += '<div class="sc-detected">' + ICON.wp + '<span>' + esc(t('sc.wp_detected')) + (p.site_name ? ' · <bdi>' + esc(p.site_name) + '</bdi>' : '') + '</span></div>';
             if (p.authorize_url) {
-                html += oneClick(p) + easySnippet(false) + manualForm();
+                html += oneClick(p) + easySnippet(false);
             } else {
                 // Application Passwords مقفول: الطريقة الأولى كود واحد (من غير باسورد)، والباقي تحتها
-                html += easySnippet(true) + appPasswordsWhy() + manualForm();
+                html += easySnippet(true) + appPasswordsWhy();
             }
         } else {
             html += banner('info', esc(t('sc.not_wp')) + '<br><span class="sc-sub">' + esc(t('sc.not_wp_hint')) + '</span>') +

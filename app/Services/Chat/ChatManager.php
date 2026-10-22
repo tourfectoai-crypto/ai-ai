@@ -440,6 +440,13 @@ class ChatManager
      */
     private function sendViaUltraMsg(int $websiteId, string $phoneNumber, string $message): bool
     {
+        // ربط واتساب بمسح QR (البوابة متظبطة من الأدمن) له الأولوية على UltraMsg القديم
+        $qr = Database::getInstance()->query("SELECT external_account_id FROM platform_connections WHERE website_id = ? AND platform = 'whatsapp_qr' AND status = 'connected' ORDER BY id DESC LIMIT 1", [$websiteId]);
+        if (!empty($qr) && class_exists('WhatsAppQrGateway') && WhatsAppQrGateway::enabled()) {
+            $r = (new WhatsAppQrGateway())->sendText((string) $qr[0]['external_account_id'], $phoneNumber, $message);
+            if (empty($r['ok'])) Logger::warning('WhatsApp QR send failed', ['website_id' => $websiteId, 'error' => $r['error'] ?? '']);
+            return !empty($r['ok']); // مانبعتش تاني من بوابة تانية بعد نتيجة مش مؤكدة
+        }
         $connection = (new PlatformConnection())->where([
             'website_id' => $websiteId,
             'platform' => 'ultramsg',
