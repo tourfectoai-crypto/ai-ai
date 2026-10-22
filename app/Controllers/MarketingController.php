@@ -226,6 +226,7 @@ class MarketingController extends Controller
             . '<section class="blk"><div class="sec-head"><h2 class="sec-title">' . $this->te(['هتقدر تعمل إيه', 'What you can do']) . '</h2></div><div class="cap-grid">' . $caps . '</div></section>'
             . '<section class="blk alt"><div class="sec-head"><h2 class="sec-title">' . $this->te(['بتشتغل إزاي', 'How it works']) . '</h2></div><div class="steps3">' . $steps . '</div></section>'
             . $this->serviceSections($slug, $f)
+            . $this->planAvailability($slug)
             . ($faq ? '<section class="blk"><div class="sec-head"><h2 class="sec-title">' . $this->te(['أسئلة عن الميزة دي', 'Questions about this feature']) . '</h2></div><div class="faq-list">' . $faq . '</div></section>' : '')
             . '<section class="blk tight"><div class="sec-head" style="margin-bottom:18px"><h2 class="sec-title" style="font-size:22px">' . $this->te(['مميزات تانية', 'More features']) . '</h2></div><div class="related">' . $rel . '</div></section>'
             . '<section class="blk service-final"><h2>' . $this->te(['ابدأ بالخدمة اللي اخترتها','Start with your chosen service']) . '</h2><div class="hero-ctas"><a class="btn-primary" href="' . $this->e($registerUrl) . '">' . $this->te(['ابدأ إعداد حسابك','Set up your account']) . '</a><a class="cta-ghost" href="' . $this->e($demoUrl) . '">' . $this->te(['اطلب عرضًا لهذه الخدمة','Request a demo of this service']) . '</a></div></section>';
@@ -301,6 +302,33 @@ class MarketingController extends Controller
     // ================================================================== الأسعار
 
     /** GET /pricing */
+    /** خلية حالة مجموعة خدمات في باقة (من PlatformServiceRegistry::marketingMatrix) */
+    private function planStateCell(?array $g): string
+    {
+        if ($g === null) return '<span class="no">—</span>';
+        $full = in_array($g['worst'], ['core', 'included'], true);
+        $best = in_array($g['best'], ['core', 'included'], true);
+        if ($full) return '<span class="yes">✓</span>';
+        if ($best && $g['worst'] === 'pay_per_use') return '<span class="yes">✓</span> <small>' . $this->te(['+ استخدام من المحفظة', '+ wallet usage']) . '</small>';
+        if ($best) return '<span class="yes">✓</span> <small>' . $this->te(['جزئيًا', 'Partial']) . '</small>';
+        if ($g['best'] === 'pay_per_use') return '<small>' . $this->te(['بالاستخدام', 'Pay per use']) . '</small>';
+        return '<span class="no">—</span>';
+    }
+
+    /** /features/{slug}: الباقات اللي فيها الخدمة دي - نفس بيانات جدول الأسعار */
+    private function planAvailability(string $slug): string
+    {
+        $plans = class_exists('SubscriptionPlan') ? SubscriptionPlan::allAsLegacyArray() : [];
+        $groups = $plans ? PlatformServiceRegistry::marketingMatrix($plans) : [];
+        if (!isset($groups[$slug])) return '';
+        $cards = '';
+        foreach ($plans as $key => $p) {
+            $cards .= '<div class="cap"><h3>' . $this->e(MarketingContent::planName($key, (string) $p['name'])) . '</h3><p>' . $this->planStateCell($groups[$slug]['plans'][$key] ?? null) . '</p></div>';
+        }
+        return '<section class="blk" id="plans"><div class="sec-head"><h2 class="sec-title">' . $this->te(['متاحة في أنهي باقة؟', 'Which plans include it?']) . '</h2></div>'
+            . '<div class="cap-grid">' . $cards . '</div><p style="text-align:center;margin-top:14px"><a class="cta-ghost" href="/pricing#services-by-plan">' . $this->te(['قارن كل الباقات', 'Compare all plans']) . '</a></p></section>';
+    }
+
     public function pricing(array $params = []): array
     {
         $plans = class_exists('SubscriptionPlan') ? SubscriptionPlan::allAsLegacyArray() : [];
@@ -416,6 +444,28 @@ class MarketingController extends Controller
             $cmp = '<section class="blk alt"><div class="sec-head"><h2 class="sec-title">' . $this->te(['قارن الباقات', 'Compare plans']) . '</h2></div><div class="cmp-wrap"><table class="cmp"><thead><tr>' . $head . '</tr></thead><tbody>' . $body . '</tbody></table></div></section>';
         }
 
+        // الخدمات في كل باقة - من السجل الموحّد (نفس اللي بيستخدمه مركز الخدمات جوه الحساب)
+        $svc = '';
+        if ($plans) {
+            $groups = PlatformServiceRegistry::marketingMatrix($plans);
+            $head = '<th>' . $this->te(['الخدمة', 'Service']) . '</th>';
+            foreach ($plans as $key => $p) {
+                $head .= '<th>' . $this->e(MarketingContent::planName($key, (string) $p['name'])) . '</th>';
+            }
+            $body = '';
+            foreach (MarketingContent::features() as $slug => $f) {
+                if (!isset($groups[$slug])) continue;
+                $body .= '<tr><td><a href="/features/' . $this->e($slug) . '">' . $this->te($f['title']) . '</a></td>';
+                foreach (array_keys($plans) as $key) {
+                    $body .= '<td class="v">' . $this->planStateCell($groups[$slug]['plans'][$key] ?? null) . '</td>';
+                }
+                $body .= '</tr>';
+            }
+            $svc = '<section class="blk" id="services-by-plan"><div class="sec-head"><h2 class="sec-title">' . $this->te(['الخدمات في كل باقة', 'Services in every plan']) . '</h2>'
+                . '<p class="sec-sub">' . $this->te(['الاستخدام اللي بيعدّي حصة الباقة بيتخصم من المحفظة بالسعر المعلن.', 'Usage beyond a plan allowance is charged to your wallet at the published rate.']) . '</p></div>'
+                . '<div class="cmp-wrap"><table class="cmp"><thead><tr>' . $head . '</tr></thead><tbody>' . $body . '</tbody></table></div></section>';
+        }
+
         $faq = '';
         $faqLd = [];
         foreach (MarketingContent::pricingFaq() as [$q, $a]) {
@@ -440,6 +490,7 @@ class MarketingController extends Controller
             . '<div class="plans">' . $cards . '</div></section>'
             . '<section class="blk"><div class="sec-head"><h2 class="sec-title">' . $this->te(['موجود في كل الباقات', 'Included in every plan']) . '</h2></div><div class="incl">' . $incl . '</div></section>'
             . $cmp
+            . $svc
             . '<section class="blk"><div class="sec-head"><h2 class="sec-title">' . $this->te(['أسئلة عن الأسعار', 'Pricing questions']) . '</h2></div><div class="faq-list">' . $faq . '</div></section>'
             . PublicLayout::ctaBand()
             . '<script>(function(){var T=' . $i18n . ';function f(s){var a=[].slice.call(arguments,1),i=0;return s.replace(/%[sd]%?/g,function(m){var v=a[i++];return m.length>2?v+"%":v;});}'

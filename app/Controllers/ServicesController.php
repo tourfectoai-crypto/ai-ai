@@ -186,6 +186,26 @@ class ServicesController extends Controller
         ];
     }
 
+    /**
+     * GET /api/services/catalog - الخدمات × الباقات من السجل الموحّد (عام، من غير بيانات حساب).
+     * الأسعار والحدود من صفوف الفوترة فقط؛ لو الفوترة مش متاحة بنرجّع الخدمات من غير باقات.
+     */
+    public function catalog(array $params = []): array
+    {
+        $plans = class_exists('SubscriptionPlan') ? SubscriptionPlan::allAsLegacyArray() : [];
+        $planList = [];
+        foreach ($plans as $key => $p) {
+            $planList[] = ['key' => $key, 'name' => $p['name'], 'price_monthly' => $p['price_monthly'], 'price_yearly' => $p['price_yearly'], 'currency' => $p['currency']];
+        }
+        header('Cache-Control: public, max-age=300');
+        return $this->success([
+            'plans' => $planList,
+            'states' => PlatformServiceRegistry::STATES,
+            'services' => array_values(PlatformServiceRegistry::matrix($plans)),
+            'features' => array_values(PlatformServiceRegistry::marketingMatrix($plans)),
+        ]);
+    }
+
     /** GET /services/{slug} */
     public function show(array $params = []): array
     {

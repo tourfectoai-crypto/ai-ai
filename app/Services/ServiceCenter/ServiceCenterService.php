@@ -16,8 +16,18 @@ class ServiceCenterService
         $scope=$this->scope($actor);$uid=$scope['owner_id'];$sites=$this->q('SELECT id,domain,company_name FROM websites WHERE user_id=? ORDER BY id',[$uid])->fetchAll(PDO::FETCH_ASSOC);
         $connections=$this->has('platform_connections')?$this->q('SELECT website_id,platform,status,token_expires_at,last_synced_at FROM platform_connections WHERE user_id=? ORDER BY platform',[$uid])->fetchAll(PDO::FETCH_ASSOC):[];
         $checks=$this->q('SELECT service_key,check_key,evidence,checked_at,checked_by FROM service_center_checks WHERE user_id=?',[$uid])->fetchAll(PDO::FETCH_ASSOC);
-        $services=array_values(ServiceCenterCatalog::all());foreach($services as &$s){$s['verification']=['state'=>'needs_validation','checks'=>[]];foreach($checks as $c)if($c['service_key']===$s['key'])$s['verification']['checks'][]=$c;$s['verification']['state']=count($s['verification']['checks'])===5?'recorded_verified':'needs_validation';$s['verification']['note']='Recorded evidence confirms the tested workflow only. Current provider permissions can change.';}unset($s);
-        return ['scope'=>$scope,'services'=>$services,'websites'=>$sites,'connections'=>$connections,'runtime'=>self::runtime(),'ota_capabilities'=>OtaProviderCatalog::all()];
+        $plan=self::planView($uid);$services=array_values(PlatformServiceRegistry::services());foreach($services as &$s){$s['plan']=$plan['services'][$s['key']]??null;$s['verification']=['state'=>'needs_validation','checks'=>[]];foreach($checks as $c)if($c['service_key']===$s['key'])$s['verification']['checks'][]=$c;$s['verification']['state']=count($s['verification']['checks'])===5?'recorded_verified':'needs_validation';$s['verification']['note']='Recorded evidence confirms the tested workflow only. Current provider permissions can change.';}unset($s);
+        return ['scope'=>$scope,'services'=>$services,'websites'=>$sites,'connections'=>$connections,'runtime'=>self::runtime(),'ota_capabilities'=>OtaProviderCatalog::all(),'subscription'=>$plan['subscription']];
+    }
+    /** Services × current plan: entitlement, usage and the lowest upgrade. Billing failures degrade to unknown, never to a promise. */
+    public static function planView(int $owner): array {
+        try{$plans=BillingPlanCatalog::read();}catch(Throwable $e){$plans=[];}
+        try{$resolved=FeatureResolver::resolve($owner);}catch(Throwable $e){$resolved=['features'=>[],'plan_name'=>null];}
+        $active=class_exists('Subscription')?Subscription::activeSubscriptionRow($owner):null;$features=$active?($resolved['features']??[]):[];
+        try{$usage=PlanUsage::summary($owner);}catch(Throwable $e){$usage=[];}
+        $current=$active?(string)($resolved['plan_name']??''):null;$tier=$current!==null?preg_replace('/_(monthly|yearly)$/D','',$current):null;
+        $names=[];foreach($plans as $k=>$p)$names[$k]=(string)$p['name'];
+        return ['services'=>PlatformServiceRegistry::accountView($features,$usage,$plans,$current),'subscription'=>['active'=>(bool)$active,'plan'=>$tier,'plan_name'=>$tier!==null?($names[$tier]??$tier):null,'plans'=>$names,'plans_url'=>'/plans']];
     }
     public static function runtime(): array {
         $path=dirname(__DIR__,3).'/storage/cron/heartbeat';$hb=is_file($path)?trim((string)file_get_contents($path)):null;$stamp=$hb?strtotime($hb):false;$age=$stamp!==false?max(0,time()-$stamp):null;

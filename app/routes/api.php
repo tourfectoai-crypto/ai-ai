@@ -1728,6 +1728,7 @@ $router->post('/api/whatsapp-marketing/{action}','WhatsAppMarketingController','
 $router->get('/api/whatsapp-studio/{action}','WhatsAppStudioController','handleAction',['AuthMiddleware']);
 $router->post('/api/whatsapp-studio/{action}','WhatsAppStudioController','handleAction',['AuthMiddleware']);
 
+$router->get('/api/services/catalog','ServicesController','catalog');
 $router->get('/api/service-center/{action}','ServiceCenterController','action',['AuthMiddleware']);
 $router->post('/api/service-center/{action}','ServiceCenterController','action',['AuthMiddleware']);
 

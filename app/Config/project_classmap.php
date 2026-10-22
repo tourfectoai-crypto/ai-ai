@@ -13,6 +13,7 @@ return [
     'GeminiVisibilityProvider' => dirname(__DIR__,2).'/app/Services/AiVisibility/GeminiVisibilityProvider.php',
     'GeoLlmsBuilder' => dirname(__DIR__,2).'/app/Services/AiVisibility/GeoLlmsBuilder.php',
     'OpenAiVisibilityProvider' => dirname(__DIR__,2).'/app/Services/AiVisibility/OpenAiVisibilityProvider.php',
+    'PlatformServiceRegistry' => dirname(__DIR__,2).'/app/Services/Platform/PlatformServiceRegistry.php',
     'SonarVisibilityProvider' => dirname(__DIR__,2).'/app/Services/AiVisibility/SonarVisibilityProvider.php',
     'AiVisibilityCheckJob' => dirname(__DIR__,2).'/app/Jobs/AiVisibilityCheckJob.php',
     'DataForSeoClient' => dirname(__DIR__,2).'/app/Services/Seo/DataForSeoClient.php',
