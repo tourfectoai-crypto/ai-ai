@@ -32,7 +32,7 @@ final class WhatsAppMarketingController extends Controller
                 'pause','resume','cancel','retry'=>['campaign'=>$s->action($uid,$id,$action)],
                 default=>throw new InvalidArgumentException('Unsupported action'),
             };return $this->success($data);
-        }catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}catch(PDOException $e){return $this->error('WhatsApp marketing storage is unavailable. Apply the new SQL update first.',500);}catch(RuntimeException $e){return $this->error($e->getMessage(),409);}catch(Throwable $e){return $this->error('Unable to complete this WhatsApp marketing action.',500);}
+        }catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}catch(PDOException $e){Logger::error('WhatsApp marketing storage error',['action'=>$params['action']??'','error'=>$e->getMessage()]);return $this->error('WhatsApp marketing storage is unavailable. Apply the new SQL update first.',500);}catch(RuntimeException $e){return $this->error($e->getMessage(),409);}catch(Throwable $e){Logger::error('WhatsApp marketing action failed',['action'=>$params['action']??'','error'=>$e->getMessage(),'file'=>basename($e->getFile()),'line'=>$e->getLine()]);return $this->error('Unable to complete this WhatsApp marketing action.',500);}
     }
     public function page(array $params=[]): array
     {

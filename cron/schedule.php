@@ -56,6 +56,10 @@ return [
         'file' => 'send_trip_reminders.php', 'when' => '*/15 * * * *', 'group' => 'core',
         'title' => 'تذكير العملاء برحلات بكرة (واتساب/إيميل)', 'enabled' => true, 'max_minutes' => 10,
     ],
+    'social_autopilot' => [
+        'file' => 'social_autopilot.php', 'when' => '25 * * * *', 'group' => 'marketing',
+        'title' => 'الطيار الآلي للسوشيال: خطة الشهر الجاي من الحجوزات والرحلات النشطة', 'enabled' => true, 'max_minutes' => 20,
+    ],
     'morning_brief' => [
         'file' => 'send_morning_brief.php', 'when' => '*/15 5-12 * * *', 'group' => 'core',
         'title' => 'ملخص الصبح لأصحاب الشركات (واتساب/إيميل)', 'enabled' => true, 'max_minutes' => 10,

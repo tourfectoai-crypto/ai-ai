@@ -21,6 +21,16 @@ class AdminEmailReputationController extends Controller
         return (int) ($this->user['id'] ?? 0);
     }
 
+    /** GET /admin/email-reputation - صفحة اللوحة (الواجهة في assets/js/admin-email-reputation.js) */
+    public function page(array $params = []): array
+    {
+        // الصلاحية من AdminMiddleware على المسار
+        $js = htmlspecialchars(asset_v('/assets/js/admin-email-reputation.js'), ENT_QUOTES, 'UTF-8');
+        $body = '<section id="email-reputation-root" dir="rtl"><p>جاري التحميل…</p></section><script src="' . $js . '"></script>';
+        echo $this->renderPanelPage('email-reputation', 'سمعة التسويق بالبريد', 'معدلات الارتداد والشكاوى، إيقاف الحسابات والحملات، والحظر العام', $body, "window.EmailReputationAdmin&&window.EmailReputationAdmin.mount(document.getElementById('email-reputation-root'));");
+        exit;
+    }
+
     /** GET /api/admin/email-reputation/overview?days=30 */
     public function overview(array $params = []): array
     {

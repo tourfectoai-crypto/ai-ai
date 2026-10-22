@@ -692,6 +692,8 @@ $router->get('/api/docs/openapi.json', 'DocumentationController', 'openapi');
 
 // السوشيال ميديا
 // Monthly social plans: review once, then execute through the existing publishing queue.
+$router->get('/api/social/autopilot', 'SocialMediaController', 'autopilotGet', ['AuthMiddleware']);
+$router->post('/api/social/autopilot', 'SocialMediaController', 'autopilotSave', ['AuthMiddleware']);
 $router->get('/api/social/monthly-plans/setup', 'SocialMediaController', 'monthlySetup', ['AuthMiddleware']);
 $router->get('/api/social/monthly-plans', 'SocialMediaController', 'monthlyList', ['AuthMiddleware']);
 $router->get('/api/social/monthly-plans/{id}', 'SocialMediaController', 'monthlyDetail', ['AuthMiddleware']);
@@ -717,6 +719,7 @@ $router->post('/api/social/design', 'SocialMediaController', 'designPost', ['Aut
 $router->post('/api/social/posts/{id}/retry', 'SocialMediaController', 'retryPost', ['AuthMiddleware']);
 $router->post('/api/social/posts/{id}/delete', 'SocialMediaController', 'deletePost', ['AuthMiddleware']);
 $router->get('/api/social/stats', 'SocialMediaController', 'stats', ['AuthMiddleware']);
+$router->get('/api/social/health', 'SocialMediaController', 'publishHealth', ['AuthMiddleware']);
 $router->post('/api/social/metrics/refresh', 'SocialMediaController', 'refreshMetrics', ['AuthMiddleware']);
 $router->post('/api/social/posts/{id}/duplicate', 'SocialMediaController', 'duplicatePost', ['AuthMiddleware']);
 $router->post('/api/social/posts/{id}/update', 'SocialMediaController', 'updatePost', ['AuthMiddleware']);
@@ -1070,10 +1073,8 @@ $router->post('/api/gbp/photos', 'GbpProfileController', 'uploadPhoto', ['AuthMi
 $router->delete('/api/gbp/photos/{id}', 'GbpProfileController', 'deletePhoto', ['AuthMiddleware']);
 $router->post('/api/gbp/photos/{id}/primary', 'GbpProfileController', 'setPrimaryPhoto', ['AuthMiddleware']);
 $router->get('/api/gbp/insights', 'GbpProfileController', 'insights', ['AuthMiddleware']);
-$router->get('/api/gbp/ai-insights', 'GbpProfileController', 'aiInsights', [
-    'AuthMiddleware',
-    'PlanGateMiddleware:ai_tool'
-]);
+// الخصم جوه الكنترولر بعد التأكد من ربط Google (مش في الـ middleware)
+$router->get('/api/gbp/ai-insights', 'GbpProfileController', 'aiInsights', ['AuthMiddleware']);
 $router->get('/api/gbp/recommendations', 'GbpProfileController', 'recommendations', ['AuthMiddleware']);
 // مركز الأتمتة
 $router->get('/api/automation', 'AutomationController', 'overview', ['AuthMiddleware']);
@@ -1629,7 +1630,6 @@ $router->post('/api/inventory/{productId}', 'BookingController', 'setInventory',
 // الصلاحية: admin/super_admin (متفرضة داخل الـ Controller)
 // ============================================
 $router->get('/api/integrations', 'IntegrationsController', 'index', ['AuthMiddleware']);
-$router->post('/api/integrations/meta/page-messaging', 'IntegrationsController', 'metaPageMessaging', ['AuthMiddleware']);
 $router->get('/api/integrations/{key}/status', 'IntegrationsController', 'status', ['AuthMiddleware']);
 $router->post('/api/integrations/{key}/save', 'IntegrationsController', 'save', ['AuthMiddleware']);
 $router->post('/api/integrations/{key}/test', 'IntegrationsController', 'test', ['AuthMiddleware']);
@@ -1664,6 +1664,19 @@ $router->add('HEAD','/api/admin/creative-studio/media/{id}/content','CreativeAdm
 
 $router->get('/api/admin/ai-routing', 'AiRoutingAdminController', 'listing', ['AuthMiddleware','AdminMiddleware']);
 $router->get('/api/admin/growth', 'PlatformOutreachController', 'overview', ['AuthMiddleware','AdminMiddleware']);
+// حماية سمعة التسويق بالبريد (لوحة الأدمن)
+$router->get('/api/admin/email-reputation/overview', 'AdminEmailReputationController', 'overview', ['AuthMiddleware', 'AdminMiddleware']);
+$router->get('/api/admin/email-reputation/accounts/{id}', 'AdminEmailReputationController', 'account', ['AuthMiddleware', 'AdminMiddleware']);
+$router->post('/api/admin/email-reputation/accounts/{id}/pause', 'AdminEmailReputationController', 'pauseAccount', ['AuthMiddleware', 'AdminMiddleware']);
+$router->post('/api/admin/email-reputation/accounts/{id}/resume', 'AdminEmailReputationController', 'resumeAccount', ['AuthMiddleware', 'AdminMiddleware']);
+$router->post('/api/admin/email-reputation/accounts/{id}/limits', 'AdminEmailReputationController', 'setLimits', ['AuthMiddleware', 'AdminMiddleware']);
+$router->post('/api/admin/email-reputation/accounts/{id}/approve-review', 'AdminEmailReputationController', 'approveReview', ['AuthMiddleware', 'AdminMiddleware']);
+$router->post('/api/admin/email-reputation/campaigns/{id}/pause', 'AdminEmailReputationController', 'pauseCampaign', ['AuthMiddleware', 'AdminMiddleware']);
+$router->post('/api/admin/email-reputation/campaigns/{id}/resume', 'AdminEmailReputationController', 'resumeCampaign', ['AuthMiddleware', 'AdminMiddleware']);
+$router->get('/api/admin/email-reputation/global-suppressions', 'AdminEmailReputationController', 'globalSuppressions', ['AuthMiddleware', 'AdminMiddleware']);
+$router->post('/api/admin/email-reputation/global-suppressions', 'AdminEmailReputationController', 'addGlobalSuppression', ['AuthMiddleware', 'AdminMiddleware']);
+$router->delete('/api/admin/email-reputation/global-suppressions/{id}', 'AdminEmailReputationController', 'removeGlobalSuppression', ['AuthMiddleware', 'AdminMiddleware']);
+$router->get('/api/admin/email-reputation/events', 'AdminEmailReputationController', 'events', ['AuthMiddleware', 'AdminMiddleware']);
 $router->get('/api/admin/plans-studio', 'PlansStudioController', 'adminData', ['AuthMiddleware','AdminMiddleware']);
 $router->post('/api/admin/plans-studio/config', 'PlansStudioController', 'adminSaveConfig', ['AuthMiddleware','AdminMiddleware']);
 $router->post('/api/admin/plans-studio/preset', 'PlansStudioController', 'adminPreset', ['AuthMiddleware','AdminMiddleware']);
@@ -1794,12 +1807,10 @@ $router->post('/api/admin/seo-data/markets','SeoDataController','adminAddMarket'
 
 // Approved, tenant-scoped GEO measurements.
 $router->get('/api/ai-visibility/data','AiVisibilityController','data',['AuthMiddleware']);
+$router->get('/api/ai-visibility/overview','AiVisibilityController','data',['AuthMiddleware']);
+$router->post('/api/ai-visibility/question','AiVisibilityController','question',['AuthMiddleware']);
+$router->post('/api/ai-visibility/identity','AiVisibilityController','identity',['AuthMiddleware']);
 $router->post('/api/ai-visibility/generate','AiVisibilityController','generate',['AuthMiddleware']);
-$router->post('/api/ai-visibility/save','AiVisibilityController','save',['AuthMiddleware']);
-$router->post('/api/ai-visibility/entities','AiVisibilityController','entities',['AuthMiddleware']);
-$router->post('/api/ai-visibility/enqueue','AiVisibilityController','enqueue',['AuthMiddleware']);
-$router->post('/api/ai-visibility/tasks','AiVisibilityController','tasks',['AuthMiddleware']);
-$router->post('/api/ai-visibility/approve-task','AiVisibilityController','approveTask',['AuthMiddleware']);
 $router->post('/api/ai-visibility/llms','AiVisibilityController','llms',['AuthMiddleware']);
 
 foreach (['sites','data','report'] as $op) $router->get('/api/local-seo/'.$op,'LocalSeoController',$op,['AuthMiddleware']);

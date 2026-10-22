@@ -1,6 +1,9 @@
 <?php
 // Generated release map. Rebuild via tools/build_project_classmap.php after code changes.
 return [
+    'GrowthSignals' => dirname(__DIR__,2).'/app/Services/Growth/GrowthSignals.php',
+    'GrowthSignalsService' => dirname(__DIR__,2).'/app/Services/Growth/GrowthSignalsService.php',
+    'SocialAutopilotService' => dirname(__DIR__,2).'/app/Services/Growth/SocialAutopilotService.php',
     'AiVisibilityController' => dirname(__DIR__,2).'/app/Controllers/AiVisibilityController.php',
     'AiVisibilityDetector' => dirname(__DIR__,2).'/app/Services/AiVisibility/AiVisibilityDetector.php',
     'AiVisibilityEvidence' => dirname(__DIR__,2).'/app/Services/AiVisibility/AiVisibilityEvidence.php',

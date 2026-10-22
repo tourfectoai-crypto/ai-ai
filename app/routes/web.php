@@ -366,6 +366,8 @@ $router->any('/500', 'ErrorController', 'serverError');
 $router->get('/assets/{path}', 'AssetController', 'serve');
 $router->get('/favicon.ico', 'AssetController', 'favicon');
 $router->get('/robots.txt', 'AssetController', 'robots');
+// إثبات دومين الوكالة لازم يتسجل قبل المسار العام لـ .well-known وإلا عمره ما بيتنفّذ
+$router->get('/.well-known/tourfecto-agency','ServiceCenterController','domainProof');
 $router->get('/.well-known/{path}', 'AssetController', 'wellKnown');
 
 // ============================================
@@ -385,6 +387,7 @@ $router->get('/admin/creative-studio', 'CreativeAdminController', 'index', ['Aut
 $router->get('/admin/ai-routing', 'AiRoutingAdminController', 'index', ['AuthMiddleware','AdminMiddleware']);
 $router->get('/admin/growth', 'PlatformOutreachController', 'index', ['AuthMiddleware','AdminMiddleware']);
 $router->get('/admin/plans-studio', 'PlansStudioController', 'adminPage', ['AuthMiddleware','AdminMiddleware']);
+$router->get('/admin/email-reputation', 'AdminEmailReputationController', 'page', ['AuthMiddleware','AdminMiddleware']);
 $router->get('/wallet/xpay/return', 'XPayController', 'returnPage', []);
 
 $router->get('/admin/usage-reservations', 'UsageReservationAdminController', 'index', ['AuthMiddleware','BillingAdminMiddleware']);
@@ -401,7 +404,6 @@ $router->get('/wa/go/{token}','WhatsAppStudioController','redirect');
 
 // Service completion: existing services with explicit readiness and safe recovery.
 $router->get('/service-center','ServiceCenterController','index',['AuthMiddleware']);
-$router->get('/.well-known/tourfecto-agency','ServiceCenterController','domainProof');
 
 $router->get('/outreach','OutreachController','index',['AuthMiddleware']);
 

@@ -29,11 +29,15 @@ class GbpAIInsightsService
      * Insight = ملاحظة + Evidence (الرقم الحقيقي اللي بنيت عليه) + Confidence + إجراء مقترح.
      * لو مفيش بيانات كافية، بيرجع مصفوفة فاضية مع سبب واضح بدل ما يخترع.
      */
-    public function generateInsights(int $websiteId, int $userId): array
+    public function generateInsights(int $websiteId, int $userId, ?callable $beforeAi = null): array
     {
         $insightsData = $this->insights->getInsights($websiteId, $userId, 30, true);
         if (!$insightsData['success']) {
             return ['success' => false, 'error' => $insightsData['error'], 'insights' => []];
+        }
+        // الخصم بيحصل هنا بس - بعد ما نتأكد إن الحساب مربوط وفيه بيانات، وقبل طلب الـ AI مباشرة
+        if ($beforeAi !== null && ($blocked = $beforeAi()) !== null) {
+            return ['success' => false, 'insights' => []] + $blocked;
         }
 
         $profileData = $this->profile->getProfile($websiteId, $userId);

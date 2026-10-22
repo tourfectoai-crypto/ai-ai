@@ -203,7 +203,7 @@ HTML;
         $monthlyCss = htmlspecialchars(asset_v('/assets/css/social-monthly-plans.css'), ENT_QUOTES, 'UTF-8');
         $monthlyJs = htmlspecialchars(asset_v('/assets/js/social-monthly-plans.js'), ENT_QUOTES, 'UTF-8');
         $monthlyUid = (int)($this->user['id']??0);
-        $body = '<link rel="stylesheet" href="'.$monthlyCss.'"><section id="monthlySocialRoot" class="smp-root p-card" data-user-id="'.$monthlyUid.'" aria-label="Monthly social media plan"><p>Loading monthly plans… / جارِ تحميل الخطط الشهرية…</p></section><script defer src="'.htmlspecialchars(asset_v('/assets/js/site-photo-picker.js'), ENT_QUOTES, 'UTF-8').'"></script><script defer src="'.$monthlyJs.'"></script>'.$body;
+        $body = '<link rel="stylesheet" href="'.$monthlyCss.'"><link rel="stylesheet" href="'.htmlspecialchars(asset_v('/assets/css/social-autopilot.css'), ENT_QUOTES, 'UTF-8').'"><section id="socialAutopilotRoot" class="sap-root p-card" aria-label="Social autopilot"></section><script defer src="'.htmlspecialchars(asset_v('/assets/js/social-autopilot.js'), ENT_QUOTES, 'UTF-8').'"></script><section id="monthlySocialRoot" class="smp-root p-card" data-user-id="'.$monthlyUid.'" aria-label="Monthly social media plan"><p>Loading monthly plans… / جارِ تحميل الخطط الشهرية…</p></section><script defer src="'.htmlspecialchars(asset_v('/assets/js/site-photo-picker.js'), ENT_QUOTES, 'UTF-8').'"></script><script defer src="'.$monthlyJs.'"></script>'.$body;
 
         $script = <<<'JS'
 (function () {
@@ -725,6 +725,26 @@ JS;
     public function monthlyPause(array $params=[]): array{return $this->monthlyRequest('pause',$params);}
     public function monthlyResume(array $params=[]): array{return $this->monthlyRequest('resume',$params);}
     public function monthlyCancel(array $params=[]): array{return $this->monthlyRequest('cancel',$params);}
+
+    /** GET /api/social/autopilot?website_id= - إعدادات الطيار الآلي + إشارات الشهر الجاي (الموسم والرحلات) */
+    public function autopilotGet(array $params=[]): array
+    {
+        if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
+        try{return $this->success((new SocialAutopilotService())->overview((int)$this->user['id'],(int)$this->get('website_id'))+['csrf_token'=>Csrf::token()]);}
+        catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
+        catch(Throwable $e){Logger::error('Social autopilot overview failed',['error'=>$e->getMessage()]);return $this->error('Autopilot is unavailable right now.',503);}
+    }
+
+    /** POST /api/social/autopilot - تفعيل/تعديل الطيار الآلي لموقع */
+    public function autopilotSave(array $params=[]): array
+    {
+        if(!$this->isAuthenticated())return $this->error('Unauthorized',401);
+        if($error=$this->verifyCsrf())return $error;
+        if($error=$this->rateLimitGuard('user','social_autopilot',20,60))return $error;
+        try{return $this->success((new SocialAutopilotService())->save((int)$this->user['id'],(int)($this->data['website_id']??0),$this->data),'Autopilot saved');}
+        catch(InvalidArgumentException $e){return $this->error($e->getMessage(),422);}
+        catch(Throwable $e){Logger::error('Social autopilot save failed',['error'=>$e->getMessage()]);return $this->error('Autopilot could not be saved. Check the SQL update.',503);}
+    }
 
     /** POST /api/social/media - رفع صورة/فيديو من الجهاز للمنشور */
     public function uploadMedia(array $params = []): array

@@ -94,7 +94,7 @@ class WebsiteBuilderService
         }
         try {
             $db = Database::getInstance();
-            $site = $db->query('SELECT id, company_name, industry FROM websites WHERE user_id = ? ORDER BY id DESC LIMIT 1', [$uid])[0] ?? null;
+            $site = $db->query('SELECT id, company_name, industry_niche AS industry FROM websites WHERE user_id = ? ORDER BY id DESC LIMIT 1', [$uid])[0] ?? null;
             if (!$site) {
                 return;
             }

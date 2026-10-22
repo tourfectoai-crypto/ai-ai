@@ -818,7 +818,7 @@ class OnboardingController extends Controller
                 $prefill = [
                     'business_name' => (string) $w->getAttribute('company_name'),
                     'main_url' => (string) $w->getAttribute('main_url'),
-                    'industry' => (string) ($w->getAttribute('industry') ?: 'tourism'),
+                    'industry' => (string) ($w->getAttribute('industry_niche') ?: ($w->getAttribute('industry') ?: 'tourism')),
                     'target_country' => (string) $w->getAttribute('target_country'),
                     'target_customers' => (string) $w->getAttribute('target_customers'),
                     'main_services' => (string) $w->getAttribute('main_services'),
@@ -826,6 +826,10 @@ class OnboardingController extends Controller
             }
         } catch (Exception $e) {
             // مش حاسم - لو مفيش مواقع لسه فالتعبئة هتبقى فاضية
+        }
+        // أول مرة: اسم الشركة اللي العميل كتبه في التسجيل بدل ما نسأله تاني
+        if ($prefill === null && trim((string) ($this->user['company_name'] ?? '')) !== '') {
+            $prefill = ['business_name' => trim((string) $this->user['company_name'])];
         }
         $prefillJson = json_encode($prefill, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS);
 

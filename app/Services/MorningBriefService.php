@@ -195,6 +195,16 @@ class MorningBriefService
             $L[] = $T('🤖 حاجات مستنية موافقتك: ', '🤖 Items awaiting your approval: ') . $st['approvals'];
         }
 
+        // تركيز النمو: الموسم من الحجوزات + الرحلة اللي محتاجة ترويج دلوقتي (نفس إشارات الطيار الآلي للسوشيال)
+        $focus = $this->growthFocus($o);
+        if ($focus) {
+            $L[] = '';
+            $L[] = $T('*تركيز الشهر*', '*This month\'s focus*');
+            $L[] = '📈 ' . $focus['season_text'][$en ? 1 : 0];
+            if ($focus['trip']) $L[] = $T('🎯 روّج لـ: ', '🎯 Push: ') . $focus['trip'];
+        }
+        $st['social_plan_review'] = (int) $this->n("SELECT COUNT(*) v FROM social_autopilot_settings WHERE user_id = ? AND last_status = 'waiting_review'", [$o]);
+
         // أهم حاجة تعملها
         $base = defined('APP_URL') ? rtrim((string) APP_URL, '/') : '';
         $top = null;
@@ -204,6 +214,8 @@ class MorningBriefService
             $top = [$T('فيه عملاء مستنيين رد منك انت شخصيًا', 'Customers are waiting for a reply from you personally'), '/chat'];
         } elseif ($st['pending_bookings'] > 0) {
             $top = [$T('أكّد الحجوزات المستنية عشان العملاء مايروحوش لغيرك', 'Confirm pending bookings so customers don\'t go elsewhere'), '/bookings'];
+        } elseif ($st['social_plan_review'] > 0) {
+            $top = [$T('خطة السوشيال للشهر الجاي جاهزة - راجعها واعتمدها', 'Next month\'s social plan is ready - review and approve it'), '/social'];
         } elseif ($st['approvals'] > 0) {
             $top = [$T('راجع الحاجات المستنية موافقتك', 'Review the items awaiting your approval'), '/automation'];
         } elseif ($st['unread_chats'] > 0) {
@@ -222,6 +234,29 @@ class MorningBriefService
         $activity = $st['competitor_prices'] + $st['new_bookings'] + $st['cancelled'] + $st['new_leads'] + $st['new_reviews'] + $st['trips_today']
             + $st['pending_bookings'] + $st['unread_chats'] + $st['bad_reviews_open'] + $st['approvals'];
         return ['text' => trim(implode("\n", $L)), 'has_activity' => $activity > 0, 'stats' => $st];
+    }
+
+    /** سطر واحد عن الموسم والرحلة الأهم. أي نقص في البيانات = مفيش سطر (من غير تخمين). */
+    private function growthFocus(int $ownerId): ?array
+    {
+        if (!class_exists('GrowthSignalsService')) return null;
+        try {
+            $wid = (int) ($this->db->query('SELECT id FROM websites WHERE user_id = ? ORDER BY id LIMIT 1', [$ownerId])[0]['id'] ?? 0);
+            if ($wid <= 0) return null;
+            $g = (new GrowthSignalsService($this->db))->forWebsite($ownerId, $wid, gmdate('Y-m'), 12);
+        } catch (Throwable $e) {
+            return null;
+        }
+        $level = $g['season']['level'];
+        $trip = $g['focus_trips'][0] ?? null;
+        if ($level === 'unknown' && !$trip) return null;
+        $text = [
+            'peak' => ['الشهر ده موسم عالي - ركّز على تحويل الطلب لحجوزات مؤكدة', 'This month is high season - focus on converting demand into confirmed bookings'],
+            'shoulder' => ['الشهر ده موسم متوسط - حافظ على الحجوزات بمحتوى ثقة وقيمة', 'This month is shoulder season - keep bookings steady with trust and value content'],
+            'low' => ['الشهر ده موسم هادي - ابني اهتمام وحجوزات مبكرة للموسم الجاي', 'This month is low season - build awareness and early bookings for the next high season'],
+            'unknown' => ['لسه مفيش حجوزات كفاية لتحديد الموسم', 'Not enough bookings yet to detect the season'],
+        ][$level];
+        return ['season_text' => $text, 'trip' => $trip ? $trip['name'] : null];
     }
 
     // ------------------------------------------------------------------ الإرسال

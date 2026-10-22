@@ -137,7 +137,7 @@ PROMPT;
     {
         $html = mb_convert_encoding($html, 'UTF-8', 'UTF-8');
 
-        if (class_exists('DOMDocument')) {
+        if ($html !== '' && class_exists('DOMDocument')) {
             $dom = new DOMDocument();
             libxml_use_internal_errors(true);
             @$dom->loadHTML(mb_substr($html, 0, 300000));

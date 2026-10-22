@@ -579,8 +579,22 @@ class GbpProfileController extends Controller
             return $this->error('website_id مطلوب', 422);
         }
 
-        $result = $this->aiInsightsService->generateInsights($websiteId, (int) $this->user['id']);
+        // الفحص والخصم هنا بدل PlanGateMiddleware: الصفحة بتطلب التحليل أوتوماتيك، فالخصم قبل التأكد
+        // من ربط Google كان بياخد وحدة AI من العميل على كل زيارة حتى لو الطلب هيفشل.
+        $uid = (int) $this->user['id'];
+        $lowFunds = 'خلصت أدوات الذكاء الصناعي في باقتك الشهر ده، ورصيد المحفظة مش كفاية. اشحن المحفظة أو رقّي باقتك.';
+        $check = PlanUsage::check($uid, 'ai_tool', 'ai_tool', $lowFunds);
+        if (empty($check['ok'])) {
+            return $this->error((string) ($check['error'] ?? $lowFunds), 402, ['upgrade_url' => '/subscription']);
+        }
+        $result = $this->aiInsightsService->generateInsights($websiteId, $uid, static function () use ($uid, $lowFunds): ?array {
+            return PlanUsage::charge($uid, 'ai_tool', 'ai_tool', 'أداة ذكاء صناعي: تحليل Google Business') === 'failed'
+                ? ['error' => $lowFunds, 'payment_required' => true] : null;
+        });
         if (!$result['success']) {
+            if (!empty($result['payment_required'])) {
+                return $this->error($result['error'], 402, ['upgrade_url' => '/subscription']);
+            }
             return $this->error($result['error'], $this->gbpErrorStatus($result));
         }
 
