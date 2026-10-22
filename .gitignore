@@ -168,3 +168,6 @@ public/.htaccess.save
 /storage/logs/
 /storage/cache/
 /storage/sessions/
+
+# حالات تسجيل الدخول المؤقتة (OAuth state) - ملفات تشغيل
+storage/oauth-state/*.used
